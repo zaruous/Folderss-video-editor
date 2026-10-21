@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    헤드리스 UI 시험(시험용 호스트): Folderss 없이 플러그인 zip을 Folderss와 같은 방식(PluginLoadContext)으로 불러
+    Initialize → CreateView를 팝업 창에 담고, 같은 프로세스 안에서 WPF 트리·자동화 피어로 조작한다.
+    - 자동 실행: pwsh scripts/ui-test.ps1 — 숨은 데스크톱에서 돌아 사용자 화면에 창이 뜨지 않는다.
+    - 디버깅: Visual Studio 테스트 탐색기에서 [디버그]로 실행하면 보이는 화면에 창을 띄우고 플러그인 코드의 중단점에 걸린다.
+    - 그 밖(디버거 없는 dotnet test, CI)에는 모두 건너뛴다.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- 시험할 플러그인: src\<PluginName>\<PluginName>.csproj. 플러그인 이름을 바꾸면 여기만 고친다 -->
+    <PluginName>VideoEditor</PluginName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 시험 프로젝트를 빌드하면 플러그인도 같은 구성(Debug/Release)으로 빌드되어 zip이 새로 만들어진다.
+         DLL은 참조하지 않는다 — zip에서 따로 불러야 Folderss 안과 같은 조건이 된다 -->
+    <ProjectReference Include="..\..\src\$(PluginName)\$(PluginName).csproj" ReferenceOutputAssembly="false" />
+    <!-- 계약은 기본 로드 컨텍스트에 둔다(Folderss와 같음 — 플러그인 쪽 PluginLoadContext가 계약은 넘겨받는다) -->
+    <ProjectReference Include="..\..\contract\Folderss.PluginContract\Folderss.PluginContract.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 시험이 불러올 플러그인 zip(PackPlugin 타깃이 만든 것). FOLDERSS_UI_PLUGIN_ZIP 환경 변수로 다른 zip을 줄 수 있다 -->
+    <AssemblyMetadata Include="PluginZip" Value="$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\src\$(PluginName)\bin\$(Configuration)\$(TargetFramework)\$(PluginName).zip'))" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Folderss 테마 색 사전과 컨트롤 스타일(Folderss 저장소 Folderss/Themes에서 복사 — Controls.xaml은 AvalonDock 전용 스타일을 뺀 사본) -->
+    <EmbeddedResource Include="Themes\*.xaml" LogicalName="Themes.%(Filename).xaml" />
+    <Page Remove="Themes\*.xaml" />
+  </ItemGroup>
+
+</Project>

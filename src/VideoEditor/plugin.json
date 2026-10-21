@@ -1,0 +1,9 @@
+{
+  "id": "zaruous.folderss-video-editor",
+  "name": "동영상 편집",
+  "version": "0.1.0",
+  "description": "다중 트랙 타임라인에서 동영상·이미지·오디오를 자르고 붙여 MP4로 내보내는 편집기 (FFmpeg 사용)",
+  "assembly": "VideoEditor.dll",
+  "type": "VideoEditor.VideoEditorPlugin",
+  "hasSettings": true
+}

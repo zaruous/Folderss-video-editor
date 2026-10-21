@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<TestSequence>
+  <Test Name="VideoEditor.UiTests.SmokeHeadlessTests.ImportEditExport" DisplayName="VideoEditor.UiTests.SmokeHeadlessTests.ImportEditExport" Source="C:\Users\USER\git\cshap\Folderss-video-editor\.claude\worktrees\ui-slices\tests\VideoEditor.UiTests\bin\Debug\net8.0-windows\VideoEditor.UiTests.dll" Completed="False" />
+</TestSequence>

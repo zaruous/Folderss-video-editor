@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Folderss 플러그인 계약(인터페이스) 사본. 컴파일용 참조로만 쓰고 플러그인 zip에는 넣지 않는다.
+    실행할 때는 Folderss 본체에 들어 있는 같은 이름의 DLL(Folderss.PluginContract)이 쓰인다.
+
+    원본: https://github.com/zaruous/Folderss/blob/master/Folderss.PluginContract/PluginContracts.cs
+    - 어셈블리 이름(Folderss.PluginContract)·네임스페이스·형식 이름을 바꾸면 Folderss가 플러그인을 인식하지 못한다.
+    - Folderss가 계약을 갱신하면 이 파일도 원본으로 교체한다. 사본에만 있는 멤버를 쓰면 실행 시 MissingMethodException이 난다.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>Folderss.Plugins</RootNamespace>
+    <AssemblyName>Folderss.PluginContract</AssemblyName>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+</Project>

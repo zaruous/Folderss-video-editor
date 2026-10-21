@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <!-- Windows가 아닌 곳(CI 등)에서도 컴파일만은 되게 한다. 실행은 Windows에서만 -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- NuGet 패키지 DLL(NAudio)을 빌드 출력에 복사해 zip에 함께 넣는다 -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 계약 DLL은 Folderss 본체의 것을 쓰므로 zip에 넣지 않는다 (Private=false) -->
+    <ProjectReference Include="..\..\contract\Folderss.PluginContract\Folderss.PluginContract.csproj" Private="false" />
+    <!-- 미리 보기 소리 재생(PCM → waveOut). 순수 관리 코드 DLL 두 개 -->
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="NAudio.WinMM" Version="2.2.1" />
+  </ItemGroup>
+
+  <!--
+    빌드할 때마다 bin\<구성>\net8.0-windows\<AssemblyName>.zip 을 만든다:
+    plugin.json + 플러그인 DLL + .deps.json + NuGet 패키지 DLL(ReferenceCopyLocalPaths, 계약 DLL은 Private=false라 빠짐).
+    Folderss는 .deps.json으로 플러그인 폴더의 DLL을 찾는다.
+  -->
+  <Target Name="PackPlugin" AfterTargets="Build">
+    <PropertyGroup>
+      <PluginStage>$(IntermediateOutputPath)plugin-stage\</PluginStage>
+    </PropertyGroup>
+    <ItemGroup>
+      <PluginDependency Include="@(ReferenceCopyLocalPaths)" Condition="'%(Extension)' == '.dll'" />
+    </ItemGroup>
+    <RemoveDir Directories="$(PluginStage)" />
+    <Copy SourceFiles="plugin.json;$(TargetPath);$(ProjectDepsFilePath);@(PluginDependency)" DestinationFolder="$(PluginStage)" />
+    <ZipDirectory SourceDirectory="$(PluginStage)" DestinationFile="$(OutDir)$(AssemblyName).zip" Overwrite="true" />
+    <Message Importance="high" Text="Folderss 플러그인: $(OutDir)$(AssemblyName).zip" />
+  </Target>
+
+</Project>

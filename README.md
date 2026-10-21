@@ -1,0 +1,107 @@
+# Folderss 동영상 편집
+
+[Folderss](https://github.com/zaruous/Folderss) 파일 관리자 안에서 쓰는 **다중 트랙 동영상 편집기** 플러그인입니다.
+폴더에서 보던 동영상·사진·오디오를 그대로 타임라인에 놓고 자르고 이어 붙여 MP4로 내보냅니다.
+화면은 미디어 · 플레이어 · 속성 · 타임라인 네 영역이고, 단축키는 흔히 쓰는 영상 편집기 단축키(Ctrl+B 분할 등)를 따릅니다.
+
+![편집 화면 (Black 테마)](docs/images/editor-dark.png)
+
+| | |
+|---|---|
+| ![Light 테마](docs/images/editor-light.png) | ![내보내기](docs/images/export-dialog.png) |
+
+## 할 수 있는 것
+
+| 영역 | 기능 |
+|---|---|
+| 미디어 | 동영상·사진(이미지)·오디오 가져오기(Ctrl+I, 끌어 놓기, Folderss 폴더 탭), 썸네일·길이, 두 번 눌러 타임라인 끝에 추가 |
+| 타임라인 | 동영상 트랙 여러 개(위 트랙이 덮음 — 영상 위 사진·글자), 오디오 트랙(배경 음악·내레이션), 트랙 출력·소리·잠금, 트랙 추가/삭제 |
+| 편집 | 끌어 옮기기(다른 트랙으로도), 가장자리 끌어 다듬기, 분할, 삭제·리플 삭제·빈틈 닫기, 재생 헤드까지 앞/뒤 다듬기, 붙기(편집점·재생 헤드·마커), **마그네틱 주 트랙**(동영상 1에 빈틈 없이), 실행 취소/다시 실행, 잘라내기·복사·붙여넣기 |
+| 클립 속성 | 위치·크기·회전·불투명도, 음량·페이드 인/아웃, 속도(소리 음높이 유지), 사진·글자 길이, 크로스페이드, 글자 내용·크기·색 |
+| 미리 보기 | 재생 헤드 화면, 재생(소리 시계에 맞춤), 프레임·초 이동, 타임코드 입력, 품질(전체·1/2·1/4), 스냅샷(PNG로 저장해 미디어에 추가) |
+| 표시 | 마커(이름·색·메모), In/Out 점 |
+| 내보내기 | MP4(H.264 + AAC), 해상도·프레임 레이트·품질·인코더(x264 · NVIDIA · Intel · AMD · Windows), 전체 또는 In~Out, 진행률·취소 |
+| 프로젝트 | `.fvproj` 저장/열기(미디어 경로는 프로젝트 기준 상대 경로), 첫 동영상에 맞춘 해상도·프레임 레이트, 프로젝트 설정(세로 9:16·정사각형 등), 저장 안 한 편집 복구(2분마다·Folderss 종료 때 써 두고 다음에 열 때 물음) |
+
+없는 것(이후 과제): AI 기능, 스톡 미디어·템플릿, 키프레임 애니메이션, 색보정·LUT, 복합 클립·듀얼 타임라인.
+
+## 설치
+
+1. [Releases](https://github.com/zaruous/Folderss-video-editor/releases) 또는 Actions 아티팩트에서 zip을 받거나, Folderss의 **GitHub에서 설치**로 `zaruous/Folderss-video-editor`를 넣습니다.
+2. Folderss `⋯ 메뉴 > 플러그인 > 동영상 편집`.
+
+### FFmpeg
+
+영상 읽기·미리 보기·내보내기는 [FFmpeg](https://ffmpeg.org)로 합니다. 플러그인 zip에는 들어 있지 않고, 처음 열 때 이렇게 찾습니다.
+
+1. 설정한 폴더(Folderss 설정 > 동영상 편집)
+2. `PATH`, winget(`Gyan.FFmpeg` 등)·scoop·choco·`C:\ffmpeg\bin` 같은 흔한 설치 위치
+3. 플러그인이 내려받아 둔 폴더(`%LOCALAPPDATA%\Folderss\plugin-data\zaruous.folderss-video-editor\ffmpeg`)
+
+못 찾으면 **FFmpeg 설치** 창이 뜹니다.
+
+![FFmpeg 설치 창](docs/images/ffmpeg-setup.png)
+
+- **내려받아 설치**: GitHub [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 최신 정식 Windows 빌드(win64 GPL shared, 약 80MB)를 받아, 같은 릴리스의 `checksums.sha256`과 SHA-256이 맞을 때만 `bin` 폴더 파일을 풉니다.
+- **직접 지정…**: 이미 있는 `ffmpeg.exe`를 고릅니다(`ffprobe.exe`가 같은 폴더에 있어야 함).
+- 직접 설치해도 됩니다: `winget install Gyan.FFmpeg`.
+
+`FOLDERSS_VE_FFMPEG_SEARCH=off` 환경 변수를 주면 설정한 폴더와 내려받은 폴더만 봅니다(설치본이 여럿일 때 하나로 고정).
+
+## 쓰는 법
+
+화면은 네 영역입니다 — 왼쪽 위 **미디어**, 가운데 위 **플레이어**, 오른쪽 위 **속성**, 아래 **타임라인**. 경계는 끌어서 크기를 바꿉니다.
+
+1. **가져오기**: Ctrl+I, 파일을 미디어 패널·타임라인에 끌어 놓기, 또는 [폴더] 탭에서 골라 [고른 파일 가져오기]. 빈 프로젝트에 처음 들어온 동영상의 해상도·프레임 레이트로 프로젝트가 맞춰집니다.
+2. **놓기**: 미디어를 두 번 누르면 타임라인 끝에(사진·동영상은 동영상 1, 오디오는 오디오 트랙). 원하는 트랙·위치로 끌어 놓아도 됩니다(아래 빈 곳이면 새 트랙). 사진·글자의 기본 길이는 5초(설정에서 바꿈).
+3. **편집**: 클립을 끌어 옮기고, 가장자리를 끌어 다듬고, 재생 헤드에서 Ctrl+B로 나눕니다. 끄는 동안 Alt를 누르면 붙기가 잠시 꺼집니다. 오른쪽 클릭 메뉴에 분할·삭제·속도·오디오 분리가 있습니다.
+4. **영상 위에 사진·글자**: [글자] 탭에서 글자 추가, 또는 사진을 동영상 2 트랙으로 끌어 놓고 속성 패널에서 위치·크기·불투명도를 바꿉니다.
+5. **내보내기**: Ctrl+E. In/Out을 찍어 두면 그 구간만 내보낼 수 있습니다.
+
+### 단축키
+
+| 분류 | 키 |
+|---|---|
+| 재생 | 재생/일시 정지 Space · 정지 Ctrl+/ · 이전/다음 프레임 ←/→ · 1초 Shift+←/→ · 이전/다음 편집점 ↑/↓ · 처음/끝 Home/End · 고른 클립 처음/끝 Shift+Home/End |
+| 편집 | 분할 Ctrl+B · 삭제 Delete · 리플 삭제 Shift+Delete · 빈틈 닫기 Alt+Delete · 앞/뒤 다듬기 Alt+[ / Alt+] · 실행 취소 Ctrl+Z · 다시 실행 Ctrl+Y · 잘라내기/복사/붙여넣기 Ctrl+X/C/V · 모두 선택 Ctrl+A |
+| 클립 | 속도·길이 Ctrl+R · 오디오 분리 Ctrl+Alt+D · 소리 끄기 Ctrl+Shift+M · 90° 회전 Ctrl+Alt+←/→ |
+| 표시 | 마커 M · 마커 편집 Shift+M · 이전/다음 마커 Shift+↑/↓ · In I · Out O |
+| 보기 | 확대 Ctrl+= · 축소 Ctrl+- · 맞춤 Shift+Z · 휠 = 가로 이동 · Ctrl+휠 = 확대/축소 · Shift+휠 = 세로 이동 |
+| 파일 | 새로 Ctrl+N · 열기 Ctrl+O · 저장 Ctrl+S · 다른 이름 Ctrl+Shift+S · 가져오기 Ctrl+I · 내보내기 Ctrl+E |
+
+복사·붙여넣기는 플러그인 안에서만 씁니다(Windows 클립보드는 건드리지 않음).
+
+## 구조
+
+```
+src/VideoEditor/
+├── Core/    편집 모델(WPF 없음): 프레임 정수 시간(FrameRate), Project·Track·Clip, TimelineEdits(놓기·다듬기·분할·리플·마그네틱·붙기),
+│            EditorSession(실행 취소 — 상태 스냅숏), ProjectFile(.fvproj), ProjectSettings, RenderGraph(프로젝트 → FFmpeg filter_complex)
+├── Media/   FFmpeg 실행: 찾기·버전·인코더(FfmpegTool), ffprobe, 내보내기(진행률·취소), 미리 보기 프레임·재생 스트림, 썸네일·파형,
+│            내려받기(SHA-256 확인), 작업 개체(Folderss가 끝나면 FFmpeg도 끝남)
+└── Ui/      WPF 화면(코드로 만듦): EditorView(배치·메뉴·단축키), EditorCommands(모든 명령), TimelineCanvas(직접 그림·마우스·접근성),
+             TimelineView, MediaPanel, PlayerPanel + PreviewPlayer(NAudio), PropertyPanel, 대화상자
+```
+
+- **미리 보기 = 내보내기 그래프**: 같은 `RenderGraph`를 미리 보기 크기로 돌려 BGRA 프레임을 받습니다. 보이는 것과 내보낸 결과가 같습니다.
+- 디코딩·인코딩은 모두 **별도 FFmpeg 프로세스**라 코덱 오류가 Folderss를 함께 끝내지 않습니다.
+- 위치·길이는 프로젝트 프레임 레이트의 정수 프레임이라 컷이 반올림 오차로 밀리지 않습니다(29.97처럼 유리수 레이트도).
+
+## 개발
+
+요구: Windows, .NET 8 SDK, 시험에는 FFmpeg.
+
+```powershell
+dotnet build                                   # 플러그인 zip: src/VideoEditor/bin/Debug/net8.0-windows/VideoEditor.zip
+$env:FOLDERSS_VE_FFMPEG = "C:\ffmpeg\bin"       # 시험이 쓸 FFmpeg 폴더(없으면 PATH 등에서 찾음)
+dotnet test tests/VideoEditor.Tests            # 단위 + 실제 FFmpeg 통합 시험(픽셀 색·프레임 수·음량·크로스페이드·취소·내려받기)
+pwsh scripts/ui-test.ps1                       # 화면 시험(숨은 데스크톱): 가져오기→편집→내보내기, 재생, 끌기·다듬기, 속성, 글자·마커, 테마 7종
+```
+
+- `tests/VideoEditor.Tests`는 Core·Media를 net8.0으로 링크해 CI(Ubuntu, 배포판 FFmpeg)에서도 돕니다.
+- `tests/VideoEditor.UiTests`는 [플러그인 템플릿](https://github.com/zaruous/FolderssPLuginTemplate)의 헤드리스 시험 호스트입니다. 사용자 화면에 창을 띄우지 않고, 캡처는 실행 끝에 나오는 `shots` 폴더에 남습니다. Visual Studio 테스트 탐색기에서 `SmokeHeadlessTests.OpenView`를 **디버그**로 실행하면 편집 창이 화면에 떠서 중단점을 쓸 수 있습니다.
+- 계획 문서: [PRD](docs/PRD.md) · [구현 계획](docs/plan.md)
+
+## 라이선스
+
+[MIT](LICENSE). FFmpeg는 플러그인에 들어 있지 않으며, 내려받는 빌드는 FFmpeg 프로젝트의 GPL 라이선스를 따릅니다. 미리 보기 소리 재생에 [NAudio](https://github.com/naudio/NAudio)(MIT)를 씁니다.

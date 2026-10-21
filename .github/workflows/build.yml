@@ -1,0 +1,107 @@
+# 플러그인 빌드와 릴리스.
+# - main 푸시·PR: 빌드해서 플러그인 zip을 Actions 아티팩트로 올린다 (확인용)
+# - v* 태그 푸시(예: v1.0.0): 태그 버전과 plugin.json의 version이 같은지 확인한 뒤 GitHub 릴리스에 zip을 첨부한다
+# 플러그인 폴더 이름을 바꿔도(src/<이름>/) 그대로 동작한다. src 아래 plugin.json은 하나여야 한다.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 태그 빌드에서 릴리스를 만들기 위해 필요
+
+jobs:
+  test:
+    # 편집 엔진(Core·Media) 시험: 단위 + 실제 FFmpeg 통합 시험(배포판 FFmpeg — 7 미만이면 -filter_complex_script 경로도 시험됨)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: FFmpeg 설치
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-dejavu-core && ffmpeg -version | head -1
+
+      - name: 시험
+        run: dotnet test tests/VideoEditor.Tests -c Release --nologo --logger "console;verbosity=normal"
+
+  build:
+    needs: test
+    # WPF 플러그인이지만 csproj의 EnableWindowsTargeting 덕분에 Linux에서도 컴파일된다 (실행은 Windows에서)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: 플러그인 찾기
+        id: plugin
+        shell: bash
+        run: |
+          shopt -s nullglob
+          manifests=(src/*/plugin.json)
+          if [ "${#manifests[@]}" -ne 1 ]; then
+            echo "::error::src/*/plugin.json 이 정확히 하나여야 합니다 (찾은 개수: ${#manifests[@]})"
+            exit 1
+          fi
+          manifest="${manifests[0]}"
+          dir="$(dirname "$manifest")"
+          version="$(jq -r '.version // empty' "$manifest")"
+          id="$(jq -r '.id // empty' "$manifest")"
+          if [ -z "$id" ]; then
+            echo "::error::$manifest 에 id가 없습니다"
+            exit 1
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "플러그인: $id $version ($dir)"
+
+      - name: 태그와 plugin.json 버전 확인
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "${{ steps.plugin.outputs.version }}" ]; then
+            echo "::error::태그 버전($tag)과 plugin.json version(${{ steps.plugin.outputs.version }})이 다릅니다. plugin.json을 고친 뒤 다시 태그하세요."
+            exit 1
+          fi
+
+      - name: 빌드
+        # 플러그인 프로젝트만 빌드한다. tests/*.UiTests(헤드리스 화면 시험)는 Windows 데스크톱이 있어야 돌아서 여기서 빌드·실행하지 않는다
+        run: dotnet build "${{ steps.plugin.outputs.dir }}" -c Release --nologo
+
+      - name: zip 찾기
+        id: zip
+        shell: bash
+        run: |
+          shopt -s nullglob
+          zips=("${{ steps.plugin.outputs.dir }}"/bin/Release/net8.0-windows/*.zip)
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "::error::플러그인 zip을 찾지 못했습니다"
+            exit 1
+          fi
+          # 릴리스 파일 이름: <id>-<version>.zip
+          out="${{ steps.plugin.outputs.id }}-${{ steps.plugin.outputs.version }}.zip"
+          cp "${zips[0]}" "$out"
+          unzip -l "$out"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.plugin.outputs.id }}-${{ steps.plugin.outputs.version }}
+          path: ${{ steps.zip.outputs.path }}
+
+      - name: GitHub 릴리스
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "${{ steps.zip.outputs.path }}" --title "$GITHUB_REF_NAME" --generate-notes

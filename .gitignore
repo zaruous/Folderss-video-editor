@@ -1,0 +1,7 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+# Claude Code 작업 공간(워크트리)
+.claude/worktrees/

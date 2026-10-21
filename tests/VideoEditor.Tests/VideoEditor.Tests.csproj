@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    플러그인 프로젝트는 WPF(net8.0-windows)라 Linux에서 테스트를 실행할 수 없다.
+    화면과 무관한 편집 모델(Core/*)과 FFmpeg 실행(Media/*)만 링크해 net8.0으로 테스트한다(CI의 Ubuntu에서도 실행됨).
+    실제 FFmpeg가 필요한 시험은 ffmpeg를 찾을 때만 돈다(FOLDERSS_VE_FFMPEG = ffmpeg.exe가 있는 폴더, 없으면 PATH).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- 링크한 Media/JobObject.cs는 Windows 전용 경고(CA1416)가 나지만 Windows에서만 부른다 -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\VideoEditor\Core\**\*.cs" Link="Core\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\VideoEditor\Media\**\*.cs" Link="Media\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

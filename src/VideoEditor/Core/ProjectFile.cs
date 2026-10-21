@@ -1,0 +1,170 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace VideoEditor.Core
+{
+    /// <summary>프로젝트 JSON(*.fvproj). 저장할 때 파일 경로는 프로젝트 파일 기준 상대 경로로(폴더째 옮겨도 열리게) 바꾼다.</summary>
+    public static class ProjectFile
+    {
+        public const string Extension = ".fvproj";
+        public const string DialogFilter = "동영상 편집 프로젝트 (*.fvproj)|*.fvproj";
+
+        private static readonly JsonSerializerOptions Options = CreateOptions(true);
+        private static readonly JsonSerializerOptions CompactOptions = CreateOptions(false);
+
+        private static JsonSerializerOptions CreateOptions(bool indented)
+        {
+            var options = new JsonSerializerOptions { WriteIndented = indented };
+            options.Converters.Add(new JsonStringEnumConverter());
+            return options;
+        }
+
+        /// <summary>메모리 안 상태(실행 취소용) — 경로는 그대로.</summary>
+        public static string Snapshot(Project project)
+        {
+            return JsonSerializer.Serialize(project, CompactOptions);
+        }
+
+        public static Project FromSnapshot(string json)
+        {
+            var project = JsonSerializer.Deserialize<Project>(json, CompactOptions);
+            Validate(project);
+            return project;
+        }
+
+        public static void Save(Project project, string path)
+        {
+            var folder = Path.GetDirectoryName(Path.GetFullPath(path));
+            var copy = FromSnapshot(Snapshot(project));
+            foreach (var media in copy.Media)
+                media.Path = Project.Relative(folder, media.Path);
+            foreach (var clip in copy.AllClips)
+                clip.Path = Project.Relative(folder, clip.Path);
+            var json = JsonSerializer.Serialize(copy, Options);
+            // 저장 중 실패해도 원래 파일이 남게 임시 파일에 쓰고 바꾼다
+            var temp = path + ".tmp";
+            File.WriteAllText(temp, json, new UTF8Encoding(false));
+            File.Move(temp, path, true);
+        }
+
+        public static Project Load(string path)
+        {
+            Project project;
+            try
+            {
+                project = JsonSerializer.Deserialize<Project>(File.ReadAllText(path), Options);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidDataException("프로젝트 파일 형식이 아닙니다: " + ex.Message, ex);
+            }
+            if (project == null)
+                throw new InvalidDataException("프로젝트 파일이 비어 있습니다.");
+            if (project.Version > Project.CurrentVersion)
+                throw new InvalidDataException("더 새 버전의 플러그인에서 만든 프로젝트입니다(형식 " + project.Version + ").");
+            Validate(project);
+            var folder = Path.GetDirectoryName(Path.GetFullPath(path));
+            foreach (var media in project.Media)
+                media.Path = Project.Absolute(folder, media.Path);
+            foreach (var clip in project.AllClips)
+                clip.Path = Project.Absolute(folder, clip.Path);
+            return project;
+        }
+
+        /// <summary>읽은 프로젝트가 편집 규칙을 만족하게 고친다(빠진 트랙·잘못된 값).</summary>
+        private static void Validate(Project project)
+        {
+            if (project.RateNumerator <= 0 || project.RateDenominator <= 0)
+            {
+                project.RateNumerator = 30;
+                project.RateDenominator = 1;
+            }
+            if (project.Rate.Fps < 1 || project.Rate.Fps > 240)
+                project.Rate = FrameRate.Default;
+            project.Width = Math.Max(16, Math.Min(8192, project.Width - project.Width % 2));
+            project.Height = Math.Max(16, Math.Min(8192, project.Height - project.Height % 2));
+            if (project.SampleRate < 8000 || project.SampleRate > 192000)
+                project.SampleRate = 48000;
+            if (project.VideoTracks.Count == 0)
+                project.VideoTracks.Add(new Track { Kind = TrackKind.Video });
+            foreach (var track in project.VideoTracks)
+                track.Kind = TrackKind.Video;
+            foreach (var track in project.AudioTracks)
+                track.Kind = TrackKind.Audio;
+            // Id는 16진수 짧은 글이고 겹치지 않아야 한다(프로젝트 파일은 남이 만든 것일 수 있음)
+            var ids = new System.Collections.Generic.HashSet<string>();
+            foreach (var item in project.AllTracks.Select(t => (object)t).Concat(project.AllClips).Concat(project.Markers))
+            {
+                var id = item is Track t ? t.Id : item is Clip c ? c.Id : ((Marker)item).Id;
+                if (string.IsNullOrEmpty(id) || id.Length > 32 || !id.All(Uri.IsHexDigit) || !ids.Add(id))
+                {
+                    id = Track.NewId();
+                    ids.Add(id);
+                    if (item is Track track)
+                        track.Id = id;
+                    else if (item is Clip clip)
+                        clip.Id = id;
+                    else
+                        ((Marker)item).Id = id;
+                }
+            }
+            foreach (var clip in project.AllClips)
+            {
+                clip.FontSize = Math.Max(4, Math.Min(1000, clip.FontSize));
+                clip.Scale = Math.Max(0.01, Math.Min(20, clip.Scale));
+                if (clip.Speed < TimelineEdits.MinSpeed || clip.Speed > TimelineEdits.MaxSpeed)
+                    clip.Speed = 1;
+                if (clip.SourceOut <= clip.SourceIn)
+                    clip.SourceOut = clip.SourceIn + 1;
+            }
+            foreach (var track in project.AllTracks)
+                track.Sort();
+            project.RenameTracks();
+        }
+    }
+
+    /// <summary>실행 취소/다시 실행: 편집 전 프로젝트 상태(JSON)를 쌓는다.</summary>
+    public sealed class EditHistory
+    {
+        private readonly System.Collections.Generic.List<string> _undo = new System.Collections.Generic.List<string>();
+        private readonly System.Collections.Generic.List<string> _redo = new System.Collections.Generic.List<string>();
+
+        public int Limit { get; set; } = 300;
+        public bool CanUndo { get { return _undo.Count > 0; } }
+        public bool CanRedo { get { return _redo.Count > 0; } }
+
+        public void Record(string before)
+        {
+            _undo.Add(before);
+            if (_undo.Count > Limit)
+                _undo.RemoveAt(0);
+            _redo.Clear();
+        }
+
+        public string Undo(string current)
+        {
+            var state = _undo[_undo.Count - 1];
+            _undo.RemoveAt(_undo.Count - 1);
+            _redo.Add(current);
+            return state;
+        }
+
+        public string Redo(string current)
+        {
+            var state = _redo[_redo.Count - 1];
+            _redo.RemoveAt(_redo.Count - 1);
+            _undo.Add(current);
+            return state;
+        }
+
+        public void Clear()
+        {
+            _undo.Clear();
+            _redo.Clear();
+        }
+    }
+}
