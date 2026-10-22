@@ -218,7 +218,7 @@ namespace VideoEditor.Core
         }
 
         /// <summary>https://github.com/... 주소인지(내려받기는 GitHub 릴리스에서만).</summary>
-        private static bool FromGitHub(string url)
+        internal static bool FromGitHub(string url)
         {
             return Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
                    && (uri.Host == "github.com" || uri.Host.EndsWith(".github.com", StringComparison.Ordinal) || uri.Host.EndsWith(".githubusercontent.com", StringComparison.Ordinal));

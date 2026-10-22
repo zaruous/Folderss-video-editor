@@ -363,6 +363,24 @@ namespace VideoEditor.Ui
             _ = ImportPaths(dialog.FileNames, null, -1);
         }
 
+        /// <summary>[URL에서 가져오기]: 직접 링크·유튜브 주소 또는 유튜브 검색으로 받아 미디어 목록에 더한다.</summary>
+        public void ImportFromUrl()
+        {
+            try
+            {
+                _player.Stop();
+                var dialog = new UrlImportDialog(_services, NeedTool, paths => ImportPaths(paths, null, -1), Project.Height, _session.FilePath);
+                var owner = UiKit.OwnerOf(_owner);
+                if (owner != null && owner.IsLoaded)
+                    dialog.Owner = owner;
+                dialog.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                Status("URL에서 가져오기 창을 열지 못했습니다: " + ex.Message);
+            }
+        }
+
         private static string SafeFolder(string folder, Environment.SpecialFolder fallback)
         {
             return !string.IsNullOrEmpty(folder) && Directory.Exists(folder) ? folder : Environment.GetFolderPath(fallback);

@@ -13,7 +13,7 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// 미디어 패널(왼쪽 위): [미디어] 가져온 파일 목록(썸네일·종류·길이 — 두 번 누르면 타임라인 끝에 추가, 끌어서 원하는 자리에),
-    /// [폴더] Folderss 폴더 패널에서 골라 가져오기, [글자] 글자 클립 만들기.
+    /// [폴더] Folderss 폴더 패널에서 골라 가져오기, [글자] 글자 클립 만들기. 도구 막대에 [URL에서 가져오기](직접 링크·유튜브).
     /// </summary>
     internal sealed class MediaPanel : DockPanel
     {
@@ -61,6 +61,7 @@ namespace VideoEditor.Ui
             var panel = new DockPanel();
             var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4) };
             bar.Children.Add(UiKit.IconButton(UiKit.GlyphImport, "미디어 가져오기 (Ctrl+I)", "ImportButton", _commands.Import));
+            bar.Children.Add(UiKit.IconButton(UiKit.GlyphLink, "URL에서 가져오기(직접 링크·유튜브 주소·유튜브 검색)", "ImportUrlButton", _commands.ImportFromUrl));
             bar.Children.Add(UiKit.IconButton(UiKit.GlyphAdd, "고른 미디어를 타임라인 끝에 추가", "AddToTimelineButton", AddSelected));
             DockPanel.SetDock(bar, Dock.Top);
             panel.Children.Add(bar);
@@ -124,6 +125,7 @@ namespace VideoEditor.Ui
             if (selected.Length == 0)
             {
                 menu.Items.Add(Item("미디어 가져오기…", _commands.Import));
+                menu.Items.Add(Item("URL에서 가져오기…", _commands.ImportFromUrl));
                 return;
             }
             menu.Items.Add(Item("타임라인에 추가", AddSelected));

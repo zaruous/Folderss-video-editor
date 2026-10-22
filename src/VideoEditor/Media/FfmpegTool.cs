@@ -168,7 +168,8 @@ namespace VideoEditor.Media
             public string Error { get; set; }
         }
 
-        public static Process Start(string exe, IEnumerable<string> args, bool readOutput, bool writeInput = false)
+        /// <summary>configure: 시작 전에 고칠 것(yt-dlp — 표준 출력 인코딩·환경 변수).</summary>
+        public static Process Start(string exe, IEnumerable<string> args, bool readOutput, bool writeInput = false, Action<ProcessStartInfo> configure = null)
         {
             var info = new ProcessStartInfo(exe)
             {
@@ -181,6 +182,7 @@ namespace VideoEditor.Media
             };
             foreach (var arg in args)
                 info.ArgumentList.Add(arg);
+            configure?.Invoke(info);
             var process = Process.Start(info);
             if (process == null)
                 throw new InvalidOperationException("FFmpeg를 실행하지 못했습니다: " + exe);
@@ -189,9 +191,9 @@ namespace VideoEditor.Media
         }
 
         /// <summary>끝날 때까지 돌려 표준 출력·오류를 글로 받는다. 시간을 넘기거나 취소되면 프로세스를 끝내고 예외.</summary>
-        public static async Task<TextResult> RunText(string exe, IEnumerable<string> args, TimeSpan timeout, CancellationToken cancellation)
+        public static async Task<TextResult> RunText(string exe, IEnumerable<string> args, TimeSpan timeout, CancellationToken cancellation, Action<ProcessStartInfo> configure = null)
         {
-            using (var process = Start(exe, args, true))
+            using (var process = Start(exe, args, true, false, configure))
             {
                 var output = process.StandardOutput.ReadToEndAsync();
                 var error = process.StandardError.ReadToEndAsync();

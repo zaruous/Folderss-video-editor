@@ -290,6 +290,7 @@ namespace VideoEditor.Ui
                 Item("다른 이름으로 저장…", "Ctrl+Shift+S", () => _commands.SaveAs()),
                 null,
                 Item("미디어 가져오기…", "Ctrl+I", _commands.Import),
+                Item("URL에서 가져오기…", "", _commands.ImportFromUrl),
                 Item("내보내기…", "Ctrl+E", _commands.Export),
                 null,
                 Item("프로젝트 설정…", "", _commands.ProjectSettings),
