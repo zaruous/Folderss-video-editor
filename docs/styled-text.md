@@ -93,6 +93,17 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
 
 ## 4. 작업 목록
 
+작업마다 GitHub 이슈가 있다. 상위 이슈 [#3](https://github.com/zaruous/Folderss-video-editor/issues/3)에 체크리스트로 모여 있다.
+
+**이슈에 들어 있는 것:** 만들 파일·클래스·메서드, 먼저 쓸 시험, 완료 기준, 빌드·시험 명령, 공통 규칙. 이슈만 읽고도 다른 환경(모바일에서 시킨 클라우드 세션 등)에서 구현할 수 있다.
+
+**작업 방식**
+- 이슈 하나 = PR 하나다.
+- `styled-text` 가지에서 `styled-text-tN` 가지를 만들고, PR base는 `styled-text`로 한다(main이 아님). 선행 작업이 `styled-text`에 병합된 뒤 시작한다.
+- 1단계(T1~T7)와 2단계(T8~T12)가 끝날 때마다 `styled-text` → `main` PR을 연다.
+- 화면 시험(`tests/VideoEditor.UiTests`)은 Windows에서만 돈다. 클라우드·Linux에서는 작성만 하고, PR 본문에 "화면 시험 미실행 — Windows에서 확인 필요"라고 적는다.
+- 작업을 끝내면 아래 "7. 진행" 표에 한 줄 더하고, PR 본문에 `Closes #이슈`를 넣는다.
+
 순서: T1 → T2 → T3 → (T4·T5·T6) → T7 → (T8·T9) → T10 → T11 → T12.
 **1단계(T1~T7)를 PR 하나로, 2단계(T8~T12)를 다음 PR로** 낸다. 3D(베벨·돌출)는 이번 범위에서 뺀다(이슈 #3의 3단계).
 
@@ -104,7 +115,7 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
 
 ### 1단계
 
-**T1 모델·형식·검증**
+**T1 모델·형식·검증** — 이슈 [#11](https://github.com/zaruous/Folderss-video-editor/issues/11)
 - 파일: `Core/TextStyle.cs`(새 파일), `Core/Project.cs`(`Clip.Style`, `CurrentVersion = 2`, 깊은 복사), `Core/ProjectFile.cs`(`Validate`), `tests/VideoEditor.Tests/TextStyleTests.cs`
 - 먼저 쓸 시험:
   - v1 파일을 열면 스타일이 null이고, 렌더 그래프 문자열이 지금과 같다.
@@ -120,7 +131,7 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
   - 스타일 편집을 실행 취소하면 돌아간다.
 - 완료: Linux CI 통과, 화면 변화 없음.
 
-**T2 PNG 경로·캐시 (가짜 그리개로 먼저)**
+**T2 PNG 경로·캐시 (가짜 그리개로 먼저)** — 이슈 [#12](https://github.com/zaruous/Folderss-video-editor/issues/12)
 - 파일: `Core/TextImage.cs`(`ITextRasterizer`·`TextImageRequest`·키), `Core/StyledTextLayout.cs`, `Core/RenderGraph.cs`, `Media/TextImageCache.cs`(새 파일), `Media/MediaServices.cs`
 - 먼저 쓸 시험:
   - 그래프
@@ -139,7 +150,7 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
     - 미리 보기 프레임 = 내보내기 프레임(허용 오차 안).
 - 완료: Ui는 아직 null을 넘기므로 동작 변화 없음.
 
-**T3 WPF 그리개 + 글꼴 (사용자에게 보이는 첫 조각)**
+**T3 WPF 그리개 + 글꼴 (사용자에게 보이는 첫 조각)** — 이슈 [#13](https://github.com/zaruous/Folderss-video-editor/issues/13)
 - 파일:
   - `Ui/StyledTextRasterizer.cs`(새 파일), `Ui/EditorServices.cs`
   - 그리개를 넘길 곳: `PreviewPlayer` 2곳, `ExportDialog`, `EditorCommands`의 스냅샷
@@ -158,34 +169,34 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
   - 통합: 미리 보기 프레임 = 내보낸 mp4 프레임.
 - 완료: `scripts/ui-test.ps1` 통과, 캡처 확인.
 
-**T4 채우기**
+**T4 채우기** — 이슈 [#14](https://github.com/zaruous/Folderss-video-editor/issues/14)
 - 구현: Core는 각도 → 그라데이션 끝점, 정지점 정규화. Ui는 단색·선형·원형·없음과 색 칸(`UiKit.ColorRow`: 팔레트 + 16진 입력).
 - 시험: 0° 선형은 왼쪽이 색1·오른쪽이 색2, 원형은 가운데가 색1, 4색, "없음"이면 칠한 픽셀이 0개.
 
-**T5 윤곽선**
+**T5 윤곽선** — 이슈 [#15](https://github.com/zaruous/Folderss-video-editor/issues/15)
 - 구현: Core는 효과 범위(두께/2, 마이터 연장). Ui는 `Pen`.
 - 시험: 채우기 없음 + 윤곽선이면 속이 빈 글자, 이음 방식마다 모서리가 다름, 굵은 윤곽선도 가장자리가 잘리지 않음.
 
-**T6 그림자**
+**T6 그림자** — 이슈 [#16](https://github.com/zaruous/Folderss-video-editor/issues/16)
 - 구현: Core는 `ShadowOffset`. Ui는 별도 시각 요소 + `BlurEffect`.
 - 시험: 그림자 픽셀의 무게중심이 거리·각도만큼 옮겨짐, 흐림을 키우면 더 퍼짐, 진하기가 불투명도에 비례.
 
-**T7 스타일 모음 8개 + 갤러리**
+**T7 스타일 모음 8개 + 갤러리** — 이슈 [#17](https://github.com/zaruous/Folderss-video-editor/issues/17)
 - 구현: `Core/TextStylePresets.cs`(한국어 이름, 상표 없는 이름). 썸네일은 그리개로 비동기로 만들고 해시 기준 메모리 캐시에 둔다.
 - 시험: 8개 모두 정규화해도 그대로이고 이름이 겹치지 않는다. 누르면 한 단계로 적용되고 실행 취소로 되돌아가며, 미리 보기가 바뀐다.
 - **여기까지가 1단계 PR이다.**
 
 ### 2단계
 
-**T8 광선**
+**T8 광선** — 이슈 [#18](https://github.com/zaruous/Folderss-video-editor/issues/18)
 - 구현: 넓힌 윤곽(`Pen` 두께 = 크기 × 2) + 흐림.
 - 시험: 글자 바깥 고리에 광선 색이 보이고, 크기를 키우면 고리도 커진다.
 
-**T9 반사**
+**T9 반사** — 이슈 [#19](https://github.com/zaruous/Folderss-video-editor/issues/19)
 - 구현: Core는 반사 사각형(크기 %, 간격). Ui는 뒤집은 사본 + `OpacityMask`(위 → 아래로 흐려짐).
 - 시험: 기준선 아래에 대칭으로 그려지고, 아래로 갈수록 알파가 줄며, 간격만큼 빈 줄이 있다.
 
-**T10 휘기 계산** (`Core/TextWarp.cs`만)
+**T10 휘기 계산** (`Core/TextWarp.cs`만) — 이슈 [#20](https://github.com/zaruous/Folderss-video-editor/issues/20)
 - 시험:
   - amount 0이면 그대로다.
   - 위 아치는 가운데가 올라간다.
@@ -193,10 +204,10 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
   - u에 대해 단조라 접히지 않는다.
   - 악성 amount에도 결과가 유한하다.
 
-**T11 휘기 적용·화면**
+**T11 휘기 적용·화면** — 이슈 [#21](https://github.com/zaruous/Folderss-video-editor/issues/21)
 - 시험: 위 아치에서 가운데 열의 무게중심이 양 끝보다 위에 있다. amount 0은 휘기 없음과 바이트까지 같다.
 
-**T12 스타일 모음 추가 + 내 스타일**
+**T12 스타일 모음 추가 + 내 스타일** — 이슈 [#22](https://github.com/zaruous/Folderss-video-editor/issues/22)
 - 구현: 플러그인 설정 키 `textStyles`(JSON, 최대 50개). 읽을 때 프로젝트와 같은 정규화를 거친다.
 - 시험: 악성 설정은 무시한다. 저장하면 갤러리에 나타나고, 창을 다시 열어도 남아 있으며, 지울 수 있다.
 
@@ -235,3 +246,4 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
 | 날짜 | 내용 |
 |---|---|
 | 2026-10-23 | 계획 작성(이 문서). 가지 `styled-text` |
+| 2026-10-23 | 작업 이슈 등록: T1~T12 = #11~#22(라벨 `styled-text`), 상위 이슈 #3에 체크리스트 |
