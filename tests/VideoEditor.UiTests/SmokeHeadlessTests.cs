@@ -399,6 +399,49 @@ namespace VideoEditor.UiTests
             }
         }
 
+        /// <summary>
+        /// URL에서 가져오기 → 검색: 처음에는 yt-dlp 설치(없을 때) 또는 안내 창이 뜨고, 안내 체크박스를 체크하기 전에는 [내려받아 설치]·[확인]이 꺼져 있다.
+        /// 유튜브에는 접속하지 않는다([나중에]·[취소]로 닫음).
+        /// </summary>
+        [UiFact]
+        public async Task UrlImport_NoticeCheckboxGatesButtons()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin, withFfmpeg: !string.IsNullOrEmpty(FfmpegFolder));
+            try
+            {
+                await ui.WaitUntil(() => window.IsLoaded, Wait, "편집 창");
+                ui.Post(() => Ui.Menu(window, "파일", "URL에서 가져오기"));
+                var dialog = await ui.WaitFor(() => Ui.Window("URL에서 가져오기"), Wait, "URL에서 가져오기 창");
+                ui.Run(() =>
+                {
+                    Ui.Select(Ui.ById<TabControl>(dialog, "UrlImportTabs"), 1);
+                    Ui.ById<ComboBox>(dialog, "SearchQueryBox").Text = "blender";
+                });
+                ui.Post(() => Ui.Click(Ui.ById<Button>(dialog, "SearchButton")));
+                var popup = await ui.WaitFor(() => Ui.Window("yt-dlp 설치") ?? Ui.Window("유튜브에서 가져오기"), Wait, "yt-dlp 안내 창");
+                ui.Run(() =>
+                {
+                    var ok = Ui.ById<Button>(popup, "YtDlpOkButton");
+                    Assert.False(ok.IsEnabled);
+                    Ui.ClickToggle(Ui.ById<CheckBox>(popup, "YtDlpNoticeCheck"));
+                    Assert.True(ok.IsEnabled);
+                    Ui.Snap(popup, plugin.ShotFolder, "ytdlp-notice");
+                    Ui.Click(Ui.ById<Button>(popup, "YtDlpLaterButton"));
+                });
+                await ui.WaitUntil(() => Ui.ById<TextBlock>(dialog, "UrlImportStatus").Text.Contains("안내를 확인해야")
+                                         || Ui.ById<TextBlock>(dialog, "UrlImportStatus").Text.Contains("yt-dlp가 없어"), Wait, "안내를 확인하지 않아 멈춤");
+                ui.Run(() => Ui.Click(Ui.ById<Button>(dialog, "UrlCloseButton")));
+                await ui.WaitUntil(() => Ui.Window("URL에서 가져오기") == null, Wait, "URL에서 가져오기 창 닫힘");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
         /// <summary>테마 7종으로 편집 창 캡처(색이 테마를 따르는지 눈으로 본다).</summary>
         [EditorFact]
         public async Task Themes()

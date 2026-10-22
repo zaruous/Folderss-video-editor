@@ -22,10 +22,14 @@ namespace VideoEditor.Ui
         public const string PlayerMutedKey = "playerMuted";
         public const string PreviewScaleKey = "previewScale";
         public const string LastFolderKey = "lastFolder";
+        public const string YtDlpPathKey = "ytDlpPath";
+        public const string YtDlpNoticeKey = "ytDlpNoticeAccepted";
+        public const string RecentSearchesKey = "youtubeRecentSearches";
 
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
         private Task<FfmpegTool> _locating;
+        private Task<YtDlpTool> _locatingYtDlp;
         // 썸네일·파형 FFmpeg를 한꺼번에 수십 개 띄우지 않게
         private static readonly SemaphoreSlim PictureGate = new SemaphoreSlim(3);
 
@@ -43,6 +47,65 @@ namespace VideoEditor.Ui
 
         /// <summary>플러그인이 내려받는 곳(데이터 폴더\ffmpeg).</summary>
         public string DownloadFolder { get { return Path.Combine(Manager.DataDirectory, "ffmpeg"); } }
+
+        /// <summary>찾은 yt-dlp(없으면 null).</summary>
+        public YtDlpTool YtDlp { get; private set; }
+
+        /// <summary>플러그인이 yt-dlp·Deno를 내려받는 곳(데이터 폴더\yt-dlp, 데이터 폴더\deno).</summary>
+        public string YtDlpFolder { get { return Path.Combine(Manager.DataDirectory, "yt-dlp"); } }
+        public string DenoFolder { get { return Path.Combine(Manager.DataDirectory, "deno"); } }
+
+        /// <summary>유튜브 약관·권리 안내를 확인했는지(한 번 확인하면 설정에 기억).</summary>
+        public bool YtDlpNoticeAccepted
+        {
+            get { return Setting(YtDlpNoticeKey) == "true"; }
+            set { SaveSetting(YtDlpNoticeKey, value ? "true" : null); }
+        }
+
+        /// <summary>URL에서 받은 파일을 둘 곳: 프로젝트 파일 옆 media 폴더, 저장 안 한 프로젝트면 데이터 폴더\media.</summary>
+        public string MediaDownloadFolder(string projectPath)
+        {
+            return string.IsNullOrEmpty(projectPath) ? Path.Combine(Manager.DataDirectory, "media") : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(projectPath)), "media");
+        }
+
+        /// <summary>yt-dlp를 찾는다(이미 찾았으면 그것). 백그라운드에서 돌고, 같은 때 여러 번 불러도 한 번만 찾는다.</summary>
+        public Task<YtDlpTool> LocateYtDlpAsync()
+        {
+            var current = YtDlp;
+            if (current != null && File.Exists(current.Path))
+                return Task.FromResult(current);
+            lock (_waveforms)
+            {
+                if (_locatingYtDlp == null || _locatingYtDlp.IsCompleted)
+                {
+                    var configured = Setting(YtDlpPathKey);
+                    var downloaded = YtDlpFolder;
+                    var deno = DenoFolder;
+                    _locatingYtDlp = Task.Run(() =>
+                    {
+                        var tool = YtDlpTool.Locate(configured, downloaded, deno);
+                        YtDlp = tool;
+                        return tool;
+                    });
+                }
+                return _locatingYtDlp;
+            }
+        }
+
+        /// <summary>쓸 yt-dlp를 정한다. remember면 설정에 경로를 저장한다(직접 지정).</summary>
+        public void SetYtDlp(YtDlpTool tool, bool remember)
+        {
+            YtDlp = tool;
+            if (tool != null && remember)
+                SaveSetting(YtDlpPathKey, tool.Path);
+        }
+
+        /// <summary>yt-dlp를 다시 찾는다(설치·업데이트·Deno를 받은 뒤).</summary>
+        public Task<YtDlpTool> RelocateYtDlpAsync()
+        {
+            YtDlp = null;
+            return LocateYtDlpAsync();
+        }
 
         public string Setting(string key)
         {

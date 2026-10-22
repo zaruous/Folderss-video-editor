@@ -3,7 +3,6 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using VideoEditor.Core;
@@ -43,16 +42,14 @@ namespace VideoEditor.Media
 
         private static async Task<string> DownloadCore(string target, IProgress<Status> progress, CancellationToken cancellation, HttpMessageHandler handler)
         {
-            using (var http = handler == null ? new HttpClient() : new HttpClient(handler, false))
+            using (var http = GitHubDownload.Client(handler))
             {
-                http.Timeout = TimeSpan.FromMinutes(30);
-                http.DefaultRequestHeaders.UserAgent.ParseAdd("Folderss-video-editor/0.1 (+https://github.com/zaruous/Folderss-video-editor)");
                 progress?.Report(new Status { Stage = "릴리스 정보 확인" });
-                var releaseJson = await GetText(http, ReleaseApi, cancellation).ConfigureAwait(false);
+                var releaseJson = await GitHubDownload.GetText(http, ReleaseApi, cancellation).ConfigureAwait(false);
                 var build = FfmpegText.ChooseBuild(releaseJson);
                 if (build == null)
                     throw new InvalidOperationException("내려받을 FFmpeg 빌드를 찾지 못했습니다(GitHub BtbN/FFmpeg-Builds 릴리스에 Windows 빌드가 없음).");
-                var checksums = await GetText(http, build.ChecksumsUrl, cancellation).ConfigureAwait(false);
+                var checksums = await GitHubDownload.GetText(http, build.ChecksumsUrl, cancellation).ConfigureAwait(false);
                 var expected = FfmpegText.FindChecksum(checksums, build.Name);
                 if (expected == null)
                     throw new InvalidOperationException("체크섬 목록에 " + build.Name + "가 없습니다.");
@@ -61,41 +58,7 @@ namespace VideoEditor.Media
                 var zip = Path.Combine(target, "download.zip.part");
                 try
                 {
-                    string actual;
-                    using (var response = await http.GetAsync(build.Url, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false))
-                    {
-                        response.EnsureSuccessStatusCode();
-                        var total = response.Content.Headers.ContentLength ?? build.Size;
-                        // 릴리스에 적힌 크기보다 훨씬 크면 멈춘다(잘못된 응답이 디스크를 채우지 않게)
-                        var limit = Math.Max(build.Size, 1L) + 16L * 1024 * 1024;
-                        if (total > limit)
-                            throw new InvalidDataException("내려받을 파일이 예상보다 큽니다(" + total + " 바이트).");
-                        using (var input = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false))
-                        using (var output = File.Create(zip))
-                        using (var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
-                        {
-                            var buffer = new byte[1 << 16];
-                            long done = 0;
-                            var lastReport = 0L;
-                            int read;
-                            while ((read = await input.ReadAsync(buffer, 0, buffer.Length, cancellation).ConfigureAwait(false)) > 0)
-                            {
-                                await output.WriteAsync(buffer, 0, read, cancellation).ConfigureAwait(false);
-                                sha.AppendData(buffer, 0, read);
-                                done += read;
-                                if (done > limit)
-                                    throw new InvalidDataException("내려받은 크기가 예상보다 큽니다.");
-                                if (done - lastReport > 512 * 1024 || done == total)
-                                {
-                                    lastReport = done;
-                                    progress?.Report(new Status { Stage = "내려받는 중 — " + build.Name, Done = done, Total = total });
-                                }
-                            }
-                            actual = Convert.ToHexString(sha.GetHashAndReset()).ToLowerInvariant();
-                        }
-                    }
-                    if (actual != expected)
-                        throw new InvalidDataException("내려받은 파일의 SHA-256이 맞지 않습니다. 다시 시도하세요.\n기대 " + expected + "\n실제 " + actual);
+                    await GitHubDownload.Save(http, build.Url, build.Size, expected, zip, "내려받는 중 — " + build.Name, progress, cancellation).ConfigureAwait(false);
                     progress?.Report(new Status { Stage = "압축 푸는 중" });
                     return Extract(zip, target);
                 }
@@ -103,15 +66,6 @@ namespace VideoEditor.Media
                 {
                     RenderCommand.TryDelete(zip);
                 }
-            }
-        }
-
-        private static async Task<string> GetText(HttpClient http, string url, CancellationToken cancellation)
-        {
-            using (var response = await http.GetAsync(url, cancellation).ConfigureAwait(false))
-            {
-                response.EnsureSuccessStatusCode();
-                return await response.Content.ReadAsStringAsync(cancellation).ConfigureAwait(false);
             }
         }
 

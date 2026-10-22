@@ -42,6 +42,7 @@ namespace VideoEditor.Ui
         public const string GlyphAudio = "";
         public const string GlyphText = "";
         public const string GlyphCamera = "";
+        public const string GlyphLink = "";
         public const string GlyphFolder = "";
 
         public static Button IconButton(string glyph, string tooltip, string automationId, Action click)

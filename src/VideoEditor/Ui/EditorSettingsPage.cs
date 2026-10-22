@@ -8,12 +8,13 @@ using VideoEditor.Media;
 
 namespace VideoEditor.Ui
 {
-    /// <summary>Folderss 설정 창의 "동영상 편집" 탭: FFmpeg 경로(비우면 자동으로 찾음), 사진·글자 기본 길이.</summary>
+    /// <summary>Folderss 설정 창의 "동영상 편집" 탭: FFmpeg 경로(비우면 자동으로 찾음), 사진·글자 기본 길이, yt-dlp 경로.</summary>
     internal sealed class EditorSettingsPage : IPluginSettingsPage
     {
         private readonly EditorServices _services;
         private TextBox _path;
         private TextBox _imageSeconds;
+        private TextBox _ytDlp;
 
         public EditorSettingsPage(EditorServices services)
         {
@@ -58,6 +59,16 @@ namespace VideoEditor.Ui
             _imageSeconds = new TextBox { Width = 80, HorizontalAlignment = HorizontalAlignment.Left, Text = UiKit.Number(_services.ImageSeconds), Margin = new Thickness(0, 4, 0, 0) };
             AutomationProperties.SetAutomationId(_imageSeconds, "SettingsImageSeconds");
             panel.Children.Add(_imageSeconds);
+            var ytDlpLabel = UiKit.Label("yt-dlp 경로 (URL·유튜브에서 가져오기) — 비우면 PATH·winget 설치 위치·플러그인이 받은 것을 찾습니다");
+            ytDlpLabel.Margin = new Thickness(0, 12, 0, 0);
+            ytDlpLabel.TextWrapping = TextWrapping.Wrap;
+            panel.Children.Add(ytDlpLabel);
+            _ytDlp = new TextBox { Text = _services.Setting(EditorServices.YtDlpPathKey) ?? "", Margin = new Thickness(0, 4, 0, 0) };
+            AutomationProperties.SetAutomationId(_ytDlp, "SettingsYtDlpPath");
+            panel.Children.Add(_ytDlp);
+            var ytDlpStatus = UiKit.Label(_services.YtDlp != null ? "지금 쓰는 yt-dlp: " + _services.YtDlp.Version + " (" + _services.YtDlp.Path + ")" : "yt-dlp는 처음 URL에서 가져올 때 찾습니다.", true);
+            ytDlpStatus.TextWrapping = TextWrapping.Wrap;
+            panel.Children.Add(ytDlpStatus);
             return panel;
         }
 
@@ -69,6 +80,13 @@ namespace VideoEditor.Ui
             double seconds;
             if (UiKit.TryNumber(_imageSeconds.Text, out seconds) && seconds > 0 && seconds <= 3600)
                 _services.Manager.SetSetting(EditorServices.ImageSecondsKey, UiKit.Number(seconds));
+            var ytDlp = _ytDlp.Text.Trim();
+            if (ytDlp != (_services.Setting(EditorServices.YtDlpPathKey) ?? ""))
+            {
+                _services.Manager.SetSetting(EditorServices.YtDlpPathKey, ytDlp.Length == 0 ? null : ytDlp);
+                // 다음에 가져올 때 새 경로로 다시 찾는다
+                _services.SetYtDlp(null, false);
+            }
             // 다음 편집 창부터 새 경로로 다시 찾는다
             _ = _services.LocateAsync();
         }
