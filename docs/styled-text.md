@@ -1,0 +1,237 @@
+# 구현 계획 — 꾸민 글자 (이슈 #3)
+
+ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사용 → 2 계획 → **GATE 1** → 4 TDD 구현 → 5 리뷰 → 6 커밋.
+요구 사항은 [이슈 #3](https://github.com/zaruous/Folderss-video-editor/issues/3). 뒤따르는 이슈 #7(아트 요소)과 #4(애니메이션 효과)가 이 문서의 그리개·스타일 모델을 그대로 쓴다.
+
+**크기 등급: large.** 프로젝트 파일 형식(버전 2), 렌더 그래프, 새 WPF 그리기 모듈, 속성 패널 UI를 함께 건드린다.
+
+---
+
+## 0. 지금 상태
+
+- 글자 클립은 `Core/RenderGraph.cs`의 `VisualSource()`에서 FFmpeg `drawtext`로 그린다.
+  - 화면 전체 크기의 투명 `color` 바탕 가운데에 그린다. 글꼴은 `RenderEnvironment.DefaultFont()` 하나뿐이다.
+  - 그다음 모든 화면 클립이 같이 쓰는 체인을 탄다: 화면에 맞춤 × `Scale` → 회전 → 불투명도 → 페이드 → 가운데 + `X`/`Y`로 `overlay`.
+- `drawtext`로 할 수 있는 것은 단색·윤곽선·단색 그림자·상자뿐이다. 그라데이션, 광선, 반사, 휘기는 안 된다.
+- `RenderOptions`를 만드는 곳은 `Media/MediaServices.cs`의 4곳이다: `Exporter.Export`, `PreviewRenderer.Frame`, `StartVideo`, `StartAudio`. 모두 정적 함수라 Ui에 손이 닿지 않는다.
+- `Clip`(`Core/Project.cs`)에는 `Text`, `FontSize`(72), `TextColor`("#FFFFFF")만 있다.
+  - 프로젝트 형식은 `Project.CurrentVersion = 1`이다.
+  - `ProjectFile.Load`는 더 새 버전 파일을 거절하고, `Validate()`가 값을 잡아 준다. 프로젝트 파일은 남이 만든 것일 수 있다.
+- `Clip.CloneWithNewId()`는 `MemberwiseClone`(얕은 복사)이다. 클립에 스타일 객체가 생기면 분할·붙여넣기한 클립끼리 스타일을 같이 쓰게 된다. **이번에 깊은 복사로 고친다.**
+- 속성 패널 `TextTab()`에는 글자 내용, 크기(`NumberRow`), 색 프리셋(`ComboBox`)만 있다.
+
+## 1. 조사·재사용
+
+| 후보 | 판단 |
+|---|---|
+| WPF 기본 기능: `FormattedText.BuildGeometry`, `Geometry.GetFlattenedPathGeometry`, `LinearGradientBrush`·`RadialGradientBrush`, `Pen`(이음 방식), `BlurEffect`, `RenderTargetBitmap` + `PngBitmapEncoder` | **채택.** 새 의존 없이 윤곽(기하)을 얻어 칠·선·흐림을 그릴 수 있다. 기하만 칠하므로 ClearType·힌팅·모니터 배율에 영향받지 않는다 |
+| FFmpeg `drawtext` 확장 | 제외. 그라데이션·광선·반사·휘기가 없다. 스타일이 없는 예전 글자와 그리개가 없을 때(Linux CI)의 대체 경로로만 남긴다 |
+| SkiaSharp | 제외. 네이티브 DLL(약 10MB)을 플러그인 zip과 로드 컨텍스트에 더해야 하는데, WPF로 다 된다 |
+| 휘기 | 직접 구현. 윤곽 점을 배치 상자 기준 0~1 좌표로 정규화해 변환한다(아치·원·물결·부풀리기·오므리기·기울이기·계단). 순수 수학이라 Core에 두고 단위 시험을 붙인다 |
+
+## 2. 정한 것 (planner 권장안)
+
+1. **그리개는 인수로 넘긴다.**
+   - Core에 `ITextRasterizer`를 두고 `RenderOptions.TextRasterizer`에 담는다.
+   - `Exporter.Export`, `PreviewRenderer.Frame`, `StartVideo`에 선택 인수 `ITextRasterizer textRasterizer = null`을 더한다. `StartAudio`는 화면이 없으므로 그대로 둔다.
+   - Ui는 `EditorServices.TextRasterizer` 하나를 만들어 넘긴다.
+   - 정적 전역은 쓰지 않는다. 병렬 시험에서 가짜 그리개가 다른 시험으로 새기 때문이다.
+2. **`RenderGraph.Build`는 순수 함수로 둔다.**
+   - Build는 PNG를 그리지 않고 `plan.TextImages`(경로 → 요청)만 기록한다.
+   - 실제 그리기는 FFmpeg를 띄우기 직전에 `RenderCommand.Arguments`가 캐시를 채우면서 한다.
+   - `TextImages`는 렌더가 끝난 뒤 지우는 `TextFiles`와 따로 둔다. 캐시 파일이 지워지면 안 되기 때문이다.
+3. **STA 스레드 하나.**
+   - 그리개를 처음 쓸 때 배경 STA 스레드를 만들고 그 안에서 `Dispatcher.Run()`을 돌린다.
+   - 요청은 `InvokeAsync`로 하나씩 처리하고, 30초 시간 제한과 취소를 둔다.
+   - UI 디스패처는 쓰지 않는다. 4K 흐림 처리가 편집 화면을 멈추기 때문이다.
+   - 요청마다 스레드를 새로 만들지도 않는다. WPF 초기화 비용이 크고 Dispatcher가 남는다.
+4. **PNG는 작게, 의미는 지금과 같게.**
+   - PNG 중심을 글자 배치 상자의 중심에 맞춘다. 효과가 번지는 범위(그림자·광선·흐림)만큼 대칭 여백을 두고, 크기는 짝수로 맞추며, 캔버스보다 크면 잘라 낸다.
+   - 그래프는 지금과 같은 투명 `color` 바탕(캔버스 크기)에 `overlay=x=(W-w)/2:y=(H-h)/2:eof_action=repeat`로 PNG를 얹는다. PNG는 한 번만 디코드한다.
+   - 그 뒤는 기존 공통 체인 그대로다. 그래서 `X`·`Y`·`Scale`·`Rotation` 동작이 지금과 같고, Build는 글자의 실제 크기를 몰라도 된다.
+   - 여백·자르기 계산은 Core `StyledTextLayout`에 둔다.
+5. **캐시**
+   - 위치와 이름: `RenderEnvironment.TempFolder()\styled-text\st-<SHA-256 64자>.png`. 파일 이름에는 해시만 쓰고 클립 Id나 글은 쓰지 않는다.
+   - 키: 정규화한 JSON(`RasterizerVersion` 상수, 글, 정규화한 스타일, 출력 px 글자 크기, 캔버스 W×H)의 해시.
+   - 쓰기: `.part`에 쓴 뒤 `File.Move`로 옮긴다. 같은 키로 동시에 들어온 요청은 한 번만 그린다.
+   - 정리:
+     - 시작할 때, 이미 끝난 프로세스(pid) 폴더에서 이름이 `st-<hex>.png` 패턴인 파일만 지운다.
+     - 실행 중에는 300MB를 넘으면 5분 넘게 쓰지 않은 파일부터 지운다.
+     - 재귀 삭제나 링크 추적은 하지 않는다.
+6. **휘기·그림자·그라데이션 계산은 Core에 둔다.**
+   - Core 함수: `TextWarp.Map(kind, amount, u, v)`, `Subdivide(points, maxLen)`, `Bounds`, 그림자 오프셋, 그라데이션 끝점, 효과 범위. 모두 순수 함수다.
+   - Ui는 `GetFlattenedPathGeometry`로 점을 얻어 정규화 → `Map` → `PathGeometry`로 다시 만드는 일만 한다.
+7. **프로젝트 형식을 버전 2로 한 번만 올린다.**
+   - 2단계 필드(광선·반사·휘기)도 1단계 모델에 미리 넣는다. 나중에 따로 넣으면, 옛 플러그인이 모르는 필드를 저장하면서 버리기 때문이다.
+   - 스타일이 없는 v1 클립은 지금의 `drawtext` 경로로 그대로 그린다.
+   - 스타일 객체는 사용자가 꾸밈 값을 처음 바꿀 때 `TextStyle.FromLegacy(clip)`로 만든다. 지금 색과 크기를 이어받는다.
+   - 그리개가 없으면(Linux CI) 스타일이 있어도 `drawtext`로 그리되, 첫 색과 크기만 반영한다.
+
+## 3. 스타일 모델 (Core `TextStyle`)
+
+길이 값은 모두 **프로젝트 픽셀** 기준이다. 미리 보기처럼 작게 그릴 때는 출력 폭 / 프로젝트 폭 비율로 줄인다.
+열 때 `Validate()`가 범위를 벗어난 값은 경계값으로, 정의되지 않은 enum과 잘못된 색은 기본값으로 바꾼다.
+
+| 묶음 | 필드 | 범위·기본값 |
+|---|---|---|
+| 글꼴 | `FontFamily` | 100자 이하. 경로·URI 문자(`\ / : # %`)와 제어 문자는 거부한다(아래 보안 참고). 없거나 거부되면 맑은 고딕 |
+| | `Bold`, `Italic` | 기본 false |
+| | `LetterSpacing` | -200~1000 (1/1000 em), 기본 0 |
+| | `LineSpacing` | 0.5~3.0배, 기본 1.2 |
+| | `Align` | `Left`/`Center`/`Right`, 기본 `Center` |
+| 채우기 | `Fill.Kind` | `None`/`Solid`/`Linear`/`Radial`, 기본 `Solid` |
+| | `Fill.Colors` | 1~4개, `#RRGGBB` 또는 `#AARRGGBB`. 넘치는 것은 버리고, 없으면 흰색 |
+| | `Fill.Angle` | 0~360°(0° = 왼쪽→오른쪽) |
+| 윤곽선 | `Outline.Enabled`, `Color`, `Width`, `Join` | `Width` 0~50, `Join`은 `Round`/`Miter`/`Bevel` |
+| 그림자 | `Shadow.Enabled`, `Color`, `Distance`, `Angle`, `Blur`, `Opacity` | `Distance` 0~200, `Angle` 0~360°(0° = 오른쪽, 시계 방향), `Blur` 0~100, `Opacity` 0~1 |
+| 광선 | `Glow.Enabled`, `Color`, `Size`, `Opacity` | `Size` 0~100 |
+| 반사 | `Reflection.Enabled`, `Size`, `Gap`, `Opacity` | `Size` 10~100%, `Gap` 0~100 |
+| 휘기 | `Warp.Kind`, `Warp.Amount` | `None`/`ArchUp`/`ArchDown`/`Circle`/`Wave`/`Bulge`/`Pinch`/`Slant`/`Stairs`, `Amount` -100~100% |
+
+- 글 길이가 2,000자를 넘으면 꾸민 경로 대신 `drawtext`로 그린다.
+- 글자 크기는 지금 `Clip.FontSize`(4~1000)를 그대로 쓴다.
+
+## 4. 작업 목록
+
+순서: T1 → T2 → T3 → (T4·T5·T6) → T7 → (T8·T9) → T10 → T11 → T12.
+**1단계(T1~T7)를 PR 하나로, 2단계(T8~T12)를 다음 PR로** 낸다. 3D(베벨·돌출)는 이번 범위에서 뺀다(이슈 #3의 3단계).
+
+모든 작업은 시험을 먼저 쓴다.
+- Core·Media 시험(`tests/VideoEditor.Tests`)은 Linux CI에서도 돈다.
+- WPF 픽셀·화면 시험(`tests/VideoEditor.UiTests`)은 `scripts/ui-test.ps1`로 숨은 데스크톱에서 돈다.
+  - 플러그인 어셈블리는 리플렉션으로 부른다.
+  - 요청 객체는 JSON을 플러그인 형식으로 역직렬화해 만든다.
+
+### 1단계
+
+**T1 모델·형식·검증**
+- 파일: `Core/TextStyle.cs`(새 파일), `Core/Project.cs`(`Clip.Style`, `CurrentVersion = 2`, 깊은 복사), `Core/ProjectFile.cs`(`Validate`), `tests/VideoEditor.Tests/TextStyleTests.cs`
+- 먼저 쓸 시험:
+  - v1 파일을 열면 스타일이 null이고, 렌더 그래프 문자열이 지금과 같다.
+  - 저장했다 다시 열어도 값이 같다.
+  - 악성 값을 정규화한다:
+    - 아주 큰 값·음수·NaN
+    - 정의되지 않은 enum 정수
+    - 잘못된 색
+    - 정지점 0개·9개
+    - 글꼴명 `\\host\f#x`, `file:`, `/`, `#`, 제어 문자, 100자 초과
+  - v3 파일은 거절한다.
+  - 분할·붙여넣기 뒤 한쪽 클립의 스타일을 바꿔도 다른 쪽이 그대로다(깊은 복사).
+  - 스타일 편집을 실행 취소하면 돌아간다.
+- 완료: Linux CI 통과, 화면 변화 없음.
+
+**T2 PNG 경로·캐시 (가짜 그리개로 먼저)**
+- 파일: `Core/TextImage.cs`(`ITextRasterizer`·`TextImageRequest`·키), `Core/StyledTextLayout.cs`, `Core/RenderGraph.cs`, `Media/TextImageCache.cs`(새 파일), `Media/MediaServices.cs`
+- 먼저 쓸 시험:
+  - 그래프
+    - `-i …st-<hex>.png`와 가운데 `overlay`가 들어가고 `drawtext`는 없다.
+    - Build가 파일을 쓰지 않는다.
+    - 스타일 값이 하나만 바뀌어도 경로가 바뀐다.
+  - 보안
+    - 악성 글이어도 파일 이름이 `^st-[0-9a-f]{64}\.png$`이고 캐시 폴더 밖으로 나가지 않는다.
+    - 정리는 패턴 밖의 파일과 링크를 건드리지 않는다.
+  - 캐시
+    - 같은 키로 동시에 두 번 요청하면 한 번만 그린다.
+    - 그리다가 예외가 나면 `.part`가 남지 않는다.
+  - 통합: 실제 FFmpeg와, FFmpeg로 만든 빨간 PNG를 돌려주는 가짜 그리개를 쓴다.
+    - `X`·`Scale`·`Rotation`이 이미지 클립과 같게 동작한다.
+    - 클립 마지막 프레임에도 글자가 보인다.
+    - 미리 보기 프레임 = 내보내기 프레임(허용 오차 안).
+- 완료: Ui는 아직 null을 넘기므로 동작 변화 없음.
+
+**T3 WPF 그리개 + 글꼴 (사용자에게 보이는 첫 조각)**
+- 파일:
+  - `Ui/StyledTextRasterizer.cs`(새 파일), `Ui/EditorServices.cs`
+  - 그리개를 넘길 곳: `PreviewPlayer` 2곳, `ExportDialog`, `EditorCommands`의 스냅샷
+  - `Ui/PropertyPanel.cs`: 글자 클립에 새 탭 **"꾸미기"**를 두고 글꼴·굵게·기울임·자간·행간·정렬
+- 먼저 쓸 시험:
+  - 그리개 픽셀
+    - `Task.Run`(STA가 아닌 스레드)에서 불러도 된다.
+    - 모서리는 투명하고 글자 픽셀은 채움 색이다.
+    - 굵게면 칠한 픽셀 수가 늘고, 자간을 넓히면 폭이 는다.
+    - 두 줄 글자의 왼쪽·오른쪽 정렬이 맞다.
+    - 없는 글꼴이면 대체 글꼴로 한글을 그린다.
+    - 출력 크기와 96 DPI가 정확하다.
+  - 화면
+    - 글꼴을 바꾸면 미리 보기가 바뀐다.
+    - 슬라이더를 한 번 끄는 것은 실행 취소 한 단계다.
+  - 통합: 미리 보기 프레임 = 내보낸 mp4 프레임.
+- 완료: `scripts/ui-test.ps1` 통과, 캡처 확인.
+
+**T4 채우기**
+- 구현: Core는 각도 → 그라데이션 끝점, 정지점 정규화. Ui는 단색·선형·원형·없음과 색 칸(`UiKit.ColorRow`: 팔레트 + 16진 입력).
+- 시험: 0° 선형은 왼쪽이 색1·오른쪽이 색2, 원형은 가운데가 색1, 4색, "없음"이면 칠한 픽셀이 0개.
+
+**T5 윤곽선**
+- 구현: Core는 효과 범위(두께/2, 마이터 연장). Ui는 `Pen`.
+- 시험: 채우기 없음 + 윤곽선이면 속이 빈 글자, 이음 방식마다 모서리가 다름, 굵은 윤곽선도 가장자리가 잘리지 않음.
+
+**T6 그림자**
+- 구현: Core는 `ShadowOffset`. Ui는 별도 시각 요소 + `BlurEffect`.
+- 시험: 그림자 픽셀의 무게중심이 거리·각도만큼 옮겨짐, 흐림을 키우면 더 퍼짐, 진하기가 불투명도에 비례.
+
+**T7 스타일 모음 8개 + 갤러리**
+- 구현: `Core/TextStylePresets.cs`(한국어 이름, 상표 없는 이름). 썸네일은 그리개로 비동기로 만들고 해시 기준 메모리 캐시에 둔다.
+- 시험: 8개 모두 정규화해도 그대로이고 이름이 겹치지 않는다. 누르면 한 단계로 적용되고 실행 취소로 되돌아가며, 미리 보기가 바뀐다.
+- **여기까지가 1단계 PR이다.**
+
+### 2단계
+
+**T8 광선**
+- 구현: 넓힌 윤곽(`Pen` 두께 = 크기 × 2) + 흐림.
+- 시험: 글자 바깥 고리에 광선 색이 보이고, 크기를 키우면 고리도 커진다.
+
+**T9 반사**
+- 구현: Core는 반사 사각형(크기 %, 간격). Ui는 뒤집은 사본 + `OpacityMask`(위 → 아래로 흐려짐).
+- 시험: 기준선 아래에 대칭으로 그려지고, 아래로 갈수록 알파가 줄며, 간격만큼 빈 줄이 있다.
+
+**T10 휘기 계산** (`Core/TextWarp.cs`만)
+- 시험:
+  - amount 0이면 그대로다.
+  - 위 아치는 가운데가 올라간다.
+  - 원·물결·부풀리기·오므리기·기울이기·계단이 각각의 특성을 보인다.
+  - u에 대해 단조라 접히지 않는다.
+  - 악성 amount에도 결과가 유한하다.
+
+**T11 휘기 적용·화면**
+- 시험: 위 아치에서 가운데 열의 무게중심이 양 끝보다 위에 있다. amount 0은 휘기 없음과 바이트까지 같다.
+
+**T12 스타일 모음 추가 + 내 스타일**
+- 구현: 플러그인 설정 키 `textStyles`(JSON, 최대 50개). 읽을 때 프로젝트와 같은 정규화를 거친다.
+- 시험: 악성 설정은 무시한다. 저장하면 갤러리에 나타나고, 창을 다시 열어도 남아 있으며, 지울 수 있다.
+
+## 5. 위험과 대응
+
+- **글꼴이 없는 경우.** 다른 PC에서 만든 프로젝트의 글꼴이 `Fonts.SystemFontFamilies`에 없으면 맑은 고딕으로 그리고 속성 패널에 안내한다. 굵게·기울임이 없는 글꼴은 WPF가 흉내 낸다. Linux의 `drawtext` 대체는 근사치다.
+- **DPI.** `RenderTargetBitmap`은 96 DPI로, `FormattedText`의 `pixelsPerDip`은 1.0으로 고정한다.
+- **큰 캔버스(4K).**
+  - PNG는 캔버스 이하로 잘린다.
+  - 1,600만 화소(4096²)를 넘으면 낮은 배율로 그리고 그래프에서 확대한다. 8192²를 그대로 그리면 268MB다.
+  - 흐림 반경에 상한을 둔다.
+  - 4K에서 가장 무거운 프리셋이 2초 안에 끝나는지 UiTest로 확인한다.
+- **캐시 무효화.**
+  - 픽셀에 영향을 주는 값을 모두 키에 넣고, 그리는 코드를 바꾸면 `RasterizerVersion`을 올린다.
+  - 캐시는 프로세스별 폴더라 플러그인 버전끼리 섞이지 않는다.
+  - 새로 설치한 글꼴은 다음 실행부터 반영된다.
+- **악성 프로젝트 값.**
+  - T1의 정규화가 막는다. `JsonStringEnumConverter`는 정수도 받으므로 `Enum.IsDefined`로 확인한다.
+  - 그리기에는 30초 제한을 둔다.
+- **보안(파일 경로·임시 파일).** 리뷰 단계에서 `security-reviewer`를 함께 돌린다.
+  - WPF `FontFamily`는 `\\host\share\#이름`도 받는다. 남이 만든 프로젝트가 네트워크 글꼴을 읽게 하면 Windows 자격 증명(NTLM)이 새므로, 글꼴명에 경로·URI 문자를 허용하지 않는다.
+  - 캐시 이름에는 해시만 쓰고, 고정 폴더 안에서 `.part` → 옮기기로 쓴다.
+  - 정리는 숫자 pid 폴더 안에서 알려진 패턴의 파일만 지운다.
+  - PNG 입력에도 `-protocol_whitelist file`을 그대로 적용한다.
+  - 내 스타일 설정도 같은 검증을 거친다.
+
+## 6. 확인 방법
+
+- `dotnet test tests/VideoEditor.Tests`(Linux CI 포함): 모델·검증·그래프·캐시·휘기 계산·통합(가짜 그리개)
+- `pwsh scripts/ui-test.ps1`: 그리개 픽셀, 꾸미기 탭, 미리 보기 = 내보내기
+- 격리 Folderss 호스트에서 실제로 실행해 미리 보기·내보내기 결과를 눈으로 확인한다.
+- 리뷰: `csharp-reviewer` + `security-reviewer`. CRITICAL·HIGH는 고친 뒤 커밋한다.
+
+## 7. 진행
+
+| 날짜 | 내용 |
+|---|---|
+| 2026-10-23 | 계획 작성(이 문서). 가지 `styled-text` |
