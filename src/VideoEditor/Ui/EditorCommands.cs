@@ -820,18 +820,29 @@ namespace VideoEditor.Ui
             }
         }
 
+        /// <summary>[프로젝트 설정…]: 맨 왼쪽 프로젝트 트리의 화면 폴더를 연다(EditorView가 받아 트리를 보이고 고른다).</summary>
+        public event Action ProjectSettingsRequested;
+
         public void ProjectSettings()
         {
-            var chosen = Dialogs.ProjectSettings(_owner, Project);
-            if (chosen == null)
-                return;
-            var value = chosen.Value;
-            Run(p =>
+            ProjectSettingsRequested?.Invoke();
+        }
+
+        /// <summary>해상도·프레임 레이트를 바꾼다(프로젝트 트리 › 화면). 바꿨으면 true.</summary>
+        public bool ApplyScreen(int width, int height, FrameRate rate)
+        {
+            return Run(p =>
             {
-                Core.ProjectSettings.ChangeSize(p, value.Width, value.Height);
-                Core.ProjectSettings.ChangeRate(p, value.Rate);
+                Core.ProjectSettings.ChangeSize(p, width, height);
+                Core.ProjectSettings.ChangeRate(p, rate);
                 p.SettingsChosen = true;
-            }, "프로젝트 설정: " + value.Width + "×" + value.Height + " · " + value.Rate + " fps");
+            }, "프로젝트 설정: " + (width - width % 2) + "×" + (height - height % 2) + " · " + rate + " fps");
+        }
+
+        /// <summary>소리 샘플 레이트를 바꾼다(프로젝트 트리 › 소리).</summary>
+        public void SetSampleRate(int sampleRate)
+        {
+            Run(p => p.SampleRate = sampleRate, "샘플 레이트: " + sampleRate + " Hz");
         }
 
         public async void Export()

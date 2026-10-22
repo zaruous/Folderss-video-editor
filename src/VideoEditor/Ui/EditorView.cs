@@ -33,6 +33,11 @@ namespace VideoEditor.Ui
         private bool _hostClosing;
         private readonly RecoveryStore _recovery;
         private readonly System.Windows.Threading.DispatcherTimer _autosave;
+        private readonly ProjectTreePanel _projectTree;
+        private readonly ColumnDefinition _treeColumn;
+        private readonly Border _treeBorder;
+        private readonly GridSplitter _treeSplitter;
+        private MenuItem _treeMenuItem;
 
         public EditorView(EditorServices services)
         {
@@ -105,7 +110,27 @@ namespace VideoEditor.Ui
             var timeline = UiKit.Panel(_timeline);
             Grid.SetRow(timeline, 2);
             main.Children.Add(timeline);
-            Children.Add(main);
+
+            // 맨 왼쪽: 프로젝트 트리(위아래로 길게) | 나머지(미디어 · 플레이어 · 속성 / 타임라인)
+            _projectTree = new ProjectTreePanel(_session, services, _commands);
+            _treeColumn = new ColumnDefinition { Width = new GridLength(18, GridUnitType.Star), MinWidth = 180 };
+            var outer = new Grid();
+            outer.ColumnDefinitions.Add(_treeColumn);
+            outer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            outer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(82, GridUnitType.Star), MinWidth = 600 });
+            _treeBorder = UiKit.Panel(_projectTree);
+            outer.Children.Add(_treeBorder);
+            _treeSplitter = Splitter(1, true);
+            outer.Children.Add(_treeSplitter);
+            Grid.SetColumn(main, 2);
+            outer.Children.Add(main);
+            Children.Add(outer);
+            ShowProjectTree(services.Setting(EditorServices.ProjectTreeHiddenKey) != "true", false);
+            _commands.ProjectSettingsRequested += () =>
+            {
+                ShowProjectTree(true, true);
+                _projectTree.Select(ProjectTreePanel.Screen);
+            };
 
             _commands.StatusChanged += text => _status.Text = text;
             _timeline.Canvas.StatusMessage += _commands.Status;
@@ -157,6 +182,18 @@ namespace VideoEditor.Ui
             };
             UpdateInfo();
             _status.Text = "미디어를 가져오세요(Ctrl+I) — 동영상·사진·오디오를 타임라인에 놓고 Ctrl+E로 내보냅니다.";
+        }
+
+        /// <summary>프로젝트 트리를 보이거나 숨긴다(보기 › 프로젝트 트리). remember면 설정에 기억한다.</summary>
+        private void ShowProjectTree(bool visible, bool remember)
+        {
+            _treeBorder.Visibility = _treeSplitter.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            _treeColumn.MinWidth = visible ? 180 : 0;
+            _treeColumn.Width = visible ? new GridLength(18, GridUnitType.Star) : new GridLength(0);
+            if (_treeMenuItem != null)
+                _treeMenuItem.IsChecked = visible;
+            if (remember)
+                _services.SaveSetting(EditorServices.ProjectTreeHiddenKey, visible ? null : "true");
         }
 
         private GridSplitter Splitter(int column, bool vertical)
@@ -326,7 +363,11 @@ namespace VideoEditor.Ui
                 Item("In/Out 지우기", "", _commands.ClearInOut),
                 null,
                 Item("글자 추가", "", () => _commands.AddText("제목"))));
+            _treeMenuItem = Item("프로젝트 트리", "", () => ShowProjectTree(!_treeMenuItem.IsChecked, true));
+            _treeMenuItem.IsCheckable = false;
             menu.Items.Add(Top("보기",
+                _treeMenuItem,
+                null,
                 Item("재생/일시 정지", "Space", _commands.TogglePlay),
                 Item("정지", "Ctrl+/", _commands.StopPlayback),
                 null,

@@ -26,6 +26,7 @@ namespace VideoEditor.Ui
         public const string YtDlpNoticeKey = "ytDlpNoticeAccepted";
         public const string RecentSearchesKey = "youtubeRecentSearches";
         public const string DownloadFolderKey = "downloadFolder";
+        public const string ProjectTreeHiddenKey = "projectTreeHidden";
 
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
