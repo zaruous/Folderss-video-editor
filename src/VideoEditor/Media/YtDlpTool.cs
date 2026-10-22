@@ -191,18 +191,21 @@ namespace VideoEditor.Media
             info.Environment["PYTHONIOENCODING"] = "utf-8";
         }
 
-        private IEnumerable<string> CommonArgs()
+        /// <summary>모든 yt-dlp 실행에 붙이는 인자. target: 접속할 주소(프록시를 고르는 데 씀 — Folderss 본체와 같은 시스템 프록시).</summary>
+        private IEnumerable<string> CommonArgs(string target)
         {
             var args = new List<string> { "--ignore-config", "--encoding", "utf-8" };
             if (JsRuntime != null)
                 args.AddRange(new[] { "--js-runtimes", JsRuntime });
+            if (Uri.TryCreate(target, UriKind.Absolute, out var uri))
+                args.AddRange(HostNetwork.YtDlpProxyArgs(uri));
             return args;
         }
 
         /// <summary>검색어로 유튜브를 검색한다(영상은 받지 않음, 결과 count개까지). HasMore: 요청한 수만큼 와서 더 있을 수 있음.</summary>
         public async Task<(List<YtSearchResult> Results, bool HasMore)> Search(string query, YtSearchOptions options, int count, CancellationToken cancellation)
         {
-            var args = CommonArgs().Concat(new[] { "--flat-playlist", "-J", "--playlist-end", count.ToString(System.Globalization.CultureInfo.InvariantCulture), "--", YtDlpText.SearchUrl(query, options) });
+            var args = CommonArgs("https://www.youtube.com/").Concat(new[] { "--flat-playlist", "-J", "--playlist-end", count.ToString(System.Globalization.CultureInfo.InvariantCulture), "--", YtDlpText.SearchUrl(query, options) });
             var result = await FfmpegRunner.RunText(Path, args, TimeSpan.FromSeconds(90), cancellation, Configure).ConfigureAwait(false);
             if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
                 throw new YtDlpException(YtDlpText.Explain(result.Error));
@@ -213,7 +216,7 @@ namespace VideoEditor.Media
         /// <summary>영상 하나의 제목·길이·화질(yt-dlp -J). 재생목록 주소는 거절한다.</summary>
         public async Task<YtVideoInfo> Info(string url, CancellationToken cancellation)
         {
-            var args = CommonArgs().Concat(new[] { "-J", "--no-playlist", "--", url });
+            var args = CommonArgs(url).Concat(new[] { "-J", "--no-playlist", "--", url });
             var result = await FfmpegRunner.RunText(Path, args, TimeSpan.FromSeconds(120), cancellation, Configure).ConfigureAwait(false);
             if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output))
                 throw new YtDlpException(YtDlpText.Explain(result.Error));
@@ -232,7 +235,7 @@ namespace VideoEditor.Media
             Directory.CreateDirectory(folder);
             folder = System.IO.Path.GetFullPath(folder);
             var prefix = ".fvdl-" + Guid.NewGuid().ToString("N");
-            var args = CommonArgs().ToList();
+            var args = CommonArgs(url).ToList();
             args.AddRange(new[]
             {
                 "--no-playlist", "--newline", "--progress", "--progress-template", YtDlpText.ProgressTemplate,

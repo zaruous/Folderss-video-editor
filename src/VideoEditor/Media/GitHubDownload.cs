@@ -14,7 +14,8 @@ namespace VideoEditor.Media
 
         public static HttpClient Client(HttpMessageHandler handler)
         {
-            var http = handler == null ? new HttpClient() : new HttpClient(handler, false);
+            // 본체와 같은 프록시 방식(시스템 프록시 + Windows 자격 증명)
+            var http = handler == null ? new HttpClient(HostNetwork.Handler()) : new HttpClient(handler, false);
             http.Timeout = TimeSpan.FromMinutes(30);
             http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
             return http;

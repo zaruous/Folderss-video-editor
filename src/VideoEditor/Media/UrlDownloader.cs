@@ -32,7 +32,8 @@ namespace VideoEditor.Media
 
         private static HttpClient NewClient(HttpMessageHandler handler)
         {
-            var http = new HttpClient(handler ?? new HttpClientHandler { AllowAutoRedirect = false }, handler == null) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+            // 리디렉션은 직접 따라가며 https인지 본다. 프록시는 본체와 같은 방식(시스템 프록시 + Windows 자격 증명)
+            var http = new HttpClient(handler ?? HostNetwork.Handler(false), handler == null) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
             http.DefaultRequestHeaders.UserAgent.ParseAdd(BrowserUserAgent);
             return http;
         }
