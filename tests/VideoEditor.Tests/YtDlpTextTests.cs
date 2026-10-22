@@ -18,6 +18,22 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void DownloadFolder_ConfiguredThenProjectThenData()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "fv-dl");
+            var data = Path.Combine(root, "data");
+            var project = Path.Combine(root, "projects", "a.fvproj");
+            var custom = Path.Combine(root, "내 다운로드");
+            // 지정한 폴더(절대 경로)가 먼저 — 프로젝트를 저장했어도
+            Assert.Equal(custom, YtDlpText.DownloadFolder(custom, project, data));
+            Assert.Equal(custom, YtDlpText.DownloadFolder("  " + custom + "  ", null, data));
+            // 지정하지 않았거나 상대 경로면 프로젝트 옆 media, 저장 안 한 프로젝트면 데이터 폴더\media
+            Assert.Equal(Path.Combine(root, "projects", "media"), YtDlpText.DownloadFolder(null, project, data));
+            Assert.Equal(Path.Combine(root, "projects", "media"), YtDlpText.DownloadFolder("relative\\dl", project, data));
+            Assert.Equal(Path.Combine(data, "media"), YtDlpText.DownloadFolder("", null, data));
+        }
+
+        [Fact]
         public void ParseSearch_RealOutput()
         {
             var results = YtDlpText.ParseSearch(Sample("ytdlp-search.json"), out _);

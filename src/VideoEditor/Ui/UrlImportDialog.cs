@@ -28,7 +28,8 @@ namespace VideoEditor.Ui
         private readonly Func<Task<FfmpegTool>> _needFfmpeg;
         private readonly Func<string[], Task<int>> _import;
         private readonly int _projectHeight;
-        private readonly string _folder;
+        private readonly string _projectPath;
+        private string _folder;
 
         private readonly TabControl _tabs = new TabControl();
         private readonly TextBox _url = new TextBox { VerticalContentAlignment = VerticalAlignment.Center };
@@ -42,6 +43,10 @@ namespace VideoEditor.Ui
         private readonly ComboBox _quality = new ComboBox { MinWidth = 220 };
         private readonly Button _importButton;
         private readonly Button _close;
+        private readonly Button _reveal;
+        private readonly Button _defaultFolder;
+        private TextBlock _where;
+        private string _lastPath;
         private readonly ProgressBar _progress = new ProgressBar { Height = 14, Margin = new Thickness(0, 8, 0, 0), Maximum = 100, Visibility = Visibility.Collapsed };
         private readonly TextBlock _status = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) };
         private readonly List<UIElement> _inputs = new List<UIElement>();
@@ -63,13 +68,15 @@ namespace VideoEditor.Ui
             public List<int> Heights;
         }
 
-        public UrlImportDialog(EditorServices services, Func<Task<FfmpegTool>> needFfmpeg, Func<string[], Task<int>> import, int projectHeight, string folder)
+        /// <param name="projectPath">지금 프로젝트 파일(저장 안 했으면 null) — 다운로드 폴더를 지정하지 않았을 때 그 옆 media 폴더에 받는다.</param>
+        public UrlImportDialog(EditorServices services, Func<Task<FfmpegTool>> needFfmpeg, Func<string[], Task<int>> import, int projectHeight, string projectPath)
         {
             _services = services;
             _needFfmpeg = needFfmpeg;
             _import = import;
             _projectHeight = projectHeight;
-            _folder = folder;
+            _projectPath = projectPath;
+            _folder = services.MediaDownloadFolder(projectPath);
             Title = "URL에서 가져오기";
             Width = 720;
             Height = 640;
@@ -85,6 +92,9 @@ namespace VideoEditor.Ui
             _importButton = UiKit.TextButton("가져오기", "UrlImportButton", () => _ = Import());
             _close = UiKit.TextButton("닫기", "UrlCloseButton", CloseOrCancel);
             _close.IsCancel = true;
+            _reveal = UiKit.TextButton("탐색기에서 보기", "UrlRevealButton", () => Report(UiKit.RevealFile(_lastPath)));
+            _reveal.Visibility = Visibility.Collapsed;
+            _defaultFolder = UiKit.TextButton("기본값", "UrlDefaultFolderButton", DefaultFolder);
 
             var root = new DockPanel { Margin = new Thickness(14) };
             var bottom = Bottom();
@@ -371,6 +381,7 @@ namespace VideoEditor.Ui
             panel.Children.Add(_chosen);
             var row = new DockPanel();
             var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+            buttons.Children.Add(_reveal);
             buttons.Children.Add(_importButton);
             buttons.Children.Add(_close);
             DockPanel.SetDock(buttons, Dock.Right);
@@ -385,12 +396,69 @@ namespace VideoEditor.Ui
             panel.Children.Add(_progress);
             AutomationProperties.SetAutomationId(_status, "UrlImportStatus");
             panel.Children.Add(_status);
-            var where = UiKit.Label("저장 위치: " + _folder, true);
-            where.TextWrapping = TextWrapping.Wrap;
-            where.Margin = new Thickness(0, 4, 0, 0);
-            panel.Children.Add(where);
+            // 저장 위치: [폴더 열기] [바꾸기…] [기본값](지정했을 때만)
+            var folderRow = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
+            var folderButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 0, 0) };
+            var open = UiKit.TextButton("폴더 열기", "UrlOpenFolderButton", () => Report(UiKit.OpenFolder(_folder)));
+            var change = UiKit.TextButton("바꾸기…", "UrlChangeFolderButton", ChangeFolder);
+            folderButtons.Children.Add(open);
+            folderButtons.Children.Add(change);
+            folderButtons.Children.Add(_defaultFolder);
+            DockPanel.SetDock(folderButtons, Dock.Right);
+            folderRow.Children.Add(folderButtons);
+            _where = UiKit.Label("", true);
+            _where.TextWrapping = TextWrapping.Wrap;
+            _where.VerticalAlignment = VerticalAlignment.Center;
+            AutomationProperties.SetAutomationId(_where, "UrlFolderText");
+            folderRow.Children.Add(_where);
+            panel.Children.Add(folderRow);
+            ShowFolder();
             _inputs.Add(_quality);
+            _inputs.Add(change);
+            _inputs.Add(_defaultFolder);
             return panel;
+        }
+
+        // ---------- 저장 위치 ----------
+
+        private void ShowFolder()
+        {
+            var custom = _services.HasDownloadFolder;
+            _where.Text = "저장 위치: " + _folder + (custom ? "  (지정한 다운로드 폴더)" : _projectPath == null ? "  (저장 안 한 프로젝트 — 플러그인 데이터 폴더)" : "  (프로젝트 옆 media)");
+            _defaultFolder.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        /// <summary>[바꾸기…]: 다운로드 폴더를 골라 설정에 저장한다(다음 받기부터, 다른 편집 창에도 같이 쓰임).</summary>
+        private void ChangeFolder()
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "다운로드 폴더 고르기" };
+            if (Directory.Exists(_folder))
+                dialog.InitialDirectory = _folder;
+            if (dialog.ShowDialog(this) != true)
+                return;
+            if (!_services.SaveSetting(EditorServices.DownloadFolderKey, dialog.FolderName))
+            {
+                _status.Text = "다운로드 폴더를 설정에 저장하지 못했습니다.";
+                return;
+            }
+            _folder = _services.MediaDownloadFolder(_projectPath);
+            ShowFolder();
+            _status.Text = "다운로드 폴더를 바꿨습니다: " + _folder;
+        }
+
+        /// <summary>[기본값]: 지정한 다운로드 폴더를 지우고 프로젝트 옆 media(저장 안 한 프로젝트면 데이터 폴더)로 되돌린다.</summary>
+        private void DefaultFolder()
+        {
+            _services.SaveSetting(EditorServices.DownloadFolderKey, null);
+            _folder = _services.MediaDownloadFolder(_projectPath);
+            ShowFolder();
+            _status.Text = "다운로드 폴더를 기본값으로 되돌렸습니다: " + _folder;
+        }
+
+        private void Report(string error)
+        {
+            if (error != null)
+                _status.Text = error;
         }
 
         private void SetTarget(Target target)
@@ -430,6 +498,7 @@ namespace VideoEditor.Ui
             if (target == null)
                 return;
             var height = (_quality.SelectedItem as ComboBoxItem)?.Tag is int h ? h : 0;
+            _reveal.Visibility = Visibility.Collapsed;
             await Busy("받는 중…", async token =>
             {
                 var ffmpeg = await _needFfmpeg();
@@ -462,6 +531,8 @@ namespace VideoEditor.Ui
                 _status.Text = "미디어 목록에 더하는 중…";
                 var added = await _import(new[] { path });
                 _status.Text = added > 0 ? "가져왔습니다: " + path : "받았지만 미디어로 읽지 못했습니다: " + path;
+                _lastPath = path;
+                _reveal.Visibility = Visibility.Visible;
             });
         }
 

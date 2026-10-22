@@ -25,6 +25,7 @@ namespace VideoEditor.Ui
         public const string YtDlpPathKey = "ytDlpPath";
         public const string YtDlpNoticeKey = "ytDlpNoticeAccepted";
         public const string RecentSearchesKey = "youtubeRecentSearches";
+        public const string DownloadFolderKey = "downloadFolder";
 
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
@@ -62,10 +63,22 @@ namespace VideoEditor.Ui
             set { SaveSetting(YtDlpNoticeKey, value ? "true" : null); }
         }
 
-        /// <summary>URL에서 받은 파일을 둘 곳: 프로젝트 파일 옆 media 폴더, 저장 안 한 프로젝트면 데이터 폴더\media.</summary>
+        /// <summary>URL에서 받은 파일을 둘 곳: 지정한 다운로드 폴더 → 프로젝트 파일 옆 media 폴더 → 저장 안 한 프로젝트면 데이터 폴더\media.</summary>
         public string MediaDownloadFolder(string projectPath)
         {
-            return string.IsNullOrEmpty(projectPath) ? Path.Combine(Manager.DataDirectory, "media") : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(projectPath)), "media");
+            return YtDlpText.DownloadFolder(Setting(DownloadFolderKey), projectPath, Manager.DataDirectory);
+        }
+
+        /// <summary>다운로드 폴더를 지정하지 않았을 때 쓰는 곳(프로젝트 옆 media 또는 데이터 폴더\media).</summary>
+        public string DefaultMediaDownloadFolder(string projectPath)
+        {
+            return YtDlpText.DownloadFolder(null, projectPath, Manager.DataDirectory);
+        }
+
+        /// <summary>다운로드 폴더를 직접 지정했는지.</summary>
+        public bool HasDownloadFolder
+        {
+            get { return !string.IsNullOrWhiteSpace(Setting(DownloadFolderKey)); }
         }
 
         /// <summary>yt-dlp를 찾는다(이미 찾았으면 그것). 백그라운드에서 돌고, 같은 때 여러 번 불러도 한 번만 찾는다.</summary>

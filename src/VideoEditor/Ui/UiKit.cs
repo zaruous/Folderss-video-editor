@@ -155,6 +155,35 @@ namespace VideoEditor.Ui
             return window ?? Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
         }
 
+        /// <summary>탐색기로 폴더를 연다(없으면 만든다). 성공하면 null, 실패하면 알릴 글.</summary>
+        public static string OpenFolder(string folder)
+        {
+            try
+            {
+                System.IO.Directory.CreateDirectory(folder);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe") { ArgumentList = { folder }, UseShellExecute = false });
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return "폴더를 열지 못했습니다: " + ex.Message;
+            }
+        }
+
+        /// <summary>탐색기에서 파일을 고른 채로 연다. 성공하면 null, 실패하면 알릴 글.</summary>
+        public static string RevealFile(string path)
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe") { ArgumentList = { "/select,", path }, UseShellExecute = false });
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return "탐색기를 열지 못했습니다: " + ex.Message;
+            }
+        }
+
         /// <summary>
         /// 짧은 확인 창(WPF — 테마를 따르고 화면 시험이 단추로 찾을 수 있다). 누른 단추 번호, 닫으면 -1.
         /// </summary>

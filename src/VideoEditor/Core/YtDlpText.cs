@@ -308,6 +308,19 @@ namespace VideoEditor.Core
             return path;
         }
 
+        /// <summary>
+        /// URL에서 받은 파일을 둘 폴더: 지정한 폴더(절대 경로일 때만) → 프로젝트 파일 옆 media → 저장 안 한 프로젝트면 데이터 폴더\media.
+        /// </summary>
+        public static string DownloadFolder(string configured, string projectPath, string dataDirectory)
+        {
+            var custom = (configured ?? "").Trim();
+            if (custom.Length > 0 && Path.IsPathFullyQualified(custom))
+                return Path.GetFullPath(custom);
+            return string.IsNullOrEmpty(projectPath)
+                ? Path.Combine(dataDirectory, "media")
+                : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(projectPath)), "media");
+        }
+
         // ---------- 최근 검색어 ----------
 
         /// <summary>최근 검색어(설정에 JSON 배열로) 맨 앞에 넣는다. 같은 것은 앞으로 옮기고 max개까지.</summary>

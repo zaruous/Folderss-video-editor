@@ -8,13 +8,14 @@ using VideoEditor.Media;
 
 namespace VideoEditor.Ui
 {
-    /// <summary>Folderss 설정 창의 "동영상 편집" 탭: FFmpeg 경로(비우면 자동으로 찾음), 사진·글자 기본 길이, yt-dlp 경로.</summary>
+    /// <summary>Folderss 설정 창의 "동영상 편집" 탭: FFmpeg 경로(비우면 자동으로 찾음), 사진·글자 기본 길이, yt-dlp 경로, 다운로드 폴더.</summary>
     internal sealed class EditorSettingsPage : IPluginSettingsPage
     {
         private readonly EditorServices _services;
         private TextBox _path;
         private TextBox _imageSeconds;
         private TextBox _ytDlp;
+        private TextBox _downloadFolder;
 
         public EditorSettingsPage(EditorServices services)
         {
@@ -69,7 +70,43 @@ namespace VideoEditor.Ui
             var ytDlpStatus = UiKit.Label(_services.YtDlp != null ? "지금 쓰는 yt-dlp: " + _services.YtDlp.Version + " (" + _services.YtDlp.Path + ")" : "yt-dlp는 처음 URL에서 가져올 때 찾습니다.", true);
             ytDlpStatus.TextWrapping = TextWrapping.Wrap;
             panel.Children.Add(ytDlpStatus);
+
+            var downloadLabel = UiKit.Label("다운로드 폴더 (URL·유튜브에서 받은 파일) — 비우면 프로젝트 파일 옆 media 폴더(저장 안 한 프로젝트면 플러그인 데이터 폴더\\media)");
+            downloadLabel.Margin = new Thickness(0, 12, 0, 0);
+            downloadLabel.TextWrapping = TextWrapping.Wrap;
+            panel.Children.Add(downloadLabel);
+            var downloadRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+            var downloadButtons = new StackPanel { Orientation = Orientation.Horizontal };
+            var downloadStatus = UiKit.Label("", true);
+            downloadStatus.TextWrapping = TextWrapping.Wrap;
+            var pick = UiKit.TextButton("찾아보기…", "SettingsBrowseDownloadFolder", () => { });
+            var open = UiKit.TextButton("폴더 열기", "SettingsOpenDownloadFolder", () => { });
+            downloadButtons.Children.Add(pick);
+            downloadButtons.Children.Add(open);
+            DockPanel.SetDock(downloadButtons, Dock.Right);
+            downloadRow.Children.Add(downloadButtons);
+            _downloadFolder = new TextBox { Text = _services.Setting(EditorServices.DownloadFolderKey) ?? "" };
+            AutomationProperties.SetAutomationId(_downloadFolder, "SettingsDownloadFolder");
+            downloadRow.Children.Add(_downloadFolder);
+            panel.Children.Add(downloadRow);
+            panel.Children.Add(downloadStatus);
+            pick.Click += (s, e) =>
+            {
+                var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "다운로드 폴더 고르기" };
+                if (System.IO.Directory.Exists(_downloadFolder.Text.Trim()))
+                    dialog.InitialDirectory = _downloadFolder.Text.Trim();
+                if (dialog.ShowDialog(Window.GetWindow(panel)) == true)
+                    _downloadFolder.Text = dialog.FolderName;
+            };
+            // 비어 있으면 저장 안 한 프로젝트 기준 기본 폴더(플러그인 데이터 폴더\media)를 연다
+            open.Click += (s, e) => downloadStatus.Text = UiKit.OpenFolder(DownloadFolderToOpen()) ?? "";
             return panel;
+        }
+
+        private string DownloadFolderToOpen()
+        {
+            var text = _downloadFolder.Text.Trim();
+            return text.Length > 0 && System.IO.Path.IsPathFullyQualified(text) ? text : _services.DefaultMediaDownloadFolder(null);
         }
 
         public void Save()
@@ -87,6 +124,9 @@ namespace VideoEditor.Ui
                 // 다음에 가져올 때 새 경로로 다시 찾는다
                 _services.SetYtDlp(null, false);
             }
+            // 다운로드 폴더는 절대 경로만 저장한다(상대 경로·빈 값은 기본값)
+            var download = _downloadFolder.Text.Trim();
+            _services.Manager.SetSetting(EditorServices.DownloadFolderKey, download.Length > 0 && System.IO.Path.IsPathFullyQualified(download) ? download : null);
             // 다음 편집 창부터 새 경로로 다시 찾는다
             _ = _services.LocateAsync();
         }

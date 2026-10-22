@@ -442,6 +442,49 @@ namespace VideoEditor.UiTests
             }
         }
 
+        /// <summary>URL에서 가져오기: 지정한 다운로드 폴더가 저장 위치에 보이고, [기본값]으로 되돌리면 데이터 폴더\media로 바뀐다.</summary>
+        [EditorFact]
+        public async Task UrlImport_DownloadFolder_ConfiguredAndReset()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var custom = Path.Combine(plugin.Root, "내 다운로드");
+            plugin.Manager.SetSetting("downloadFolder", custom);
+            var window = await Open(ui, plugin, withFfmpeg: !string.IsNullOrEmpty(FfmpegFolder));
+            try
+            {
+                await ui.WaitUntil(() => window.IsLoaded, Wait, "편집 창");
+                ui.Post(() => Ui.Menu(window, "파일", "URL에서 가져오기"));
+                var dialog = await ui.WaitFor(() => Ui.Window("URL에서 가져오기"), Wait, "URL에서 가져오기 창");
+                ui.Run(() =>
+                {
+                    var where = Ui.ById<TextBlock>(dialog, "UrlFolderText");
+                    Assert.Contains(custom, where.Text);
+                    Assert.Contains("지정한 다운로드 폴더", where.Text);
+                    Assert.Equal(Visibility.Visible, Ui.ById<Button>(dialog, "UrlDefaultFolderButton").Visibility);
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<Button>(dialog, "UrlRevealButton").Visibility);
+                    Assert.NotNull(Ui.ById<Button>(dialog, "UrlOpenFolderButton"));
+                    Ui.Snap(dialog, plugin.ShotFolder, "url-folder");
+                });
+                // 자동화 클릭은 디스패처에 맡겨지므로 누른 뒤 바뀔 때까지 기다린다
+                ui.Post(() => Ui.Click(Ui.ById<Button>(dialog, "UrlDefaultFolderButton")));
+                await ui.WaitUntil(() => !Ui.ById<TextBlock>(dialog, "UrlFolderText").Text.Contains(custom), Wait, "기본값으로 되돌림");
+                ui.Run(() =>
+                {
+                    Assert.Contains(Path.Combine(plugin.Manager.DataDirectory, "media"), Ui.ById<TextBlock>(dialog, "UrlFolderText").Text);
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<Button>(dialog, "UrlDefaultFolderButton").Visibility);
+                    Assert.Null(plugin.Manager.GetSetting("downloadFolder"));
+                });
+                ui.Post(() => Ui.Click(Ui.ById<Button>(dialog, "UrlCloseButton")));
+                await ui.WaitUntil(() => Ui.Window("URL에서 가져오기") == null, Wait, "URL에서 가져오기 창 닫힘");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
         /// <summary>테마 7종으로 편집 창 캡처(색이 테마를 따르는지 눈으로 본다).</summary>
         [EditorFact]
         public async Task Themes()

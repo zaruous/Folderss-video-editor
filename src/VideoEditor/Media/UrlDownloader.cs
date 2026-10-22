@@ -14,6 +14,11 @@ namespace VideoEditor.Media
     /// </summary>
     public static class UrlDownloader
     {
+        /// <summary>
+        /// 직접 링크·썸네일은 브라우저 User-Agent로 받는다. 도구 이름 User-Agent를 403으로 막는 사이트가 흔하다(yt-dlp도 브라우저 값을 씀).
+        /// GitHub에서 FFmpeg·yt-dlp·Deno를 받을 때는 플러그인 이름(GitHubDownload.UserAgent) 그대로.
+        /// </summary>
+        public const string BrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
         public const int MaxRedirects = 5;
         public const long MaxBytes = 8L * 1024 * 1024 * 1024;
         public static readonly TimeSpan Timeout = TimeSpan.FromHours(2);
@@ -28,7 +33,7 @@ namespace VideoEditor.Media
         private static HttpClient NewClient(HttpMessageHandler handler)
         {
             var http = new HttpClient(handler ?? new HttpClientHandler { AllowAutoRedirect = false }, handler == null) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd(GitHubDownload.UserAgent);
+            http.DefaultRequestHeaders.UserAgent.ParseAdd(BrowserUserAgent);
             return http;
         }
 

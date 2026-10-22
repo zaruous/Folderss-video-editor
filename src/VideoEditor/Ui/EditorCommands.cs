@@ -369,7 +369,7 @@ namespace VideoEditor.Ui
             try
             {
                 _player.Stop();
-                var dialog = new UrlImportDialog(_services, NeedTool, paths => ImportPaths(paths, null, -1), Project.Height, _services.MediaDownloadFolder(_session.FilePath));
+                var dialog = new UrlImportDialog(_services, NeedTool, paths => ImportPaths(paths, null, -1), Project.Height, _session.FilePath);
                 var owner = UiKit.OwnerOf(_owner);
                 if (owner != null && owner.IsLoaded)
                     dialog.Owner = owner;

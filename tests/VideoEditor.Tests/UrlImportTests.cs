@@ -51,7 +51,12 @@ namespace VideoEditor.Tests
             {
                 var url = request.RequestUri.ToString();
                 Requested.Add(url);
-                Assert.Contains("Folderss-video-editor", request.Headers.UserAgent.ToString());
+                // GitHub(yt-dlp·Deno)는 플러그인 이름, 직접 링크·썸네일은 브라우저 User-Agent(도구 이름을 403으로 막는 사이트가 있음)
+                var agent = request.Headers.UserAgent.ToString();
+                if (request.RequestUri.Host.EndsWith("github.com", StringComparison.OrdinalIgnoreCase))
+                    Assert.Contains("Folderss-video-editor", agent);
+                else
+                    Assert.StartsWith("Mozilla/5.0", agent);
                 var response = Routes.TryGetValue(url, out var make) ? make() : new HttpResponseMessage(HttpStatusCode.NotFound);
                 response.RequestMessage = request;
                 return Task.FromResult(response);
