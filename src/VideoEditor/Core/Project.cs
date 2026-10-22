@@ -123,6 +123,8 @@ namespace VideoEditor.Core
         public string Text { get; set; }
         public double FontSize { get; set; } = 72;
         public string TextColor { get; set; } = "#FFFFFF";
+        /// <summary>꾸밈 스타일. null이면 꾸미지 않은 글자(예전 방식).</summary>
+        public TextStyle Style { get; set; }
 
         [JsonIgnore]
         public long Duration
@@ -164,6 +166,7 @@ namespace VideoEditor.Core
         {
             var copy = (Clip)MemberwiseClone();
             copy.Id = Track.NewId();
+            copy.Style = Style?.Clone();
             return copy;
         }
     }
@@ -180,7 +183,7 @@ namespace VideoEditor.Core
     /// <summary>편집 프로젝트(*.fvproj로 저장). 동영상 트랙 0번이 주 트랙(맨 아래)이다.</summary>
     public sealed class Project
     {
-        public const int CurrentVersion = 1;
+        public const int CurrentVersion = 2;
 
         public int Version { get; set; } = CurrentVersion;
         public int Width { get; set; } = 1920;
