@@ -11,7 +11,7 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// 속성 패널(오른쪽 위): 고른 클립의 [화면] 위치·크기·회전·불투명도·크로스페이드, [소리] 음량·페이드, [속도·길이], [글자].
-    /// 아무것도 고르지 않으면 프로젝트 설정. 값을 바꾸면 바로 편집(실행 취소 가능 — 슬라이더를 끄는 동안은 한 단계로 합침).
+    /// 아무것도 고르지 않으면 안내(프로젝트 설정은 왼쪽 프로젝트 트리). 값을 바꾸면 바로 편집(실행 취소 가능 — 슬라이더를 끄는 동안은 한 단계로 합침).
     /// 편집 때마다 다시 만들지 않고 값만 갱신한다(끄는 슬라이더가 사라지지 않게).
     /// </summary>
     internal sealed class PropertyPanel : DockPanel
@@ -74,26 +74,16 @@ namespace VideoEditor.Ui
 
         // ---------- 프로젝트 ----------
 
+        // 프로젝트 설정(화면·소리·타임라인·파일)은 맨 왼쪽 프로젝트 트리로 옮겼다 — 여기서는 안내만
         private UIElement ProjectView()
         {
             var panel = new StackPanel { Margin = new Thickness(10) };
-            panel.Children.Add(Title("프로젝트"));
-            var info = UiKit.Label("", true);
-            info.TextWrapping = TextWrapping.Wrap;
-            AutomationProperties.SetAutomationId(info, "ProjectInfoText");
-            _refreshers.Add(() =>
-            {
-                var p = _session.Project;
-                info.Text = p.Width + "×" + p.Height + " · " + p.Rate + " fps · 길이 " + p.Rate.Timecode(p.Duration)
-                            + "\n클립 " + p.AllClips.Count() + "개 · 동영상 트랙 " + p.VideoTracks.Count + " · 오디오 트랙 " + p.AudioTracks.Count;
-            });
-            panel.Children.Add(info);
-            var settings = UiKit.TextButton("프로젝트 설정…", "ProjectSettingsButton", _commands.ProjectSettings);
+            panel.Children.Add(Title("속성"));
+            panel.Children.Add(Note("클립을 고르면 위치·크기·소리·속도를 바꿀 수 있습니다.\n프로젝트 설정(해상도·프레임 레이트·소리·파일)은 왼쪽 프로젝트 트리에서 바꿉니다."));
+            var settings = UiKit.TextButton("프로젝트 트리 열기", "ProjectSettingsButton", _commands.ProjectSettings);
             settings.HorizontalAlignment = HorizontalAlignment.Left;
-            settings.Margin = new Thickness(0, 10, 0, 0);
+            settings.Margin = new Thickness(10, 0, 0, 0);
             panel.Children.Add(settings);
-            panel.Children.Add(Note("클립을 고르면 위치·크기·소리·속도를 바꿀 수 있습니다."));
-            _refreshers[0]();
             return panel;
         }
 

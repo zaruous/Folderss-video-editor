@@ -485,6 +485,60 @@ namespace VideoEditor.UiTests
             }
         }
 
+        /// <summary>
+        /// 프로젝트 트리(맨 왼쪽): 화면 폴더에서 세로 해상도 적용 → 실행 취소, 소리 샘플 레이트, 타임라인 마그네틱,
+        /// 보기 › 프로젝트 트리로 숨기고 파일 › 프로젝트 설정…으로 다시 열면 화면 폴더가 골라진다.
+        /// </summary>
+        [EditorFact]
+        public async Task ProjectTree_EditsProjectSettings()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin, withFfmpeg: !string.IsNullOrEmpty(FfmpegFolder));
+            try
+            {
+                await ui.WaitUntil(() => window.IsLoaded, Wait, "편집 창");
+                int Width() => (int)Get(Project(window), "Width");
+                int Height() => (int)Get(Project(window), "Height");
+                await ui.WaitFor(() => Ui.ById<ComboBox>(window, "TreeSizeBox"), Wait, "화면 폴더(처음 골라져 있음)");
+                ui.Run(() =>
+                {
+                    Assert.True(Ui.ById<TreeViewItem>(window, "ProjectTree_화면").IsSelected);
+                    Ui.Select(Ui.ById<ComboBox>(window, "TreeSizeBox"), 3);
+                    Assert.Equal("1080", Ui.ById<TextBox>(window, "TreeWidthBox").Text);
+                    Assert.Equal("1920", Ui.ById<TextBox>(window, "TreeHeightBox").Text);
+                });
+                ui.Post(() => Ui.Click(Ui.ById<Button>(window, "TreeApplyScreenButton")));
+                await ui.WaitUntil(() => Width() == 1080 && Height() == 1920, Wait, "세로 해상도 적용");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "project-tree"));
+                ui.Post(() => Ui.Menu(window, "편집", "실행 취소"));
+                await ui.WaitUntil(() => Width() == 1920 && Height() == 1080, Wait, "실행 취소로 되돌림");
+
+                ui.Run(() => Ui.ById<TreeViewItem>(window, "ProjectTree_소리").IsSelected = true);
+                var sampleRate = await ui.WaitFor(() => Ui.ById<ComboBox>(window, "TreeSampleRateBox"), Wait, "소리 폴더");
+                ui.Run(() => Ui.Select(sampleRate, 0));
+                await ui.WaitUntil(() => (int)Get(Project(window), "SampleRate") == 44100, Wait, "샘플 레이트 44100");
+
+                ui.Run(() => Ui.ById<TreeViewItem>(window, "ProjectTree_타임라인").IsSelected = true);
+                var magnetic = await ui.WaitFor(() => Ui.ById<CheckBox>(window, "TreeMagneticCheck"), Wait, "타임라인 폴더");
+                ui.Run(() => magnetic.IsChecked = false);
+                await ui.WaitUntil(() => !(bool)Get(Project(window), "Magnetic"), Wait, "마그네틱 끔");
+
+                ui.Post(() => Ui.Menu(window, "보기", "프로젝트 트리"));
+                await ui.WaitUntil(() => !Ui.ById<FrameworkElement>(window, "ProjectTreePanel").IsVisible, Wait, "프로젝트 트리 숨김");
+                Assert.Equal("true", plugin.Manager.GetSetting("projectTreeHidden"));
+                ui.Post(() => Ui.Menu(window, "파일", "프로젝트 설정"));
+                await ui.WaitUntil(() => Ui.ById<FrameworkElement>(window, "ProjectTreePanel").IsVisible
+                                         && Ui.ById<TreeViewItem>(window, "ProjectTree_화면").IsSelected, Wait, "프로젝트 설정… → 화면 폴더");
+                Assert.Null(plugin.Manager.GetSetting("projectTreeHidden"));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
         /// <summary>테마 7종으로 편집 창 캡처(색이 테마를 따르는지 눈으로 본다).</summary>
         [EditorFact]
         public async Task Themes()
