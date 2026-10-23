@@ -115,7 +115,7 @@ pwsh scripts/ui-test.ps1                       # 화면 시험(숨은 데스크�
 
 - `tests/VideoEditor.Tests`는 Core·Media를 net8.0으로 링크해 CI(Ubuntu, 배포판 FFmpeg)에서도 돕니다.
 - `tests/VideoEditor.UiTests`는 [플러그인 템플릿](https://github.com/zaruous/FolderssPLuginTemplate)의 헤드리스 시험 호스트입니다. 사용자 화면에 창을 띄우지 않고, 캡처는 실행 끝에 나오는 `shots` 폴더에 남습니다. Visual Studio 테스트 탐색기에서 `SmokeHeadlessTests.OpenView`를 **디버그**로 실행하면 편집 창이 화면에 떠서 중단점을 쓸 수 있습니다.
-- 계획 문서: [PRD](docs/PRD.md) · [구현 계획](docs/plan.md)
+- 계획 문서: [PRD](docs/PRD.md) · [구현 계획](docs/plan.md) · [꾸민 글자 구현 계획(#3)](docs/styled-text.md)
 
 ## 라이선스
 
