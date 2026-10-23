@@ -40,6 +40,8 @@ namespace VideoEditor.Core
         {
             var folder = Path.GetDirectoryName(Path.GetFullPath(path));
             var copy = FromSnapshot(Snapshot(project));
+            // 예전 형식 파일을 열어 저장해도 지금 형식으로 쓴다
+            copy.Version = Project.CurrentVersion;
             foreach (var media in copy.Media)
                 media.Path = Project.Relative(folder, media.Path);
             foreach (var clip in copy.AllClips)
@@ -120,6 +122,10 @@ namespace VideoEditor.Core
                     clip.Speed = 1;
                 if (clip.SourceOut <= clip.SourceIn)
                     clip.SourceOut = clip.SourceIn + 1;
+                if (clip.Kind != ClipKind.Text)
+                    clip.Style = null;
+                else
+                    clip.Style?.Normalize();
             }
             foreach (var track in project.AllTracks)
                 track.Sort();
