@@ -54,6 +54,10 @@ namespace VideoEditor.Ui
         private static readonly Brush VideoBrush = Frozen(Color.FromRgb(0x2F, 0x6F, 0xD8));
         private static readonly Brush ImageBrush = Frozen(Color.FromRgb(0x1E, 0x9E, 0x76));
         private static readonly Brush TextClipBrush = Frozen(Color.FromRgb(0x8E, 0x4D, 0xD6));
+        // 자막 구역: 큐는 호박색, 줄은 옅은 호박색(테마와 상관없이 보이게 반투명)
+        public static readonly Color SubtitleColor = Color.FromRgb(0xC2, 0x7C, 0x0E);
+        private static readonly Brush SubtitleClipBrush = Frozen(SubtitleColor);
+        private static readonly Brush SubtitleRowBrush = Frozen(Color.FromArgb(0x1C, 0xF2, 0xA9, 0x00));
         private static readonly Brush AudioBrush = Frozen(Color.FromRgb(0x14, 0x8F, 0x8A));
         private static readonly Brush PlayheadBrush = Frozen(Color.FromRgb(0xEF, 0x44, 0x44));
         private static readonly Brush SnapBrush = Frozen(Color.FromRgb(0xFA, 0xCC, 0x15));
@@ -616,8 +620,12 @@ namespace VideoEditor.Ui
             {
                 var row = rows[i];
                 dc.DrawRectangle(i % 2 == 0 ? rowBrush : panel, null, new Rect(0, row.Top, width, row.Height));
+                if (row.Track.Subtitles)
+                    dc.DrawRectangle(SubtitleRowBrush, null, new Rect(0, row.Top, width, row.Height));
                 dc.DrawLine(line, new Point(0, row.Top + row.Height - 0.5), new Point(width, row.Top + row.Height - 0.5));
-                if (row.Track.Kind == TrackKind.Video && row.Track == project.MainTrack)
+                // 구역 경계는 이중선: 자막 구역의 마지막 줄, 동영상 구역의 마지막 줄(주 트랙)
+                var lastSubtitle = row.Track.Subtitles && (i + 1 >= rows.Count || !rows[i + 1].Track.Subtitles);
+                if (lastSubtitle || row.Track.Kind == TrackKind.Video && row.Track == project.MainTrack)
                     dc.DrawLine(line, new Point(0, row.Top + row.Height - 1.5), new Point(width, row.Top + row.Height - 1.5));
             }
             // In/Out 구간
@@ -727,7 +735,8 @@ namespace VideoEditor.Ui
 
         private void DrawClip(DrawingContext dc, TimelineRow row, Clip clip, Rect rect, FrameRate rate)
         {
-            var fill = clip.Kind == ClipKind.Text ? TextClipBrush
+            var fill = row.Track.Subtitles ? SubtitleClipBrush
+                : clip.Kind == ClipKind.Text ? TextClipBrush
                 : TimelineEdits.IsAudioClip(clip) ? AudioBrush
                 : clip.MediaKind == MediaKind.Image ? ImageBrush : VideoBrush;
             var selected = _session.IsSelected(clip);
@@ -936,7 +945,7 @@ namespace VideoEditor.Ui
             protected override Point GetClickablePointCore() { return new Point(double.NaN, double.NaN); }
             protected override string GetHelpTextCore() { return ""; }
             protected override string GetItemStatusCore() { return ""; }
-            protected override string GetItemTypeCore() { return _clip.Kind == ClipKind.Text ? "글자" : _clip.MediaKind.ToString(); }
+            protected override string GetItemTypeCore() { return _track.Subtitles ? "자막" : _clip.Kind == ClipKind.Text ? "글자" : _clip.MediaKind.ToString(); }
             protected override AutomationPeer GetLabeledByCore() { return null; }
             protected override AutomationOrientation GetOrientationCore() { return AutomationOrientation.None; }
             protected override bool HasKeyboardFocusCore() { return false; }

@@ -172,17 +172,30 @@ namespace VideoEditor.Ui
                 eye.IsChecked = !track.Hidden;
                 buttons.Children.Add(eye);
             }
-            var sound = UiKit.IconToggle(track.Muted ? UiKit.GlyphMute : UiKit.GlyphVolume, "트랙 소리 켜기/끄기", "TrackSound_" + key, on => _commands.SetTrackFlag(id, t => t.Muted = !on));
-            sound.IsChecked = !track.Muted;
-            buttons.Children.Add(sound);
+            // 자막 트랙에는 소리가 없다
+            if (!track.Subtitles)
+            {
+                var sound = UiKit.IconToggle(track.Muted ? UiKit.GlyphMute : UiKit.GlyphVolume, "트랙 소리 켜기/끄기", "TrackSound_" + key, on => _commands.SetTrackFlag(id, t => t.Muted = !on));
+                sound.IsChecked = !track.Muted;
+                buttons.Children.Add(sound);
+            }
             var lockButton = UiKit.IconToggle(UiKit.GlyphLock, "트랙 잠금", "TrackLock_" + key, on => _commands.SetTrackFlag(id, t => t.Locked = on));
             lockButton.IsChecked = track.Locked;
             buttons.Children.Add(lockButton);
             DockPanel.SetDock(buttons, Dock.Right);
             panel.Children.Add(buttons);
+            if (track.Subtitles)
+            {
+                // 자막 구역 표시(타임라인의 큐 색과 같은 띠)
+                var stripe = new Border { Width = 3, Background = new SolidColorBrush(TimelineCanvas.SubtitleColor) };
+                DockPanel.SetDock(stripe, Dock.Left);
+                panel.Children.Add(stripe);
+            }
             var name = UiKit.Label(track.Name + (track == _session.Project.MainTrack ? " ★" : ""));
-            name.Margin = new Thickness(8, 0, 0, 0);
-            name.ToolTip = track == _session.Project.MainTrack ? "주 트랙 — 마그네틱이 켜져 있으면 빈틈 없이 붙습니다" : track.Name;
+            name.Margin = new Thickness(track.Subtitles ? 5 : 8, 0, 0, 0);
+            name.ToolTip = track == _session.Project.MainTrack ? "주 트랙 — 마그네틱이 켜져 있으면 빈틈 없이 붙습니다"
+                : track.Subtitles ? "자막 트랙 — 큐를 화면 아래 가운데에 입힙니다. SRT·VTT를 여기에 끌어 놓으면 이 트랙에 들어갑니다"
+                : track.Name;
             panel.Children.Add(name);
             var border = new Border { Child = panel, Tag = id, BorderThickness = new Thickness(0, 0, 0, 1) };
             border.SetResourceReference(Border.BorderBrushProperty, "BorderBrush");
@@ -205,6 +218,7 @@ namespace VideoEditor.Ui
             menu.Items.Clear();
             menu.Items.Add(MenuItem("동영상 트랙 추가", () => _commands.AddTrack(TrackKind.Video)));
             menu.Items.Add(MenuItem("오디오 트랙 추가", () => _commands.AddTrack(TrackKind.Audio)));
+            menu.Items.Add(MenuItem("자막 트랙 추가", _commands.AddSubtitleTrack));
             if (track != null && track != _session.Project.MainTrack)
             {
                 menu.Items.Add(new Separator());

@@ -198,6 +198,39 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void AddSubtitleTrack_IsEmpty_OnTopOfSection()
+        {
+            var project = TestProjects.Empty();
+            var first = TimelineEdits.AddSubtitleTrack(project);
+            Assert.True(first.Subtitles);
+            Assert.Empty(first.Clips);
+            Assert.Equal("자막", first.Name);
+            var second = TimelineEdits.AddSubtitleTrack(project);
+            Assert.Same(second, project.VideoTracks.Last());
+            Assert.Equal(new[] { "동영상 1", "자막 1", "자막 2" }, project.VideoTracks.Select(t => t.Name));
+        }
+
+        [Fact]
+        public void Import_IntoExistingSubtitleTrack_OverwritesOverlaps_NoNewTrack()
+        {
+            var project = TestProjects.Empty();
+            var track = TimelineEdits.ImportSubtitles(project, new[] { Cue(0, 2, "예전"), Cue(10, 12, "그대로") });
+            var into = TimelineEdits.ImportSubtitles(project, new[] { Cue(1, 3, "새 큐") }, track);
+            Assert.Same(track, into);
+            Assert.Single(project.VideoTracks, t => t.Subtitles);
+            var rate = project.Rate;
+            Assert.Equal(new[] { "예전", "새 큐", "그대로" }, track.Clips.Select(c => c.Text));
+            Assert.Equal(rate.ToFrames(1), track.Clips[0].End);
+            // 자막 트랙이 아닌 곳을 주면 새 자막 트랙
+            var other = TimelineEdits.ImportSubtitles(project, new[] { Cue(0, 1, "가") }, project.MainTrack);
+            Assert.NotSame(track, other);
+            Assert.Equal(2, project.VideoTracks.Count(t => t.Subtitles));
+            // 잠긴 자막 트랙에는 넣지 않는다
+            track.Locked = true;
+            Assert.Throws<EditException>(() => TimelineEdits.ImportSubtitles(project, new[] { Cue(5, 6, "나") }, track));
+        }
+
+        [Fact]
         public void SubtitleTrack_AcceptsOnlyText()
         {
             var project = TestProjects.Empty(magnetic: false);

@@ -102,7 +102,7 @@ namespace VideoEditor.Ui
             };
             var empty = new TextBlock
             {
-                Text = "[가져오기] 또는 파일을 여기·타임라인에 끌어 놓으세요.\n동영상·사진(이미지)·오디오를 쓸 수 있습니다.",
+                Text = "[가져오기] 또는 파일을 여기·타임라인에 끌어 놓으세요.\n동영상·사진(이미지)·오디오를 쓸 수 있습니다. 자막(SRT·VTT)은 자막 트랙으로 들어갑니다.",
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(10),
                 IsHitTestVisible = false

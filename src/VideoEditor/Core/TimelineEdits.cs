@@ -448,11 +448,20 @@ namespace VideoEditor.Core
             return track;
         }
 
+        /// <summary>빈 자막 트랙을 자막 구역(동영상 트랙들 위) 맨 위에 더한다.</summary>
+        public static Track AddSubtitleTrack(Project project)
+        {
+            var track = new Track { Kind = TrackKind.Video, Subtitles = true };
+            project.VideoTracks.Add(track);
+            project.RenameTracks();
+            return track;
+        }
+
         /// <summary>
-        /// 자막 큐들로 맨 위에 새 자막 트랙을 만든다(시각 그대로). 겹치는 큐는 앞 큐를 다음 큐 시작에서 끊고, 시작이 같으면 한 큐로 합친다.
-        /// 놓을 큐가 없으면 null.
+        /// 자막 큐들을 자막 구역에 놓는다(시각 그대로): target이 자막 트랙이면 그 트랙에(겹치는 큐는 덮어씀), 아니면 맨 위 새 자막 트랙에.
+        /// 파일 안에서 겹치는 큐는 앞 큐를 다음 큐 시작에서 끊고, 시작이 같으면 한 큐로 합친다. 놓을 큐가 없으면 null.
         /// </summary>
-        public static Track ImportSubtitles(Project project, IReadOnlyList<SubtitleCue> cues)
+        public static Track ImportSubtitles(Project project, IReadOnlyList<SubtitleCue> cues, Track target = null)
         {
             var rate = project.Rate;
             var clips = new List<Clip>();
@@ -478,10 +487,15 @@ namespace VideoEditor.Core
             }
             if (clips.Count == 0)
                 return null;
-            var track = new Track { Kind = TrackKind.Video, Subtitles = true };
+            if (target != null && target.Subtitles)
+            {
+                EnsureEditable(target);
+                foreach (var clip in clips)
+                    Place(project, target, clip, clip.Start);
+                return target;
+            }
+            var track = AddSubtitleTrack(project);
             track.Clips.AddRange(clips);
-            project.VideoTracks.Add(track);
-            project.RenameTracks();
             return track;
         }
 
