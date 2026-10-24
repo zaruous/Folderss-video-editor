@@ -61,6 +61,9 @@ namespace VideoEditor.Media
         /// <summary>글자 파일과 필터 스크립트를 쓰고 인수를 만든다. 쓴 스크립트 경로를 script로 돌려준다(끝나면 지운다).</summary>
         public static List<string> Arguments(FfmpegTool tool, RenderPlan plan, IEnumerable<string> outputArgs, out string script)
         {
+            // 자막은 libass로 입힌다 — 없으면 FFmpeg의 "No such filter" 대신 무엇을 할지 알린다
+            if (plan.UsesLibass && !tool.HasFilter("ass"))
+                throw new FfmpegException("이 FFmpeg에는 자막을 입히는 기능(libass)이 없습니다. [FFmpeg 설정]에서 내려받은 FFmpeg나 libass가 든 빌드를 쓰세요.", null);
             foreach (var file in plan.TextFiles)
                 File.WriteAllText(file.Key, file.Value, new UTF8Encoding(false));
             script = Path.Combine(RenderEnvironment.TempFolder(), "graph-" + Guid.NewGuid().ToString("N") + ".txt");

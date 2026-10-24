@@ -21,6 +21,8 @@ namespace VideoEditor.Ui
     {
         private static List<Clip> _clipboard = new List<Clip>();
         private static List<int> _clipboardTracks = new List<int>();
+        // 복사한 클립이 자막 트랙에 있었는지(붙여 넣을 때 트랙 번호가 밀려도 자막 큐는 자막 트랙으로)
+        private static List<bool> _clipboardSubtitles = new List<bool>();
         private static FrameRate _clipboardRate = FrameRate.Default;
         private readonly EditorSession _session;
         private readonly EditorServices _services;
@@ -278,6 +280,7 @@ namespace VideoEditor.Ui
                 var track = Project.TrackOf(c);
                 return track.Kind == TrackKind.Video ? Project.VideoTracks.IndexOf(track) : -1 - Project.AudioTracks.IndexOf(track);
             }).ToList();
+            _clipboardSubtitles = clips.Select(c => Project.TrackOf(c).Subtitles).ToList();
             if (cut)
                 Delete(false);
             Status(clips.Count + "개 클립을 " + (cut ? "잘라 냈습니다." : "복사했습니다."));
@@ -293,6 +296,7 @@ namespace VideoEditor.Ui
             var playhead = _session.Playhead;
             long first;
             var tracks = _clipboardTracks;
+            var subtitles = _clipboardSubtitles;
             // 다른 프레임 레이트의 프로젝트(다른 편집 창)에서 복사했으면 초 기준으로 바꾼다
             var rate = _clipboardRate;
             var clips = _clipboard.Select(c =>
@@ -313,6 +317,10 @@ namespace VideoEditor.Ui
                         var track = index >= 0
                             ? (index < p.VideoTracks.Count ? p.VideoTracks[index] : p.MainTrack)
                             : (-1 - index < p.AudioTracks.Count ? p.AudioTracks[-1 - index] : p.AudioTracks.FirstOrDefault() ?? TimelineEdits.AddTrack(p, TrackKind.Audio));
+                        // 트랙 번호가 밀렸을 수 있다(자막 트랙 아래로 새 트랙이 끼어듦) — 자막 큐는 자막 트랙으로, 다른 클립은 자막 트랙이 아닌 곳으로
+                        var subtitle = i < subtitles.Count && subtitles[i];
+                        if (track.Kind == TrackKind.Video && track.Subtitles != subtitle)
+                            track = subtitle ? p.VideoTracks.FirstOrDefault(t => t.Subtitles) ?? track : p.MainTrack;
                         TimelineEdits.Place(p, track, copy, playhead + copy.Start - first);
                     }
                 }, "붙여 넣었습니다."))
@@ -354,13 +362,56 @@ namespace VideoEditor.Ui
             {
                 Title = "미디어 가져오기",
                 Multiselect = true,
-                Filter = "동영상·사진·오디오|*.mp4;*.mov;*.mkv;*.avi;*.wmv;*.webm;*.m4v;*.mts;*.m2ts;*.ts;*.flv;*.3gp;*.gif;*.png;*.jpg;*.jpeg;*.bmp;*.webp;*.tif;*.tiff;*.heic;*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus;*.wma|모든 파일|*.*",
+                Filter = "동영상·사진·오디오·자막|*.mp4;*.mov;*.mkv;*.avi;*.wmv;*.webm;*.m4v;*.mts;*.m2ts;*.ts;*.flv;*.3gp;*.gif;*.png;*.jpg;*.jpeg;*.bmp;*.webp;*.tif;*.tiff;*.heic;*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.opus;*.wma;*.srt;*.vtt|모든 파일|*.*",
                 InitialDirectory = SafeFolder(_services.Setting(EditorServices.LastFolderKey), Environment.SpecialFolder.MyVideos)
             };
             if (dialog.ShowDialog(UiKit.OwnerOf(_owner)) != true)
                 return;
             _services.SaveSetting(EditorServices.LastFolderKey, Path.GetDirectoryName(dialog.FileNames[0]));
             _ = ImportPaths(dialog.FileNames, null, -1);
+        }
+
+        /// <summary>[자막 가져오기]: SRT·VTT를 골라 맨 위 새 자막 트랙에 큐로 놓는다.</summary>
+        public void ImportSubtitles()
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "자막 가져오기",
+                Filter = "자막(SRT·VTT)|*.srt;*.vtt|모든 파일|*.*",
+                InitialDirectory = SafeFolder(_services.Setting(EditorServices.LastFolderKey), Environment.SpecialFolder.MyVideos)
+            };
+            if (dialog.ShowDialog(UiKit.OwnerOf(_owner)) != true)
+                return;
+            _services.SaveSetting(EditorServices.LastFolderKey, Path.GetDirectoryName(dialog.FileName));
+            ImportSubtitleFile(dialog.FileName);
+        }
+
+        /// <summary>자막 파일 하나를 읽어 새 자막 트랙으로(10MB까지, UTF-8·UTF-16·CP949). 놓은 큐 수(실패하면 0).</summary>
+        public int ImportSubtitleFile(string path)
+        {
+            List<SubtitleCue> cues;
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Length > SubtitleFile.MaxBytes)
+                {
+                    Status("자막 파일이 너무 큽니다(10MB까지): " + info.Name);
+                    return 0;
+                }
+                cues = SubtitleFile.Parse(SubtitleFile.Decode(File.ReadAllBytes(path)));
+            }
+            catch (Exception ex)
+            {
+                // 자막 파일은 남이 만든 것일 수 있다 — 무엇이 나든 편집기를 멈추지 않고 알린다
+                Status("자막 파일을 읽지 못했습니다: " + ex.Message);
+                return 0;
+            }
+            if (cues.Count == 0)
+            {
+                Status("자막을 찾지 못했습니다(SRT·VTT 형식이 아님): " + Path.GetFileName(path));
+                return 0;
+            }
+            return Run(p => TimelineEdits.ImportSubtitles(p, cues), "자막 " + cues.Count + "개를 가져왔습니다(" + Path.GetFileName(path) + ").") ? cues.Count : 0;
         }
 
         /// <summary>[URL에서 가져오기]: 직접 링크·유튜브 주소 또는 유튜브 검색으로 받아 미디어 목록에 더한다.</summary>
@@ -394,6 +445,13 @@ namespace VideoEditor.Ui
         {
             if (paths == null || paths.Length == 0)
                 return 0;
+            // 자막 파일은 미디어가 아니라 자막 트랙으로
+            var subtitleCount = 0;
+            foreach (var subtitle in paths.Where(SubtitleFile.IsSubtitleFile))
+                subtitleCount += ImportSubtitleFile(subtitle) > 0 ? 1 : 0;
+            paths = paths.Where(p => !SubtitleFile.IsSubtitleFile(p)).ToArray();
+            if (paths.Length == 0)
+                return subtitleCount;
             var tool = await NeedTool();
             if (tool == null)
                 return 0;
@@ -462,8 +520,12 @@ namespace VideoEditor.Ui
         {
             var clip = TimelineEdits.CreateClip(media, p.Rate, frame, p.Rate.ToFrames(_services.ImageSeconds));
             var isAudio = media.Kind == MediaKind.Audio;
-            if (target == null)
-                target = newTrack ?? (newTrack = TimelineEdits.AddTrack(p, isAudio ? TrackKind.Audio : TrackKind.Video));
+            // 빈 곳이나 자막 트랙에 놓으면 새 트랙(동영상은 자막 아래) — 앞서 만든 새 트랙은 종류가 같을 때만 다시 쓴다
+            if (target == null || target.Subtitles)
+            {
+                var kind = isAudio ? TrackKind.Audio : TrackKind.Video;
+                target = newTrack != null && newTrack.Kind == kind ? newTrack : (newTrack = TimelineEdits.AddTrack(p, kind));
+            }
             if (target.Kind == TrackKind.Audio && !isAudio)
             {
                 if (!media.HasAudio)
@@ -532,7 +594,7 @@ namespace VideoEditor.Ui
                 {
                     var clip = TimelineEdits.CreateText(text.Trim(), playhead, p.Rate.ToFrames(_services.ImageSeconds));
                     id = clip.Id;
-                    var track = p.VideoTracks.Skip(1).FirstOrDefault(t => !t.Locked && !t.Clips.Any(c => c.Start < clip.End && c.End > clip.Start))
+                    var track = p.VideoTracks.Skip(1).FirstOrDefault(t => !t.Locked && !t.Subtitles && !t.Clips.Any(c => c.Start < clip.End && c.End > clip.Start))
                                 ?? TimelineEdits.AddTrack(p, TrackKind.Video);
                     TimelineEdits.Place(p, track, clip, playhead);
                 }, "글자를 넣었습니다."))

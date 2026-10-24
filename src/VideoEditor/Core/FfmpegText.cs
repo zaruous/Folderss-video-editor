@@ -171,6 +171,19 @@ namespace VideoEditor.Core
             return result;
         }
 
+        /// <summary>ffmpeg -filters 출력 → 필터 이름들(" T.C drawtext  V->V  ..." 줄의 둘째 칸).</summary>
+        public static HashSet<string> Filters(string filtersOutput)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in (filtersOutput ?? "").Split('\n'))
+            {
+                var match = Regex.Match(line, @"^\s*[T\.][S\.][C\.]?\s+([A-Za-z0-9_]+)\s+\S*->\S*");
+                if (match.Success)
+                    result.Add(match.Groups[1].Value);
+            }
+            return result;
+        }
+
         /// <summary>-progress 출력 한 줄("out_time_us=1234567") → 초. 해당 줄이 아니면 null.</summary>
         public static double? ProgressSeconds(string line)
         {

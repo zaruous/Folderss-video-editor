@@ -106,7 +106,8 @@ namespace VideoEditor.Ui
                     return;
                 var rate = _session.Project.Rate;
                 title.Text = c.Name;
-                timing.Text = Kind(c) + " · " + rate.Timecode(c.Start) + " ~ " + rate.Timecode(c.End) + " (" + rate.Timecode(c.Duration) + ")";
+                var kind = _session.Project.TrackOf(c)?.Subtitles == true ? "자막" : Kind(c);
+                timing.Text = kind + " · " + rate.Timecode(c.Start) + " ~ " + rate.Timecode(c.End) + " (" + rate.Timecode(c.Duration) + ")";
             });
             DockPanel.SetDock(head, Dock.Top);
             panel.Children.Add(head);
@@ -114,10 +115,18 @@ namespace VideoEditor.Ui
             var tabs = new TabControl { Margin = new Thickness(6, 0, 6, 6) };
             AutomationProperties.SetAutomationId(tabs, "PropertyTabs");
             UiKit.StyleTabs(tabs);
-            if (clip.Kind == ClipKind.Text)
-                tabs.Items.Add(new TabItem { Header = "글자", Content = TextTab(id) });
-            if (clip.IsVisual)
-                tabs.Items.Add(new TabItem { Header = "화면", Content = VisualTab(id) });
+            // 자막 트랙의 큐는 트랙 공통 모양으로 입히므로 글만 고친다(크기·색·위치는 쓰지 않음)
+            if (_session.Project.TrackOf(clip)?.Subtitles == true)
+            {
+                tabs.Items.Add(new TabItem { Header = "자막", Content = SubtitleTab(id) });
+            }
+            else
+            {
+                if (clip.Kind == ClipKind.Text)
+                    tabs.Items.Add(new TabItem { Header = "글자", Content = TextTab(id) });
+                if (clip.IsVisual)
+                    tabs.Items.Add(new TabItem { Header = "화면", Content = VisualTab(id) });
+            }
             if (clip.Kind == ClipKind.Media && clip.HasAudio)
                 tabs.Items.Add(new TabItem { Header = "소리", Content = AudioTab(id) });
             tabs.Items.Add(new TabItem { Header = clip.HasSourceLimit ? "속도" : "길이", Content = TimeTab(id, clip.HasSourceLimit) });
@@ -246,16 +255,18 @@ namespace VideoEditor.Ui
             return panel;
         }
 
-        private UIElement TextTab(string id)
+        /// <summary>글 칸(여러 줄). 포커스가 빠질 때 바뀌었으면 고친다(그대로면 편집하지 않음).</summary>
+        private TextBox ContentBox(string id, string automationId, string name)
         {
-            var panel = new StackPanel { Margin = new Thickness(6) };
             var box = new TextBox { AcceptsReturn = true, MinHeight = 60, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 6) };
-            AutomationProperties.SetAutomationId(box, "PropText");
-            AutomationProperties.SetName(box, "글자 내용");
+            AutomationProperties.SetAutomationId(box, automationId);
+            AutomationProperties.SetName(box, name);
             box.LostFocus += (s, e) =>
             {
                 var text = box.Text;
-                Edit(id, c => c.Text = text, null);
+                var current = _session.Project.FindClip(id);
+                if (current != null && text != (current.Text ?? ""))
+                    Edit(id, c => c.Text = text, null);
             };
             _refreshers.Add(() =>
             {
@@ -263,7 +274,23 @@ namespace VideoEditor.Ui
                 if (c != null && !box.IsKeyboardFocusWithin)
                     box.Text = c.Text ?? "";
             });
-            panel.Children.Add(box);
+            return box;
+        }
+
+        private UIElement SubtitleTab(string id)
+        {
+            var panel = new StackPanel { Margin = new Thickness(6) };
+            panel.Children.Add(ContentBox(id, "PropSubtitleText", "자막 내용"));
+            var hint = UiKit.Label("자막 트랙의 큐는 트랙 공통 모양(흰 글자·검은 윤곽선, 화면 아래 가운데)으로 입힙니다. 긴 줄은 화면 폭에 맞춰 저절로 나뉩니다.", true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            panel.Children.Add(hint);
+            return panel;
+        }
+
+        private UIElement TextTab(string id)
+        {
+            var panel = new StackPanel { Margin = new Thickness(6) };
+            panel.Children.Add(ContentBox(id, "PropText", "글자 내용"));
             panel.Children.Add(NumberRow("글자 크기", "PropFontSize", 8, 400, "px", id, c => c.FontSize, (c, v) => c.FontSize = Math.Max(4, v)));
             var colors = new ComboBox { Margin = new Thickness(0, 4, 0, 4) };
             AutomationProperties.SetAutomationId(colors, "PropTextColor");

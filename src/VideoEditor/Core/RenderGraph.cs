@@ -33,8 +33,10 @@ namespace VideoEditor.Core
         public bool HasAudio { get; set; }
         public double Seconds { get; set; }
         public long Frames { get; set; }
-        /// <summary>실행 전에 써 둘 파일(글자 클립의 글) — 경로·내용.</summary>
+        /// <summary>실행 전에 써 둘 파일(글자 클립의 글, 자막 ASS) — 경로·내용.</summary>
         public Dictionary<string, string> TextFiles { get; } = new Dictionary<string, string>();
+        /// <summary>자막 트랙을 libass(ass 필터)로 입힌다 — FFmpeg에 libass가 있어야 한다.</summary>
+        public bool UsesLibass { get; set; }
     }
 
     /// <summary>
@@ -78,6 +80,29 @@ namespace VideoEditor.Core
             {
                 if (track.Hidden)
                     continue;
+                if (track.Subtitles)
+                {
+                    // 자막 트랙: 이 구간의 큐를 ASS 파일 하나로 써 두고(실행 전에 쓰고 끝나면 지움) 이 트랙 자리에서 libass로 입힌다
+                    var ass = SubtitleAss.Build(project, track, options.From, options.To);
+                    if (ass == null)
+                        continue;
+                    // 파일 이름에 클립 Id·글을 쓰지 않는다
+                    var assFile = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "fv-subs-" + Guid.NewGuid().ToString("N") + ".ass");
+                    plan.TextFiles[assFile] = ass;
+                    plan.UsesLibass = true;
+                    // 높은 프레임 레이트는 ass가 보는 시간을 늘였다가 되돌린다(ASS 시각 단위 1/100초로도 프레임이 구별되게)
+                    // setpts를 거치면 프레임 레이트 정보가 없어져 출력이 다른 레이트로 맞춰지므로 되돌린 뒤 fps로 다시 알린다.
+                    // fps는 끝 시각(overlay는 마지막 프레임 시각을 넘김)에서 마지막 프레임을 버리므로, 먼저 한 장 복제해 두고(tpad) 끝에서 구간 길이로 자른다(trim)
+                    var scale = SubtitleAss.TimeScale(rate);
+                    var stretch = scale > 1 ? "tpad=stop=1:stop_mode=clone,setpts=PTS*" + scale + "," : "";
+                    var restore = scale > 1
+                        ? string.Format(CultureInfo.InvariantCulture, ",setpts=PTS/{0},fps={1},trim=end_frame={2}", scale, rate.Rational, plan.Frames)
+                        : "";
+                    filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}]{3}ass=filename={1}{4}[o{2}]", layer, FilterValue(assFile), n, stretch, restore));
+                    layer = "o" + n;
+                    n++;
+                    continue;
+                }
                 var clips = track.Clips.Where(c => c.IsVisual).OrderBy(c => c.Start).ToList();
                 for (var i = 0; i < clips.Count; i++)
                 {
