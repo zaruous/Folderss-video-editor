@@ -187,16 +187,20 @@ namespace VideoEditor.Core
         {
             var rate = project.Rate;
             var k = (double)options.Width / project.Width;
+            // 캔버스가 화소 상한보다 크면(8K 등) 줄여서 그리게 하고 아래에서 키운다 — 그리개가 수백 MB짜리 비트맵을 만들지 않게
+            var shrink = Math.Min(1, Math.Sqrt(StyledTextLayout.MaxPixels / ((double)options.Width * options.Height)));
+            var canvasWidth = shrink < 1 ? Math.Max(2, (int)Math.Floor(options.Width * shrink)) : options.Width;
+            var canvasHeight = shrink < 1 ? Math.Max(2, (int)Math.Floor(options.Height * shrink)) : options.Height;
             var style = clip.Style.Clone();
             style.Normalize();
             var request = new TextImageRequest
             {
                 Text = clip.Text ?? "",
                 Style = style,
-                FontPixelSize = clip.FontSize * k,
-                EffectScale = k,
-                CanvasWidth = options.Width,
-                CanvasHeight = options.Height
+                FontPixelSize = clip.FontSize * k * shrink,
+                EffectScale = k * shrink,
+                CanvasWidth = canvasWidth,
+                CanvasHeight = canvasHeight
             };
             // 파일 이름에는 해시만 쓴다 — 글·클립 Id(프로젝트 파일 값)가 경로에 섞이지 않게
             var path = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "styled-text", "st-" + request.Key(options.TextRasterizer.Version) + ".png");
@@ -204,10 +208,14 @@ namespace VideoEditor.Core
             plan.TextRasterizer = options.TextRasterizer;
             // image2 + pattern_type none: 임시 폴더 경로에 %d 같은 글이 있어도 파일 이름 패턴으로 읽지 않게(png_pipe는 이 옵션이 없다)
             var index = AddInput(plan, "-loop", "1", "-framerate", rate.Rational, "-t", N(rate.ToSeconds(segFrames)), "-f", "image2", "-pattern_type", "none", "-i", path);
+            // 비율은 분수식으로(소수로 반올림하면 1px 모자랄 수 있다)
+            var grow = shrink < 1
+                ? string.Format(CultureInfo.InvariantCulture, ",scale=w='iw*{0}/{1}':h='ih*{2}/{3}'", options.Width, canvasWidth, options.Height, canvasHeight)
+                : "";
             // 그리개가 캔버스보다 큰 PNG를 주어도 pad가 실패하지 않게 먼저 가운데를 잘라 낸다
             return string.Format(CultureInfo.InvariantCulture,
-                "[{0}:v]setpts=PTS-STARTPTS,format=rgba,crop=w='min(iw,{1})':h='min(ih,{2})',pad=w={1}:h={2}:x=(ow-iw)/2:y=(oh-ih)/2:color=black@0.0",
-                index, options.Width, options.Height);
+                "[{0}:v]setpts=PTS-STARTPTS,format=rgba{3},crop=w='min(iw,{1})':h='min(ih,{2})',pad=w={1}:h={2}:x=(ow-iw)/2:y=(oh-ih)/2:color=black@0.0",
+                index, options.Width, options.Height, grow);
         }
 
         // ---------- 오디오 ----------

@@ -30,6 +30,8 @@ namespace VideoEditor.Core
         public const double MiterLimit = 4;
         /// <summary>안티에일리어싱 가장자리가 잘리지 않게 두는 여백(픽셀).</summary>
         public const double EdgeMargin = 1;
+        /// <summary>그리개가 그리는 그림의 화소 상한(4096² 정도). 캔버스가 더 크면 렌더 그래프가 줄여 요청하고 키워 얹는다.</summary>
+        public const double MaxPixels = 16000000;
 
         /// <summary>boxWidth×boxHeight 배치 상자를 가운데에 둔 PNG 크기(짝수, 캔버스 이하)와 상자 원점.</summary>
         public static TextImageLayout Fit(double boxWidth, double boxHeight, TextStyle style, double effectScale, int canvasWidth, int canvasHeight)

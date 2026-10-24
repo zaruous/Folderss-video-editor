@@ -115,7 +115,12 @@ namespace VideoEditor.Ui
             AutomationProperties.SetAutomationId(tabs, "PropertyTabs");
             UiKit.StyleTabs(tabs);
             if (clip.Kind == ClipKind.Text)
+            {
                 tabs.Items.Add(new TabItem { Header = "글자", Content = TextTab(id) });
+                var styleTab = new TabItem { Header = "꾸미기", Content = StyleTab(id) };
+                AutomationProperties.SetAutomationId(styleTab, "StyleTab");
+                tabs.Items.Add(styleTab);
+            }
             if (clip.IsVisual)
                 tabs.Items.Add(new TabItem { Header = "화면", Content = VisualTab(id) });
             if (clip.Kind == ClipKind.Media && clip.HasAudio)
@@ -123,8 +128,17 @@ namespace VideoEditor.Ui
             tabs.Items.Add(new TabItem { Header = clip.HasSourceLimit ? "속도" : "길이", Content = TimeTab(id, clip.HasSourceLimit) });
             tabs.SelectedIndex = 0;
             panel.Children.Add(tabs);
-            foreach (var refresh in _refreshers)
-                refresh();
+            // 처음 값을 채우는 것은 편집이 아니다 — 콤보의 SelectionChanged 등이 Edit를 부르지 않게(고르기만 해도 실행 취소 단계·덮어쓰기가 생기지 않게)
+            _updating = true;
+            try
+            {
+                foreach (var refresh in _refreshers)
+                    refresh();
+            }
+            finally
+            {
+                _updating = false;
+            }
             return panel;
         }
 
@@ -276,7 +290,17 @@ namespace VideoEditor.Ui
                 if (_updating || colors.SelectedIndex < 0)
                     return;
                 var hex = presets[colors.SelectedIndex].Item2;
-                Edit(id, c => c.TextColor = hex, null);
+                Edit(id, c =>
+                {
+                    c.TextColor = hex;
+                    // 꾸민 글자는 채우기 색으로 그리므로 같이 바꾼다(단색)
+                    if (c.Style != null)
+                    {
+                        c.Style.Fill ??= new TextFill();
+                        c.Style.Fill.Kind = FillKind.Solid;
+                        c.Style.Fill.Colors = new List<string> { hex };
+                    }
+                }, null);
             };
             _refreshers.Add(() =>
             {
@@ -293,7 +317,116 @@ namespace VideoEditor.Ui
             return panel;
         }
 
+        /// <summary>
+        /// [꾸미기] 꾸민 글자 스타일 — 지금은 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬).
+        /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
+        /// </summary>
+        private UIElement StyleTab(string id)
+        {
+            var panel = new StackPanel { Margin = new Thickness(6) };
+            var warning = UiKit.Label("이 PC에 없는 글꼴이라 맑은 고딕으로 그립니다.", true);
+            warning.TextWrapping = TextWrapping.Wrap;
+            warning.Margin = new Thickness(0, 2, 0, 6);
+            AutomationProperties.SetAutomationId(warning, "StyleFontWarning");
+            panel.Children.Add(warning);
+            panel.Children.Add(Section("글꼴"));
+
+            var fonts = new ComboBox
+            {
+                ItemsSource = StyledTextRasterizer.Fonts,
+                // 시스템 글꼴이 수백 개라 보이는 것만 만든다
+                ItemsPanel = new ItemsPanelTemplate(new FrameworkElementFactory(typeof(VirtualizingStackPanel)))
+            };
+            AutomationProperties.SetAutomationId(fonts, "StyleFontBox");
+            AutomationProperties.SetName(fonts, "글꼴");
+            fonts.SelectionChanged += (s, e) =>
+            {
+                if (!_updating && fonts.SelectedItem is FontChoice choice)
+                    Edit(id, c => StyleOf(c).FontFamily = choice.Name, null);
+            };
+            panel.Children.Add(Row("글꼴", fonts));
+
+            var bold = new CheckBox { Content = "굵게", Margin = new Thickness(0, 0, 12, 0) };
+            AutomationProperties.SetAutomationId(bold, "StyleBold");
+            bold.Click += (s, e) => Edit(id, c => StyleOf(c).Bold = bold.IsChecked == true, null);
+            var italic = new CheckBox { Content = "기울임" };
+            AutomationProperties.SetAutomationId(italic, "StyleItalic");
+            italic.Click += (s, e) => Edit(id, c => StyleOf(c).Italic = italic.IsChecked == true, null);
+            var checks = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            checks.Children.Add(bold);
+            checks.Children.Add(italic);
+            panel.Children.Add(Row("모양", checks));
+
+            panel.Children.Add(NumberRow("자간", "StyleLetterSpacing", -200, 1000, "‰", id,
+                c => c.Style?.LetterSpacing ?? 0, (c, v) => StyleOf(c).LetterSpacing = Math.Max(-200, Math.Min(1000, v))));
+            panel.Children.Add(NumberRow("행간", "StyleLineSpacing", 50, 300, "%", id,
+                c => (c.Style?.LineSpacing ?? 1.2) * 100, (c, v) => StyleOf(c).LineSpacing = Math.Max(0.5, Math.Min(3, v / 100))));
+
+            // 순서는 TextAlign(Left·Center·Right)과 같다
+            var align = new ComboBox();
+            AutomationProperties.SetAutomationId(align, "StyleAlign");
+            AutomationProperties.SetName(align, "정렬");
+            foreach (var name in new[] { "왼쪽", "가운데", "오른쪽" })
+                align.Items.Add(name);
+            align.SelectionChanged += (s, e) =>
+            {
+                if (!_updating && align.SelectedIndex >= 0)
+                {
+                    var value = (TextAlign)align.SelectedIndex;
+                    Edit(id, c => StyleOf(c).Align = value, null);
+                }
+            };
+            panel.Children.Add(Row("정렬", align));
+
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                // 값을 보이는 것만으로 편집이 일어나지 않게(스타일이 생기지 않게)
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var family = c.Style?.FontFamily ?? TextStyle.DefaultFont;
+                    fonts.SelectedItem = StyledTextRasterizer.Fonts.FirstOrDefault(f => f.Names.Contains(family, StringComparer.OrdinalIgnoreCase));
+                    warning.Visibility = StyledTextRasterizer.IsInstalled(family) ? Visibility.Collapsed : Visibility.Visible;
+                    bold.IsChecked = c.Style?.Bold == true;
+                    italic.IsChecked = c.Style?.Italic == true;
+                    align.SelectedIndex = (int)(c.Style?.Align ?? TextAlign.Center);
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
+            return panel;
+        }
+
+        /// <summary>고칠 클립의 스타일(없으면 지금 색을 이어받아 만든다).</summary>
+        private static TextStyle StyleOf(Clip clip)
+        {
+            return clip.Style ??= TextStyle.FromLegacy(clip);
+        }
+
         // ---------- 공통 ----------
+
+        private static TextBlock Section(string text)
+        {
+            return new TextBlock { Text = text, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 4, 0, 4) };
+        }
+
+        /// <summary>이름(폭 84) · 컨트롤 한 줄.</summary>
+        private static UIElement Row(string label, UIElement control)
+        {
+            var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3) };
+            var name = UiKit.Label(label);
+            name.Width = 84;
+            DockPanel.SetDock(name, Dock.Left);
+            row.Children.Add(name);
+            row.Children.Add(control);
+            return row;
+        }
 
         private static TextBlock Title(string text)
         {
@@ -347,9 +480,17 @@ namespace VideoEditor.Ui
                 if (_updating)
                     return;
                 if (UiKit.TryNumber(box.Text, out value))
+                {
+                    // 보이던 값 그대로면 편집하지 않는다(칸을 지나가기만 해도 실행 취소 단계·꾸민 글자 스타일이 생기지 않게)
+                    var current = _session.Project.FindClip(id);
+                    if (current != null && box.Text.Trim() == UiKit.Number(get(current)))
+                        return;
                     Apply(value, null);
+                }
                 else
+                {
                     Refresh();
+                }
             }
             box.KeyDown += (s, e) =>
             {

@@ -149,6 +149,29 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void HugeCanvas_RequestsUnderPixelLimit_AndScalesBack()
+        {
+            var (project, clip) = StyledProject();
+            project.Width = 8192;
+            project.Height = 8192;
+            clip.FontSize = 400;
+            var plan = RenderGraph.Build(project, Options(new FakeTextRasterizer(), width: 8192, height: 8192));
+            var request = Assert.Single(plan.TextImages).Value;
+            Assert.True((double)request.CanvasWidth * request.CanvasHeight <= StyledTextLayout.MaxPixels, request.CanvasWidth + "×" + request.CanvasHeight);
+            // 줄인 비율만큼 글자·효과도 줄여 그리고, 그래프가 다시 키워 캔버스 크기에 놓는다
+            Assert.Equal(400.0 * request.CanvasWidth / 8192, request.FontPixelSize, 6);
+            Assert.Equal((double)request.CanvasWidth / 8192, request.EffectScale, 6);
+            Assert.Contains("format=rgba,scale=w='iw*8192/4000':h='ih*8192/4000',crop=", plan.Filter);
+            Assert.Contains("pad=w=8192:h=8192", plan.Filter);
+            // 4K(830만 화소)는 그대로
+            project.Width = 3840;
+            project.Height = 2160;
+            var uhd = RenderGraph.Build(project, Options(new FakeTextRasterizer(), width: 3840, height: 2160));
+            Assert.Equal(3840, Assert.Single(uhd.TextImages).Value.CanvasWidth);
+            Assert.DoesNotContain("scale=w='iw*", uhd.Filter);
+        }
+
+        [Fact]
         public void Build_DoesNotWriteFiles()
         {
             var (project, _) = StyledProject();
@@ -560,6 +583,19 @@ namespace VideoEditor.Tests
             while (Directory.GetFiles(folder, "*.part").Length > 0 && DateTime.UtcNow < deadline)
                 Thread.Sleep(50);
             Assert.Equal(new[] { path }, Directory.GetFiles(folder));
+        }
+
+        [Fact]
+        public void PrepareTextImages_FillsCacheOnce()
+        {
+            // 재생 전에 배경에서 그려 두면, 같은 크기의 재생 시작(StartVideo)은 캐시만 읽는다
+            var (project, _) = StyledProject();
+            var rasterizer = new FakeTextRasterizer();
+            PreviewRenderer.PrepareTextImages(project, 0, 30, 320, 180, rasterizer, CancellationToken.None);
+            Assert.Equal(1, rasterizer.Calls);
+            PreviewRenderer.PrepareTextImages(project, 10, 30, 320, 180, rasterizer, CancellationToken.None);
+            Assert.Equal(1, rasterizer.Calls);
+            PreviewRenderer.PrepareTextImages(project, 0, 30, 320, 180, null, CancellationToken.None);
         }
 
         [Fact]

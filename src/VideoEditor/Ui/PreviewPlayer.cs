@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -24,6 +25,7 @@ namespace VideoEditor.Ui
         private readonly EditorServices _services;
         private readonly Dispatcher _dispatcher;
         private CancellationTokenSource _frameCancel;
+        private CancellationTokenSource _prepareCancel;
         private int _frameRequest;
         private Playback _playback;
         private bool _disposed;
@@ -44,7 +46,8 @@ namespace VideoEditor.Ui
         /// <summary>오류·안내(상태 줄).</summary>
         public event Action<string> Message;
 
-        public bool IsPlaying { get { return _playback != null; } }
+        /// <summary>재생 중이거나 재생 전 꾸민 글자를 그리는 중(재생 단추·스페이스가 멈춤으로 동작하게).</summary>
+        public bool IsPlaying { get { return _playback != null || _prepareCancel != null; } }
 
         /// <summary>미리 보기 해상도 배율(1, 0.5, 0.25).</summary>
         public double Scale { get; set; } = 0.5;
@@ -89,11 +92,12 @@ namespace VideoEditor.Ui
             var request = ++_frameRequest;
             var copy = ProjectFile.FromSnapshot(ProjectFile.Snapshot(project));
             var size = OutputSize(copy);
+            var rasterizer = _services.TextRasterizer;
             Task.Run(async () =>
             {
                 // 연달아 들어오는 요청(끌기·키 반복)은 잠깐 모아 마지막 것만 그린다
                 await Task.Delay(40, cancel.Token).ConfigureAwait(false);
-                return await PreviewRenderer.Frame(tool, copy, frame, size.Width, size.Height, cancel.Token).ConfigureAwait(false);
+                return await PreviewRenderer.Frame(tool, copy, frame, size.Width, size.Height, cancel.Token, rasterizer).ConfigureAwait(false);
             }, cancel.Token).ContinueWith(t =>
             {
                 if (t.Status != TaskStatus.RanToCompletion)
@@ -128,9 +132,38 @@ namespace VideoEditor.Ui
             _frameCancel?.Cancel();
             var size = OutputSize(copy);
             EnsureBitmap(size.Width, size.Height);
+            var rasterizer = _services.TextRasterizer;
+            if (!copy.AllClips.Any(c => c.Kind == ClipKind.Text && c.Style != null))
+            {
+                Start(tool, copy, from, to, size.Width, size.Height, rasterizer);
+                return;
+            }
+            // 꾸민 글자 PNG는 UI 스레드 밖에서 먼저 그려 둔다 — 재생 FFmpeg는 캐시만 읽어 화면이 멈추지 않는다
+            var prepare = _prepareCancel = new CancellationTokenSource();
+            Task.Run(() => PreviewRenderer.PrepareTextImages(copy, from, to, size.Width, size.Height, rasterizer, prepare.Token), prepare.Token)
+                .ContinueWith(t => _dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (prepare != _prepareCancel || _disposed)
+                        return;
+                    _prepareCancel = null;
+                    if (t.Status != TaskStatus.RanToCompletion)
+                    {
+                        if (t.Exception != null)
+                            Message?.Invoke("꾸민 글자를 그리지 못했습니다: " + t.Exception.GetBaseException().Message);
+                        StateChanged?.Invoke(this, EventArgs.Empty);
+                        return;
+                    }
+                    Start(tool, copy, from, to, size.Width, size.Height, rasterizer);
+                })), TaskScheduler.Default);
+            // 준비하는 동안에도 재생 중으로 보인다(재생 단추가 멈춤 모양)
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void Start(FfmpegTool tool, Project copy, long from, long to, int width, int height, ITextRasterizer rasterizer)
+        {
             try
             {
-                _playback = new Playback(this, tool, copy, from, to, size.Width, size.Height, Muted);
+                _playback = new Playback(this, tool, copy, from, to, width, height, Muted, rasterizer);
             }
             catch (Exception ex)
             {
@@ -142,12 +175,15 @@ namespace VideoEditor.Ui
 
         public void Stop()
         {
+            // 재생 전 꾸민 글자를 그리는 중이면 그만둔다(끝나도 재생하지 않음)
+            var preparing = _prepareCancel;
+            _prepareCancel = null;
+            preparing?.Cancel();
             var playback = _playback;
-            if (playback == null)
-                return;
             _playback = null;
-            playback.Dispose();
-            StateChanged?.Invoke(this, EventArgs.Empty);
+            playback?.Dispose();
+            if (preparing != null || playback != null)
+                StateChanged?.Invoke(this, EventArgs.Empty);
         }
 
         public void Dispose()
@@ -182,7 +218,7 @@ namespace VideoEditor.Ui
             private long _lastShown = -1;
             private int _disposed;
 
-            public Playback(PreviewPlayer owner, FfmpegTool tool, Project project, long from, long to, int width, int height, bool muted)
+            public Playback(PreviewPlayer owner, FfmpegTool tool, Project project, long from, long to, int width, int height, bool muted, ITextRasterizer rasterizer)
             {
                 _owner = owner;
                 _from = from;
@@ -192,7 +228,7 @@ namespace VideoEditor.Ui
                 _rate = project.Rate;
                 try
                 {
-                    _video = PreviewRenderer.StartVideo(tool, project, from, to, width, height, out _videoFiles);
+                    _video = PreviewRenderer.StartVideo(tool, project, from, to, width, height, out _videoFiles, rasterizer);
                     Drain(_video, _errors);
                     new Thread(ReadVideo) { IsBackground = true, Name = "preview-video" }.Start();
                     if (!muted)

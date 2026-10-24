@@ -699,7 +699,7 @@ namespace VideoEditor.Ui
                     return;
                 var frame = _session.Playhead;
                 var copy = ProjectFile.FromSnapshot(ProjectFile.Snapshot(Project));
-                var bytes = await Task.Run(() => PreviewRenderer.Frame(tool, copy, frame, copy.Width, copy.Height, CancellationToken.None));
+                var bytes = await Task.Run(() => PreviewRenderer.Frame(tool, copy, frame, copy.Width, copy.Height, CancellationToken.None, _services.TextRasterizer));
                 if (bytes == null)
                 {
                     Status("스냅샷을 만들지 못했습니다.");

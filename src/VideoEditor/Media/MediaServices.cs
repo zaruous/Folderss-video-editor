@@ -71,8 +71,7 @@ namespace VideoEditor.Media
         public static List<string> Arguments(FfmpegTool tool, RenderPlan plan, IEnumerable<string> outputArgs, out string script, CancellationToken cancellation = default)
         {
             // 그리다 실패하면 아무 임시 파일도 남기지 않도록 먼저 그린다
-            foreach (var image in plan.TextImages)
-                TextImageCache.Ensure(plan.TextRasterizer, image.Key, image.Value, cancellation);
+            DrawTextImages(plan, cancellation);
             foreach (var file in plan.TextFiles)
                 File.WriteAllText(file.Key, file.Value, new UTF8Encoding(false));
             script = Path.Combine(RenderEnvironment.TempFolder(), "graph-" + Guid.NewGuid().ToString("N") + ".txt");
@@ -92,6 +91,13 @@ namespace VideoEditor.Media
             args.AddRange(tool.FilterScriptArgs(script));
             args.AddRange(outputArgs);
             return args;
+        }
+
+        /// <summary>계획의 꾸민 글자 PNG를 캐시에 그려 둔다(있으면 그대로).</summary>
+        public static void DrawTextImages(RenderPlan plan, CancellationToken cancellation)
+        {
+            foreach (var image in plan.TextImages)
+                TextImageCache.Ensure(plan.TextRasterizer, image.Key, image.Value, cancellation);
         }
 
         public static void TryDelete(string path)
@@ -261,6 +267,28 @@ namespace VideoEditor.Media
                 foreach (var file in plan.TextFiles.Keys)
                     RenderCommand.TryDelete(file);
             }
+        }
+
+        /// <summary>
+        /// 재생 전에 [from, to) 구간의 꾸민 글자 PNG를 캐시에 그려 둔다 — UI 스레드가 아닌 곳에서 부른다.
+        /// 그 뒤 같은 크기로 <see cref="StartVideo"/>를 부르면 캐시만 읽어 바로 시작한다.
+        /// </summary>
+        public static void PrepareTextImages(Project project, long from, long to, int width, int height, ITextRasterizer textRasterizer, CancellationToken cancellation)
+        {
+            if (textRasterizer == null || to <= from)
+                return;
+            var plan = RenderGraph.Build(project, new RenderOptions
+            {
+                From = from,
+                To = to,
+                Width = width,
+                Height = height,
+                Audio = false,
+                Preview = true,
+                TempFolder = RenderEnvironment.TempFolder(),
+                TextRasterizer = textRasterizer
+            });
+            RenderCommand.DrawTextImages(plan, cancellation);
         }
 
         /// <summary>재생: from부터 끝까지 화면을 BGRA 원시 프레임으로 내보내는 FFmpeg를 시작한다(표준 출력에서 읽는다).</summary>

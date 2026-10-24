@@ -128,10 +128,13 @@ namespace VideoEditor.Core
             return copy;
         }
 
-        /// <summary>스타일이 없는 글자 클립에서 처음 만들 때: 지금 글자 색을 단색 채우기로 이어받는다.</summary>
+        /// <summary>
+        /// 스타일이 없는 글자 클립에서 처음 만들 때: 지금 글자 색을 단색 채우기로 이어받고, 정렬은 예전 그리기(drawtext — 여러 줄을 왼쪽 맞춤)와 같게 왼쪽으로 둔다.
+        /// 처음 꾸밀 때 여러 줄 글자의 모양이 갑자기 바뀌지 않게.
+        /// </summary>
         public static TextStyle FromLegacy(Clip clip)
         {
-            var style = new TextStyle();
+            var style = new TextStyle { Align = TextAlign.Left };
             style.Fill.Colors = new List<string> { NormalizeColor(clip?.TextColor, "#FFFFFF") };
             return style;
         }
