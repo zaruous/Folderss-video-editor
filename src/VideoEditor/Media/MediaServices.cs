@@ -46,10 +46,16 @@ namespace VideoEditor.Media
             return candidates.FirstOrDefault(File.Exists);
         }
 
-        /// <summary>이 프로세스의 임시 폴더(필터 스크립트·글자 파일).</summary>
+        /// <summary>프로세스별 임시 폴더들이 모이는 곳(시작할 때 끝난 프로세스의 캐시를 정리 — <see cref="TextImageCache.Cleanup"/>).</summary>
+        public static string TempRoot()
+        {
+            return Path.Combine(Path.GetTempPath(), "folderss-video-editor");
+        }
+
+        /// <summary>이 프로세스의 임시 폴더(필터 스크립트·글자 파일·꾸민 글자 PNG 캐시).</summary>
         public static string TempFolder()
         {
-            var folder = Path.Combine(Path.GetTempPath(), "folderss-video-editor", Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            var folder = Path.Combine(TempRoot(), Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             Directory.CreateDirectory(folder);
             return folder;
         }
@@ -58,9 +64,15 @@ namespace VideoEditor.Media
     /// <summary>렌더 계획을 실행할 FFmpeg 인수로: 입력들 + 필터 스크립트 파일 + 출력 인수.</summary>
     public static class RenderCommand
     {
-        /// <summary>글자 파일과 필터 스크립트를 쓰고 인수를 만든다. 쓴 스크립트 경로를 script로 돌려준다(끝나면 지운다).</summary>
-        public static List<string> Arguments(FfmpegTool tool, RenderPlan plan, IEnumerable<string> outputArgs, out string script)
+        /// <summary>
+        /// 꾸민 글자 PNG를 캐시에 그려 두고, 글자 파일과 필터 스크립트를 쓰고 인수를 만든다.
+        /// 쓴 스크립트 경로를 script로 돌려준다(끝나면 지운다). PNG는 캐시라서 지우지 않는다.
+        /// </summary>
+        public static List<string> Arguments(FfmpegTool tool, RenderPlan plan, IEnumerable<string> outputArgs, out string script, CancellationToken cancellation = default)
         {
+            // 그리다 실패하면 아무 임시 파일도 남기지 않도록 먼저 그린다
+            foreach (var image in plan.TextImages)
+                TextImageCache.Ensure(plan.TextRasterizer, image.Key, image.Value, cancellation);
             foreach (var file in plan.TextFiles)
                 File.WriteAllText(file.Key, file.Value, new UTF8Encoding(false));
             script = Path.Combine(RenderEnvironment.TempFolder(), "graph-" + Guid.NewGuid().ToString("N") + ".txt");
@@ -165,7 +177,8 @@ namespace VideoEditor.Media
             return args;
         }
 
-        public static async Task Export(FfmpegTool tool, Project project, ExportSettings settings, IProgress<double> progress, CancellationToken cancellation)
+        public static async Task Export(FfmpegTool tool, Project project, ExportSettings settings, IProgress<double> progress, CancellationToken cancellation,
+            ITextRasterizer textRasterizer = null)
         {
             if (settings.To <= settings.From)
                 throw new InvalidOperationException("내보낼 구간이 비어 있습니다. 타임라인에 클립을 놓으세요.");
@@ -176,12 +189,13 @@ namespace VideoEditor.Media
                 Width = settings.Width,
                 Height = settings.Height,
                 FontFile = RenderEnvironment.DefaultFont(),
-                TempFolder = RenderEnvironment.TempFolder()
+                TempFolder = RenderEnvironment.TempFolder(),
+                TextRasterizer = textRasterizer
             });
             string script;
             // 만드는 동안은 옆의 .part에 쓰고 다 되면 바꿔 넣는다 — 실패·취소해도 원래 있던 파일(덮어쓰기로 고른 것)이 남는다
             var part = settings.OutputPath + ".part";
-            var args = RenderCommand.Arguments(tool, plan, OutputArgs(tool, settings, plan.HasAudio, part), out script);
+            var args = RenderCommand.Arguments(tool, plan, OutputArgs(tool, settings, plan.HasAudio, part), out script, cancellation);
             try
             {
                 using (var process = FfmpegRunner.Start(tool.FfmpegPath, args, true))
@@ -219,7 +233,8 @@ namespace VideoEditor.Media
     public static class PreviewRenderer
     {
         /// <summary>frame 위치의 화면을 BGRA 바이트(width×height×4)로.</summary>
-        public static async Task<byte[]> Frame(FfmpegTool tool, Project project, long frame, int width, int height, CancellationToken cancellation)
+        public static async Task<byte[]> Frame(FfmpegTool tool, Project project, long frame, int width, int height, CancellationToken cancellation,
+            ITextRasterizer textRasterizer = null)
         {
             var plan = RenderGraph.Build(project, new RenderOptions
             {
@@ -230,10 +245,11 @@ namespace VideoEditor.Media
                 Audio = false,
                 Preview = true,
                 FontFile = RenderEnvironment.DefaultFont(),
-                TempFolder = RenderEnvironment.TempFolder()
+                TempFolder = RenderEnvironment.TempFolder(),
+                TextRasterizer = textRasterizer
             });
             string script;
-            var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script);
+            var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script, cancellation);
             try
             {
                 var bytes = await FfmpegRunner.RunBytes(tool.FfmpegPath, args, TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false);
@@ -248,7 +264,8 @@ namespace VideoEditor.Media
         }
 
         /// <summary>재생: from부터 끝까지 화면을 BGRA 원시 프레임으로 내보내는 FFmpeg를 시작한다(표준 출력에서 읽는다).</summary>
-        public static Process StartVideo(FfmpegTool tool, Project project, long from, long to, int width, int height, out List<string> tempFiles)
+        public static Process StartVideo(FfmpegTool tool, Project project, long from, long to, int width, int height, out List<string> tempFiles,
+            ITextRasterizer textRasterizer = null)
         {
             var plan = RenderGraph.Build(project, new RenderOptions
             {
@@ -259,7 +276,8 @@ namespace VideoEditor.Media
                 Audio = false,
                 Preview = true,
                 FontFile = RenderEnvironment.DefaultFont(),
-                TempFolder = RenderEnvironment.TempFolder()
+                TempFolder = RenderEnvironment.TempFolder(),
+                TextRasterizer = textRasterizer
             });
             string script;
             var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script);

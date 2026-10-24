@@ -47,7 +47,7 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
    - 요청마다 스레드를 새로 만들지도 않는다. WPF 초기화 비용이 크고 Dispatcher가 남는다.
 4. **PNG는 작게, 의미는 지금과 같게.**
    - PNG 중심을 글자 배치 상자의 중심에 맞춘다. 효과가 번지는 범위(그림자·광선·흐림)만큼 대칭 여백을 두고, 크기는 짝수로 맞추며, 캔버스보다 크면 잘라 낸다.
-   - 그래프는 지금과 같은 투명 `color` 바탕(캔버스 크기)에 `overlay=x=(W-w)/2:y=(H-h)/2:eof_action=repeat`로 PNG를 얹는다. PNG는 한 번만 디코드한다.
+   - 그래프는 PNG를 이미지 클립처럼 읽어(`-loop 1`) `crop`(캔버스보다 크면 가운데만) → `pad`로 캔버스 크기 투명 바탕 가운데에 놓는다(이슈 #12에서 정함).
    - 그 뒤는 기존 공통 체인 그대로다. 그래서 `X`·`Y`·`Scale`·`Rotation` 동작이 지금과 같고, Build는 글자의 실제 크기를 몰라도 된다.
    - 여백·자르기 계산은 Core `StyledTextLayout`에 둔다.
 5. **캐시**
@@ -248,3 +248,4 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
 | 2026-10-23 | 계획 작성(이 문서). 가지 `styled-text` |
 | 2026-10-23 | 작업 이슈 등록: T1~T12 = #11~#22(라벨 `styled-text`), 상위 이슈 #3에 체크리스트 |
 | 2026-10-23 | T1(#11) 스타일 모델·형식 v2·값 검증·깊은 복사, T10(#20) 휘기 계산 — Linux에서 Core 시험 통과 |
+| 2026-10-24 | T2(#12) PNG 렌더 경로(`TextImage`·`StyledTextLayout`·`RenderGraph` crop+pad)·캐시(`TextImageCache`)·그리개 인수 — 가짜 그리개로 그래프·보안·캐시·FFmpeg 통합 시험 통과(Windows). Ui는 아직 null을 넘김. 리뷰 반영: 그리개가 취소를 안 봐도 30초 제한, 덮어쓰지 않는 옮기기, 빈 PNG 거절, PNG 입력 `-f image2 -pattern_type none`(경로의 `%`), 키에 모든 속성이 들어가는지 리플렉션 시험. **T3로 넘김:** 재생 시작(`StartVideo`)이 UI 스레드에서 취소 없이 그림 → 캐시 채우기를 배경으로, 시작 때 `TextImageCache.Cleanup(RenderEnvironment.TempRoot())`, 글자 탭 색 → `Style.Fill` |
