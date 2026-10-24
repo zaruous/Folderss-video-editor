@@ -180,6 +180,8 @@ namespace VideoEditor.Ui
             private volatile bool _videoDone;
             private bool _started;
             private long _lastShown = -1;
+            // 큐에서 꺼냈지만 아직 보여 줄 시각이 안 된 프레임(큐는 들여다보기만 할 수 없어 꺼내 두고 기다린다)
+            private (long Index, byte[] Pixels) _pending = (-1, null);
             private int _disposed;
 
             public Playback(PreviewPlayer owner, FfmpegTool tool, Project project, long from, long to, int width, int height, bool muted)
@@ -351,11 +353,24 @@ namespace VideoEditor.Ui
                     _waveOut?.Play();
                 }
                 var target = (long)Math.Floor(_rate.ToFrames(Elapsed()) + 0.0001);
+                // 지금 시각(target) 이하의 가장 늦은 프레임을 보여 준다 — 늦게 온 프레임은 건너뛰고,
+                // 앞선 프레임은 들고 있다가 그 시각에 보여 준다(바로 보여 주면 FFmpeg가 실시간보다 빠를 때 화면이 소리보다 앞서 달린다)
                 (long Index, byte[] Pixels) frame = (-1, null);
-                while (_frames.TryTake(out var next))
+                while (true)
                 {
+                    (long Index, byte[] Pixels) next;
+                    if (_pending.Pixels != null)
+                        next = _pending;
+                    else if (!_frames.TryTake(out next))
+                        break;
+                    if (next.Index > target)
+                    {
+                        _pending = next;
+                        break;
+                    }
+                    _pending = (-1, null);
                     frame = next;
-                    if (next.Index >= target)
+                    if (next.Index == target)
                         break;
                 }
                 if (frame.Pixels != null)
@@ -363,9 +378,8 @@ namespace VideoEditor.Ui
                     _owner.Show(frame.Pixels, _width, _height, _from + frame.Index);
                     _lastShown = frame.Index;
                     _owner.Position?.Invoke(_from + frame.Index);
-                    // 너무 앞선 프레임을 꺼냈으면 그 시각까지 다음 틱에서 기다린다
                 }
-                if (_videoDone && _frames.Count == 0 && (_lastShown >= target || _from + target >= _to))
+                if (_videoDone && _frames.Count == 0 && _pending.Pixels == null && (_lastShown >= target || _from + target >= _to))
                 {
                     _owner.Position?.Invoke(Math.Min(_to, _from + Math.Max(_lastShown, 0)));
                     _owner.Stop();
