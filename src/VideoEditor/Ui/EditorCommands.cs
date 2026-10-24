@@ -344,6 +344,11 @@ namespace VideoEditor.Ui
             Run(p => TimelineEdits.AddTrack(p, kind), (kind == TrackKind.Video ? "동영상" : "오디오") + " 트랙을 더했습니다.");
         }
 
+        public void AddSubtitleTrack()
+        {
+            Run(p => TimelineEdits.AddSubtitleTrack(p), "자막 트랙을 더했습니다. SRT·VTT를 끌어 놓거나 [파일 > 자막 가져오기…]로 큐를 넣으세요.");
+        }
+
         public void RemoveTrack(string trackId)
         {
             var track = Project.FindTrack(trackId);
@@ -386,8 +391,11 @@ namespace VideoEditor.Ui
             ImportSubtitleFile(dialog.FileName);
         }
 
-        /// <summary>자막 파일 하나를 읽어 새 자막 트랙으로(10MB까지, UTF-8·UTF-16·CP949). 놓은 큐 수(실패하면 0).</summary>
-        public int ImportSubtitleFile(string path)
+        /// <summary>
+        /// 자막 파일 하나를 읽어 자막 구역으로(10MB까지, UTF-8·UTF-16·CP949): 자막 트랙 위에 놓았으면 그 트랙에, 아니면 새 자막 트랙에.
+        /// 시각은 파일 그대로(0초 기준). 놓은 큐 수(실패하면 0).
+        /// </summary>
+        public int ImportSubtitleFile(string path, Track target = null)
         {
             List<SubtitleCue> cues;
             try
@@ -411,7 +419,9 @@ namespace VideoEditor.Ui
                 Status("자막을 찾지 못했습니다(SRT·VTT 형식이 아님): " + Path.GetFileName(path));
                 return 0;
             }
-            return Run(p => TimelineEdits.ImportSubtitles(p, cues), "자막 " + cues.Count + "개를 가져왔습니다(" + Path.GetFileName(path) + ").") ? cues.Count : 0;
+            var targetId = target != null && target.Subtitles ? target.Id : null;
+            return Run(p => TimelineEdits.ImportSubtitles(p, cues, targetId != null ? p.FindTrack(targetId) : null),
+                "자막 " + cues.Count + "개를 가져왔습니다(" + Path.GetFileName(path) + ").") ? cues.Count : 0;
         }
 
         /// <summary>[URL에서 가져오기]: 직접 링크·유튜브 주소 또는 유튜브 검색으로 받아 미디어 목록에 더한다.</summary>
@@ -448,7 +458,7 @@ namespace VideoEditor.Ui
             // 자막 파일은 미디어가 아니라 자막 트랙으로
             var subtitleCount = 0;
             foreach (var subtitle in paths.Where(SubtitleFile.IsSubtitleFile))
-                subtitleCount += ImportSubtitleFile(subtitle) > 0 ? 1 : 0;
+                subtitleCount += ImportSubtitleFile(subtitle, track) > 0 ? 1 : 0;
             paths = paths.Where(p => !SubtitleFile.IsSubtitleFile(p)).ToArray();
             if (paths.Length == 0)
                 return subtitleCount;

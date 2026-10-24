@@ -377,7 +377,8 @@ namespace VideoEditor.Ui
                 Item("타임라인에 맞춤", "Shift+Z", _timeline.Canvas.ZoomToFit),
                 null,
                 Item("동영상 트랙 추가", "", () => _commands.AddTrack(TrackKind.Video)),
-                Item("오디오 트랙 추가", "", () => _commands.AddTrack(TrackKind.Audio))));
+                Item("오디오 트랙 추가", "", () => _commands.AddTrack(TrackKind.Audio)),
+                Item("자막 트랙 추가", "", _commands.AddSubtitleTrack)));
             menu.Items.Add(Top("도움말", Item("단축키…", "F1", ShowShortcuts)));
             return menu;
         }
@@ -430,6 +431,7 @@ namespace VideoEditor.Ui
                 menu.Items.Add(new Separator());
                 menu.Items.Add(Item("동영상 트랙 추가", "", () => _commands.AddTrack(TrackKind.Video)));
                 menu.Items.Add(Item("오디오 트랙 추가", "", () => _commands.AddTrack(TrackKind.Audio)));
+                menu.Items.Add(Item("자막 트랙 추가", "", _commands.AddSubtitleTrack));
             }
             menu.IsOpen = true;
         }
