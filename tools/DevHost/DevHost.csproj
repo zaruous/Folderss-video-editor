@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    개발용 호스트: Folderss 없이 이 플러그인 하나만 띄운다(scripts/run-host.bat).
+    Folderss PluginManager와 같은 방식으로 zip을 풀어 PluginLoadContext로 불러 Initialize → CreateView를 팝업 창에 담는다.
+    - 이 프로젝트를 빌드하면 플러그인도 같은 구성으로 빌드되어 zip이 새로 만들어진다(DLL은 참조하지 않음 — zip에서 따로 불러야 Folderss 안과 같은 조건).
+    - 플러그인 데이터(설정)는 실제 Folderss와 따로 %LOCALAPPDATA%\Folderss-devhost\<플러그인 id>에 둔다.
+    - Visual Studio에서 시작 프로젝트로 두고 F5를 누르면 플러그인 코드의 중단점에 걸린다.
+    플러그인 zip에는 들어가지 않고, CI도 빌드하지 않는다.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>DevHost</RootNamespace>
+    <AssemblyName>DevHost</AssemblyName>
+    <!-- 띄울 플러그인: src\<PluginName>\<PluginName>.csproj. 플러그인 이름을 바꾸면 여기만 고친다 -->
+    <PluginName>VideoEditor</PluginName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\$(PluginName)\$(PluginName).csproj" ReferenceOutputAssembly="false" />
+    <!-- 계약은 기본 로드 컨텍스트에 둔다(Folderss와 같음 — PluginLoadContext가 계약은 넘겨받는다) -->
+    <ProjectReference Include="..\..\contract\Folderss.PluginContract\Folderss.PluginContract.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 기본으로 띄울 플러그인 zip(PackPlugin 타깃이 만든 것). 명령줄 첫 인수로 다른 zip을 줄 수 있다 -->
+    <AssemblyMetadata Include="PluginZip" Value="$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\src\$(PluginName)\bin\$(Configuration)\$(TargetFramework)\$(PluginName).zip'))" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Folderss 테마 색 사전과 컨트롤 스타일 — 화면 시험이 쓰는 사본을 같이 쓴다 -->
+    <EmbeddedResource Include="..\..\tests\VideoEditor.UiTests\Themes\*.xaml" LogicalName="Themes.%(Filename).xaml" Link="Themes\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>
