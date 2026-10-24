@@ -112,7 +112,11 @@ dotnet build                                   # 플러그인 zip: src/VideoEdit
 $env:FOLDERSS_VE_FFMPEG = "C:\ffmpeg\bin"       # 시험이 쓸 FFmpeg 폴더(없으면 PATH 등에서 찾음)
 dotnet test tests/VideoEditor.Tests            # 단위 + 실제 FFmpeg 통합 시험(픽셀 색·프레임 수·음량·크로스페이드·취소·내려받기)
 pwsh scripts/ui-test.ps1                       # 화면 시험(숨은 데스크톱): 가져오기→편집→내보내기, 재생, 끌기·다듬기, 속성, 글자·마커, 테마 7종
+scripts\run-host.bat                           # Folderss 없이 이 플러그인만 개발용 호스트(tools/DevHost)로 띄우기
 ```
+
+- `scripts\run-host.bat [Release] [--theme Light] [--fresh] [--data 폴더] [--wait]`은 플러그인 zip과 `tools/DevHost`를 빌드한 뒤, zip을 Folderss와 같은 방식(PluginLoadContext → Initialize → CreateView)으로 불러 창에 띄웁니다. 창 위 막대에서 테마를 바꾸고 플러그인 설정 화면을 엽니다. 플러그인 데이터는 실제 Folderss와 따로 `%LOCALAPPDATA%\Folderss-devhost\<플러그인 id>`에 남고, `--fresh`는 빈 데이터로 시작합니다. Visual Studio에서 DevHost를 시작 프로젝트로 두고 F5를 누르면 플러그인 코드의 중단점에 걸립니다.
+- `scripts\run-host.bat --headless [--shot 파일.png] [--settle 초] [--timeout 초]`는 사용자 화면에 띄우지 않고 숨은 데스크톱(화면 시험과 같은 방식)에서 불러 그려 본 뒤 스스로 끝납니다. 기록과 결과는 콘솔에 나오고, 종료 코드는 0 성공 · 1 플러그인 UI 오류 · 2 불러오기 실패 · 3 시간 초과(사람이 닫아야 하는 창에서 멈춤)입니다. 화면을 눌러 보는 흐름까지 확인하려면 `scripts/ui-test.ps1`(화면 시험)을 씁니다.
 
 - `tests/VideoEditor.Tests`는 Core·Media를 net8.0으로 링크해 CI(Ubuntu, 배포판 FFmpeg)에서도 돕니다.
 - `tests/VideoEditor.UiTests`는 [플러그인 템플릿](https://github.com/zaruous/FolderssPLuginTemplate)의 헤드리스 시험 호스트입니다. 사용자 화면에 창을 띄우지 않고, 캡처는 실행 끝에 나오는 `shots` 폴더에 남습니다. Visual Studio 테스트 탐색기에서 `SmokeHeadlessTests.OpenView`를 **디버그**로 실행하면 편집 창이 화면에 떠서 중단점을 쓸 수 있습니다.
