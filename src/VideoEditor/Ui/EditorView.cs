@@ -328,6 +328,7 @@ namespace VideoEditor.Ui
                 null,
                 Item("미디어 가져오기…", "Ctrl+I", _commands.Import),
                 Item("URL에서 가져오기…", "", _commands.ImportFromUrl),
+                Item("자막 가져오기…", "", _commands.ImportSubtitles),
                 Item("내보내기…", "Ctrl+E", _commands.Export),
                 null,
                 Item("프로젝트 설정…", "", _commands.ProjectSettings),

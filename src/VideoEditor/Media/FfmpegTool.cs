@@ -26,6 +26,8 @@ namespace VideoEditor.Media
         public int MajorVersion { get; private set; }
         public string VersionLine { get; private set; }
         public HashSet<string> Encoders { get; private set; }
+        /// <summary>쓸 수 있는 필터(못 읽었으면 null — 있다고 본다).</summary>
+        public HashSet<string> Filters { get; private set; }
 
         private static string ExeName(string name)
         {
@@ -59,7 +61,8 @@ namespace VideoEditor.Media
                     FfprobePath = ffprobe,
                     VersionLine = version.Output.Split('\n')[0].Trim(),
                     MajorVersion = FfmpegText.MajorVersion(version.Output),
-                    Encoders = FfmpegText.Encoders(encoders.Output)
+                    Encoders = FfmpegText.Encoders(encoders.Output),
+                    Filters = ReadFilters(ffmpeg)
                 };
             }
             catch (Exception)
@@ -144,6 +147,27 @@ namespace VideoEditor.Media
         public bool HasEncoder(string name)
         {
             return Encoders != null && Encoders.Contains(name);
+        }
+
+        /// <summary>필터 목록. 못 읽었거나(시간 초과 등) 비어 있으면 null — 모르는 것으로 둔다(FFmpeg 찾기는 실패시키지 않는다).</summary>
+        private static HashSet<string> ReadFilters(string ffmpeg)
+        {
+            try
+            {
+                var result = FfmpegRunner.RunText(ffmpeg, new[] { "-hide_banner", "-filters" }, TimeSpan.FromSeconds(15), CancellationToken.None).GetAwaiter().GetResult();
+                var filters = result.ExitCode == 0 ? FfmpegText.Filters(result.Output) : null;
+                return filters != null && filters.Count > 0 ? filters : null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>필터가 있는지(목록을 못 읽었으면 있다고 본다 — FFmpeg가 직접 알린다).</summary>
+        public bool HasFilter(string name)
+        {
+            return Filters == null || Filters.Contains(name);
         }
 
         /// <summary>쓸 수 있는 H.264 인코더(자동 선택 순서: libx264 → Windows Media Foundation → mpeg4).</summary>

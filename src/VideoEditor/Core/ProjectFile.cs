@@ -96,7 +96,14 @@ namespace VideoEditor.Core
             foreach (var track in project.VideoTracks)
                 track.Kind = TrackKind.Video;
             foreach (var track in project.AudioTracks)
+            {
                 track.Kind = TrackKind.Audio;
+                track.Subtitles = false;
+            }
+            // 주 트랙(동영상 1)은 자막 트랙일 수 없고, 자막 트랙에는 글자만 있어야 한다(아니면 보통 트랙으로 — 사진·소리가 숨지 않게)
+            project.VideoTracks[0].Subtitles = false;
+            foreach (var track in project.VideoTracks.Where(t => t.Subtitles && t.Clips.Any(c => c.Kind != ClipKind.Text)))
+                track.Subtitles = false;
             // Id는 16진수 짧은 글이고 겹치지 않아야 한다(프로젝트 파일은 남이 만든 것일 수 있음)
             var ids = new System.Collections.Generic.HashSet<string>();
             foreach (var item in project.AllTracks.Select(t => (object)t).Concat(project.AllClips).Concat(project.Markers))

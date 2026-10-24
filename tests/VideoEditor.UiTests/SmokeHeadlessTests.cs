@@ -312,7 +312,8 @@ namespace VideoEditor.UiTests
 
                 // 속성: 불투명도 50 → 실행 취소
                 ui.Run(() => SelectClip(window, n => n.StartsWith("동영상 2 · red.png", StringComparison.Ordinal)));
-                await ui.WaitFor(() => Ui.ById<TextBox>(window, "PropOpacity"), Wait, "속성 패널");
+                // 찾아져도 아직 화면에 붙기 전이면 키를 보낼 수 없다 — 보일 때까지 기다린다
+                await ui.WaitFor(() => Ui.ById<TextBox>(window, "PropOpacity") is TextBox shown && shown.IsVisible ? shown : null, Wait, "속성 패널");
                 ui.Run(() =>
                 {
                     var box = Ui.ById<TextBox>(window, "PropOpacity");

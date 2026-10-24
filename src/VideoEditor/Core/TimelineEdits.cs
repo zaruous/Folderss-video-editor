@@ -72,8 +72,15 @@ namespace VideoEditor.Core
 
         public static bool Accepts(Track track, Clip clip)
         {
-            return track.Kind == TrackKind.Audio ? IsAudioClip(clip) : !IsAudioClip(clip);
+            if (track.Kind == TrackKind.Audio)
+                return IsAudioClip(clip);
+            // 자막 트랙에는 자막(글자 클립)만
+            if (track.Subtitles)
+                return clip.Kind == ClipKind.Text;
+            return !IsAudioClip(clip);
         }
+
+        private const string SubtitleOnly = "자막 트랙에는 자막(글자)만 놓을 수 있습니다.";
 
         /// <summary>동영상 파일 클립을 오디오 트랙에 놓을 때: 같은 원본의 소리만 쓰는 클립으로 바꾼다.</summary>
         public static void MakeAudioOnly(Clip clip)
@@ -115,7 +122,7 @@ namespace VideoEditor.Core
         {
             EnsureEditable(track);
             if (!Accepts(track, clip))
-                throw new EditException(track.Kind == TrackKind.Audio ? "오디오 트랙에는 소리 클립만 놓을 수 있습니다." : "동영상 트랙에는 오디오 파일을 놓을 수 없습니다.");
+                throw new EditException(track.Subtitles ? SubtitleOnly : track.Kind == TrackKind.Audio ? "오디오 트랙에는 소리 클립만 놓을 수 있습니다." : "동영상 트랙에는 오디오 파일을 놓을 수 없습니다.");
             start = Math.Max(0, start);
             if (IsMagnetic(project, track))
             {
@@ -148,7 +155,7 @@ namespace VideoEditor.Core
             EnsureEditable(source);
             EnsureEditable(target);
             if (!Accepts(target, clip))
-                throw new EditException(target.Kind == TrackKind.Audio ? "오디오 트랙에는 소리 클립만 놓을 수 있습니다." : "동영상 트랙에는 오디오 클립을 놓을 수 없습니다.");
+                throw new EditException(target.Subtitles ? SubtitleOnly : target.Kind == TrackKind.Audio ? "오디오 트랙에는 소리 클립만 놓을 수 있습니다." : "동영상 트랙에는 오디오 클립을 놓을 수 없습니다.");
             source.Clips.Remove(clip);
             if (IsMagnetic(project, source))
                 Compact(source);
@@ -421,14 +428,59 @@ namespace VideoEditor.Core
 
         // ---------- 트랙 ----------
 
-        /// <summary>트랙을 더한다(동영상은 맨 위, 오디오는 맨 아래).</summary>
+        /// <summary>트랙을 더한다(동영상은 맨 위 — 자막 트랙이 있으면 그 아래라 자막이 늘 위에 그려진다, 오디오는 맨 아래).</summary>
         public static Track AddTrack(Project project, TrackKind kind)
         {
             var track = new Track { Kind = kind };
             if (kind == TrackKind.Video)
-                project.VideoTracks.Add(track);
+            {
+                var firstSubtitles = project.VideoTracks.FindIndex(t => t.Subtitles);
+                if (firstSubtitles > 0)
+                    project.VideoTracks.Insert(firstSubtitles, track);
+                else
+                    project.VideoTracks.Add(track);
+            }
             else
+            {
                 project.AudioTracks.Add(track);
+            }
+            project.RenameTracks();
+            return track;
+        }
+
+        /// <summary>
+        /// 자막 큐들로 맨 위에 새 자막 트랙을 만든다(시각 그대로). 겹치는 큐는 앞 큐를 다음 큐 시작에서 끊고, 시작이 같으면 한 큐로 합친다.
+        /// 놓을 큐가 없으면 null.
+        /// </summary>
+        public static Track ImportSubtitles(Project project, IReadOnlyList<SubtitleCue> cues)
+        {
+            var rate = project.Rate;
+            var clips = new List<Clip>();
+            foreach (var cue in cues.OrderBy(c => c.Start))
+            {
+                var start = rate.ToFrames(cue.Start);
+                var end = rate.ToFrames(cue.End);
+                // 한 프레임도 안 되는 큐는 보이지 않는다(자동 자막의 10ms 큐 등) — 버린다
+                if (end <= start)
+                    continue;
+                var previous = clips.Count > 0 ? clips[clips.Count - 1] : null;
+                if (previous != null && start <= previous.Start)
+                {
+                    // 같은 프레임에 시작하면 한 큐로 — 같은 글은 한 번만, 합쳐도 2,000자까지
+                    if (!previous.Text.Contains(cue.Text, StringComparison.Ordinal))
+                        previous.Text = SubtitleFile.Cut(previous.Text + "\n" + cue.Text, SubtitleFile.MaxTextLength);
+                    previous.SourceOut = Math.Max(previous.SourceOut, end - previous.Start);
+                    continue;
+                }
+                if (previous != null && previous.End > start)
+                    previous.SourceOut = start - previous.Start;
+                clips.Add(CreateText(cue.Text, start, end - start));
+            }
+            if (clips.Count == 0)
+                return null;
+            var track = new Track { Kind = TrackKind.Video, Subtitles = true };
+            track.Clips.AddRange(clips);
+            project.VideoTracks.Add(track);
             project.RenameTracks();
             return track;
         }

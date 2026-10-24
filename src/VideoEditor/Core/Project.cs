@@ -53,6 +53,8 @@ namespace VideoEditor.Core
         public bool Muted { get; set; }
         /// <summary>잠금(이 트랙의 클립을 옮기거나 고칠 수 없음).</summary>
         public bool Locked { get; set; }
+        /// <summary>자막 트랙(동영상 트랙만): 글자 클립을 큐로 보고 트랙 공통 모양으로 화면 아래에 입힌다(libass). 글자 클립만 놓인다.</summary>
+        public bool Subtitles { get; set; }
         public double Height { get; set; } = 56;
         public List<Clip> Clips { get; set; } = new List<Clip>();
 
@@ -264,8 +266,16 @@ namespace VideoEditor.Core
         /// <summary>트랙 이름을 순번대로 다시 붙인다(동영상 1, 2…/오디오 1, 2…).</summary>
         public void RenameTracks()
         {
-            for (var i = 0; i < VideoTracks.Count; i++)
-                VideoTracks[i].Name = "동영상 " + (i + 1);
+            // 자막 트랙은 "자막"(여러 개면 "자막 2"…)이고 동영상 번호에서 뺀다
+            var subtitleTracks = VideoTracks.Count(t => t.Subtitles);
+            int video = 0, subtitle = 0;
+            foreach (var track in VideoTracks)
+            {
+                if (track.Subtitles)
+                    track.Name = subtitleTracks == 1 ? "자막" : "자막 " + ++subtitle;
+                else
+                    track.Name = "동영상 " + ++video;
+            }
             for (var i = 0; i < AudioTracks.Count; i++)
                 AudioTracks[i].Name = "오디오 " + (i + 1);
         }
