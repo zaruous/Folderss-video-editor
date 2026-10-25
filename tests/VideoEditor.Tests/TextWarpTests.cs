@@ -91,6 +91,8 @@ namespace VideoEditor.Tests
         [Fact]
         public void Circle_FullTurn_BaselineEndsMeet_AtSameRadius()
         {
+            // 반지름(1/2π ≈ 0.16)이 글 덩어리 높이보다 커서 하한에 걸리지 않는 낮은 글
+            const double Aspect = 0.1;
             var left = TextWarp.Map(WarpKind.Circle, 100, 0, 1, Aspect);
             var right = TextWarp.Map(WarpKind.Circle, 100, 1, 1, Aspect);
             // 폭 단위 좌표로 비교한다
@@ -104,6 +106,53 @@ namespace VideoEditor.Tests
             var middle = TextWarp.Map(WarpKind.Circle, 100, 0.5, 1, Aspect);
             Assert.Equal(Distance(middle), Distance(left), 9);
             Assert.Equal(Distance(middle), Distance(right), 9);
+        }
+
+        public static IEnumerable<object[]> ShortTexts()
+        {
+            // 두 글자(≈ 0.67), 한 글자(≈ 1.3), 여러 줄(≈ 2.5) — 글 덩어리 높이가 원 지름보다 클 수 있는 글
+            foreach (var aspect in new[] { 0.67, 1.3, 2.5 })
+            {
+                foreach (var amount in new[] { 30.0, 50, 100, -30, -50, -100 })
+                    yield return new object[] { aspect, amount };
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(ShortTexts))]
+        public void Circle_ShortText_DoesNotFold(double aspect, double amount)
+        {
+            // 글자 아래 끝이 원 중심을 넘으면 좌우가 뒤집힌다(#26) — 위·가운데·아래 모두 왼쪽 → 오른쪽 순서를 지킨다
+            foreach (var v in new[] { 0.0, 0.5, 1.0 })
+            {
+                var left = TextWarp.Map(WarpKind.Circle, amount, 0.1, v, aspect);
+                var right = TextWarp.Map(WarpKind.Circle, amount, 0.9, v, aspect);
+                Assert.True(left.U < right.U, "v " + v + ": 왼쪽 " + left.U + " · 오른쪽 " + right.U);
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(ShortTexts))]
+        public void Circle_ShortText_InnerEdgeKeepsAThirdOfTheOuter(double aspect, double amount)
+        {
+            // 반지름 하한 = 글 덩어리 높이 → 안쪽 원은 바깥 원의 1/3 이상(한 점으로 모이지 않음)
+            double EdgeLength(double v)
+            {
+                var length = 0.0;
+                var previous = TextWarp.Map(WarpKind.Circle, amount, 0, v, aspect);
+                for (var i = 1; i <= 200; i++)
+                {
+                    var p = TextWarp.Map(WarpKind.Circle, amount, i / 200.0, v, aspect);
+                    length += Math.Sqrt(Math.Pow(p.U - previous.U, 2) + Math.Pow((p.V - previous.V) * aspect, 2));
+                    previous = p;
+                }
+                return length;
+            }
+            var inner = amount > 0 ? EdgeLength(1) : EdgeLength(0);
+            var outer = amount > 0 ? EdgeLength(0) : EdgeLength(1);
+            Assert.True(inner >= outer / 3 - 1e-6, "안쪽 " + inner + " · 바깥 " + outer);
+            // 가운데 줄 길이는 1 그대로(글자 가로 비율 유지)
+            Assert.Equal(1, EdgeLength(0.5), 3);
         }
 
         [Fact]
@@ -138,8 +187,8 @@ namespace VideoEditor.Tests
         /// <summary>원 중심에서 본 점의 각도(풀린 값). 중심은 Map의 식과 같다.</summary>
         private static double CircleAngle(double amount, (double U, double V) p, double u)
         {
-            var span = Math.Abs(amount) / 100 * 2 * Math.PI;
-            var radius = 1 / span;
+            var radius = Math.Max(1 / (Math.Abs(amount) / 100 * 2 * Math.PI), Aspect);
+            var span = 1 / radius;
             var y = p.V * Aspect;
             var centerY = amount > 0 ? Aspect / 2 + radius : Aspect / 2 - radius;
             var angle = amount > 0 ? Math.Atan2(p.U - 0.5, centerY - y) : Math.Atan2(p.U - 0.5, y - centerY);

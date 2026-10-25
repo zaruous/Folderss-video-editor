@@ -30,7 +30,7 @@ namespace VideoEditor.Ui
         private bool _disposed;
 
         /// <summary>그리는 방식을 바꾸면 올린다(캐시 키에 들어가 예전 PNG를 쓰지 않게).</summary>
-        public int Version { get { return 8; } }
+        public int Version { get { return 9; } }
 
         /// <summary>어느 스레드에서 불러도 된다. 배경 그리기 스레드에 맡기고 끝날 때까지(최대 30초) 기다린다.</summary>
         public void Render(TextImageRequest request, string pngPath, CancellationToken cancellation)

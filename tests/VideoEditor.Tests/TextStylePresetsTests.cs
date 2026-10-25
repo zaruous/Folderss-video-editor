@@ -155,8 +155,6 @@ namespace VideoEditor.Tests
                 var right = TextWarp.Map(WarpKind.Circle, amount, 0.9, v, twoLetters);
                 Assert.True(left.U < right.U, "v " + v + ": 왼쪽 " + left.U + " · 오른쪽 " + right.U);
             }
-            // 비교가 헛돌지 않는지: 정도 50이면 같은 글자의 아래 끝이 뒤집힌다
-            Assert.True(TextWarp.Map(WarpKind.Circle, 50, 0.1, 1, twoLetters).U > TextWarp.Map(WarpKind.Circle, 50, 0.9, 1, twoLetters).U);
         }
     }
 }
