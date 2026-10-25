@@ -1119,14 +1119,32 @@ namespace VideoEditor.UiTests
             return JsonSerializer.Serialize(style, style.GetType(), options);
         }
 
+        /// <summary>스타일 객체의 묶음(Glow·Reflection·Warp 등) 속성 하나를 바꾼다 — enum 속성은 이름(string)으로 준다.</summary>
+        private static void SetPart(object style, string part, string property, object value)
+        {
+            var target = Get(style, part);
+            var info = target.GetType().GetProperty(property);
+            info.SetValue(target, value is string name && info.PropertyType.IsEnum ? Enum.Parse(info.PropertyType, name) : value);
+        }
+
+        /// <summary>칠한 폭의 fraction 위치 열(폭의 2% 띠)에서 칠한 픽셀의 무게중심 y.</summary>
+        private static double CenterAt(Png png, double fraction)
+        {
+            var (left, right) = png.Extent(0, png.Height);
+            var span = right - left;
+            var band = Math.Max(2, span / 50);
+            var x = left + (int)(span * fraction) - band / 2;
+            return png.CenterY(x, x + band);
+        }
+
         [UiFact]
         public async Task Rasterizer_StylePresets_EachDrawsItsThumbnail()
         {
-            // 갤러리와 같은 요청(EditorServices.StylePreviewRequest: "가나Ab" 48px)으로 8개를 그린다
+            // 갤러리와 같은 요청(EditorServices.StylePreviewRequest: "가나Ab" 48px)으로 16개를 그린다
             var rasterizer = NewRasterizer();
             var services = rasterizer.GetType().Assembly.GetType("VideoEditor.Ui.EditorServices", true);
             var presets = Presets();
-            Assert.Equal(8, presets.Count);
+            Assert.Equal(16, presets.Count);
             var drawn = new System.Collections.Generic.List<Png>();
             for (var i = 0; i < presets.Count; i++)
             {
@@ -1165,6 +1183,79 @@ namespace VideoEditor.UiTests
             // 속 빈 글자: 칠한 픽셀은 흰 윤곽선뿐이다
             var hollow = drawn[presets.FindIndex(p => p.Name == "속 빈 글자")];
             Assert.Equal(0, Count(hollow, p => p.A > 128 && (p.R < 200 || p.G < 200 || p.B < 200)));
+
+            // 2단계의 8개(#22): 썸네일에 이름이 말하는 효과가 보인다 — 같은 스타일에서 그 효과만 끄고 그린 것과 견준다(PNG 가운데 = 배치 상자 가운데)
+            Png Drawn(string name) => drawn[presets.FindIndex(p => p.Name == name)];
+            async Task<Png> Without(string name, string part, string property, object value)
+            {
+                var index = presets.FindIndex(p => p.Name == name);
+                var style = Presets()[index].Style;
+                SetPart(style, part, property, value);
+                return await Render(rasterizer, services.GetMethod("StylePreviewRequest").Invoke(null, new[] { style }), "preset-" + index + "-without-" + part);
+            }
+
+            // 네온: 광선 색(#0EA5E9 — 윤곽선 #BAE6FD보다 빨강이 훨씬 적다) 픽셀이 광선을 끈 그림에서 비어 있는 곳(글자 윤곽선 밖)에 있다
+            var neon = Drawn("네온");
+            var unlit = await Without("네온", "Glow", "Enabled", false);
+            var glowOutside = 0;
+            for (var y = 0; y < neon.Height; y++)
+            {
+                for (var x = 0; x < neon.Width; x++)
+                {
+                    var p = neon.Pixel(x, y);
+                    if (p.A < 64 || p.R > 100 || p.B < 150)
+                        continue;
+                    var ux = x - (neon.Width - unlit.Width) / 2;
+                    var uy = y - (neon.Height - unlit.Height) / 2;
+                    if (ux < 0 || uy < 0 || ux >= unlit.Width || uy >= unlit.Height || unlit.Alpha(ux, uy) == 0)
+                        glowOutside++;
+                }
+            }
+            _out.WriteLine("네온: 윤곽선 밖 광선 색 픽셀 " + glowOutside + " · 광선 끔 " + Count(unlit, p => p.A >= 64 && p.R <= 100 && p.B >= 150));
+            Assert.True(glowOutside > 300, "네온 광선 " + glowOutside);
+            Assert.Equal(0, Count(unlit, p => p.A >= 64 && p.R <= 100 && p.B >= 150));
+
+            // 유리 반사·금빛 반사: 반사를 끈 그림의 글자 아래 끝보다 아래(간격·가장자리 줄은 건너뜀)에 칠한 줄이 이어진다
+            foreach (var name in new[] { "유리 반사", "금빛 반사" })
+            {
+                var mirrored = Drawn(name);
+                var plain = await Without(name, "Reflection", "Enabled", false);
+                var start = mirrored.Height / 2 + (plain.Rows().Bottom - plain.Height / 2) + 4;
+                var below = 0;
+                for (var y = start; y < mirrored.Height; y++)
+                {
+                    for (var x = 0; x < mirrored.Width; x++)
+                        below += mirrored.Alpha(x, y) > 0 ? 1 : 0;
+                }
+                var last = InkBands(mirrored).Last().Bottom;
+                _out.WriteLine(name + ": 글자 아래 칠한 픽셀 " + below + " · " + (last - start) + "줄 더");
+                Assert.True(below > 300, name + " 반사 픽셀 " + below);
+                Assert.True(last - start >= 8, name + " 반사 높이 " + (last - start));
+            }
+
+            // 아치·원·물결·계단: 휘기를 끄고 그린 것과 견준 열 무게중심 y의 차이 — 이 차이를 열끼리 견주므로 글자 모양과 PNG 높이 차이는 빠진다(화면 y는 아래가 +)
+            async Task<double[]> Shift(string name, params double[] fractions)
+            {
+                var bent = Drawn(name);
+                var flat = await Without(name, "Warp", "Kind", "None");
+                var shift = fractions.Select(f => CenterAt(bent, f) - CenterAt(flat, f)).ToArray();
+                _out.WriteLine(name + ": 열 " + string.Join("/", fractions) + " 높이 차이 " + string.Join(", ", shift.Select(s => s.ToString("F1"))));
+                return shift;
+            }
+            var arch = await Shift("아치 제목", 0.05, 0.5, 0.95);
+            Assert.True(arch[1] < arch[0] - 6 && arch[1] < arch[2] - 6, "아치: 가운데가 양 끝보다 올라가야 한다");
+            // 원은 양 끝 글자가 기울어 맨 끝 열에는 기운 글자의 위아래가 함께 잡힌다 — 조금 안쪽 열로 본다
+            var circle = await Shift("원형 배지", 0.15, 0.5, 0.85);
+            Assert.True(circle[1] < circle[0] - 6 && circle[1] < circle[2] - 6, "원: 가운데가 양 끝보다 올라가야 한다");
+            var wave = await Shift("물결 글자", 0.25, 0.75);
+            Assert.True(wave[0] > wave[1] + 6, "물결: 왼쪽 ¼은 내려가고 오른쪽 ¼은 올라가야 한다");
+            var stairs = await Shift("계단 글자", 0.05, 0.5, 0.95);
+            Assert.True(stairs[0] > stairs[1] + 6 && stairs[1] > stairs[2] + 6, "계단: 오른쪽으로 갈수록 올라가야 한다");
+
+            // 무지개 그라데이션: 왼쪽 빨강부터 오른쪽 파랑까지(0° 선형 4색)
+            var rainbow = Drawn("무지개 그라데이션");
+            Assert.True(Count(rainbow, p => p.A == 255 && p.R > 180 && p.G < 120 && p.B < 120) > 30, "빨간 픽셀");
+            Assert.True(Count(rainbow, p => p.A == 255 && p.B > 180 && p.R < 120) > 30, "파란 픽셀");
             ((IDisposable)rasterizer).Dispose();
         }
 
@@ -1867,8 +1958,8 @@ namespace VideoEditor.UiTests
                 var id = await AddStyledText(ui, window, "모음 ABC");
                 await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
                 var presets = Presets();
-                Assert.Equal(8, presets.Count);
-                // 꾸미기 탭 맨 위에 단추 8개 — 화면 낭독·글자로 찾기는 스타일 이름으로
+                Assert.Equal(16, presets.Count);
+                // 꾸미기 탭 맨 위에 단추 16개 — 화면 낭독·글자로 찾기는 스타일 이름으로
                 await ui.WaitFor(() => Ui.ById<Button>(window, "StylePreset" + (presets.Count - 1)), Wait, "스타일 모음 단추");
                 ui.Run(() =>
                 {
@@ -1882,6 +1973,25 @@ namespace VideoEditor.UiTests
                 });
                 // 썸네일이 시간 안에 채워진다(배경에서 그림)
                 await ui.WaitUntil(() => Enumerable.Range(0, presets.Count).All(i => Ui.ById<Image>(window, "StylePreset" + i + "Image")?.Source != null), Wait, "썸네일");
+                ui.Run(() =>
+                {
+                    // 16개라 좁은 속성 패널(시험 창 1280px에서 안쪽 약 200px)에도 한 줄에 셋 이상
+                    var gallery = Ui.ById<WrapPanel>(window, "StylePresets");
+                    gallery.UpdateLayout();
+                    double Top(int i) => Ui.ById<Button>(window, "StylePreset" + i).TranslatePoint(new Point(0, 0), gallery).Y;
+                    Assert.True(Math.Abs(Top(2) - Top(0)) < 1, "갤러리 폭 " + gallery.ActualWidth + "px — 한 줄에 셋이 들어가야 한다");
+                    // 썸네일은 틀 안 가운데: 반사·휘기처럼 칠한 곳이 치우친 것도 그림 가운데가 틀 밖으로 크게 벗어나지 않는다
+                    foreach (var name in new[] { "유리 반사", "원형 배지", "계단 글자" })
+                    {
+                        var image = Ui.ById<Image>(window, "StylePreset" + presets.FindIndex(p => p.Name == name) + "Image");
+                        var frame = (FrameworkElement)VisualTreeHelper.GetParent(VisualTreeHelper.GetParent(image));
+                        var center = image.TranslatePoint(new Point(image.ActualWidth / 2, image.ActualHeight / 2), frame);
+                        _out.WriteLine(name + ": 그림 " + image.ActualWidth.ToString("F1") + "×" + image.ActualHeight.ToString("F1") + " · 가운데 " + center + " · 틀 " + frame.ActualWidth + "×" + frame.ActualHeight);
+                        Assert.InRange(center.X, 0, frame.ActualWidth);
+                        Assert.InRange(center.Y, 0, frame.ActualHeight);
+                        Assert.True(image.ActualWidth > frame.ActualWidth * 0.6, name + " 썸네일이 너무 작다");
+                    }
+                });
                 ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-presets"));
                 // 썸네일을 보이는 것만으로 스타일이 생기지 않는다
                 Assert.Null(ui.Run(() => StyleOf(window, id)));
@@ -1928,6 +2038,79 @@ namespace VideoEditor.UiTests
                 await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
                 Assert.Equal("#FFFFFF", ui.Run(() => (string)Get(ProjectClips(window).First(c => Equals(Get(c, "Id"), id)), "TextColor")));
                 await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        [EditorFact]
+        public async Task StylePresets_GlowReflectionWarp_FillTheirSections_UndoOneByOne()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                var id = await AddStyledText(ui, window, "모음 둘째");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                var presets = Presets();
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StylePreset" + (presets.Count - 1)), Wait, "스타일 모음 단추");
+                var shown = ui.Run(() => PreviewPixels(window));
+                var steps = new System.Collections.Generic.List<(int Index, byte[] Pixels)>();
+
+                // 2단계 스타일을 차례로 누른다: 스타일이 통째로 바뀌고 미리 보기가 바뀌며, 그 효과의 묶음 칸이 켜진다(검정 미리 보기 바탕에서도 보이는 색들)
+                foreach (var name in new[] { "네온", "유리 반사", "아치 제목" })
+                {
+                    var index = presets.FindIndex(p => p.Name == name);
+                    ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StylePreset" + index)));
+                    await ui.WaitUntil(() => StyleJson(StyleOf(window, id)) == StyleJson(presets[index].Style), Wait, name);
+                    var previous = shown;
+                    await ui.WaitUntil(() => Differs(previous, PreviewPixels(window)), Wait, name + " 미리 보기");
+                    await Task.Delay(500);
+                    shown = ui.Run(() => PreviewPixels(window));
+                    steps.Add((index, shown));
+                    ui.Run(() =>
+                    {
+                        Assert.Equal(name == "네온", Ui.ById<CheckBox>(window, "StyleGlowOn").IsChecked == true);
+                        Assert.Equal(name == "유리 반사", Ui.ById<CheckBox>(window, "StyleReflectionOn").IsChecked == true);
+                        Assert.Equal(name == "아치 제목" ? "아치 위" : "없음", Ui.ById<ComboBox>(window, "StyleWarpKind").SelectedItem);
+                        Assert.Equal(name == "아치 제목", Ui.ById<TextBox>(window, "StyleWarpAmount").IsEnabled);
+                        // [글자] 탭 글자 색 = 채우기 색 1(네온은 채우기 없음이어도 색 1을 남겨 둔다)
+                        var clip = ProjectClips(window).First(c => Equals(Get(c, "Id"), id));
+                        Assert.Equal((string)((System.Collections.IList)Get(Get(presets[index].Style, "Fill"), "Colors"))[0], (string)Get(clip, "TextColor"));
+                    });
+                    if (name == "네온")
+                        Assert.Equal("#0EA5E9", ui.Run(() => Ui.ById<TextBox>(window, "StyleGlowColor").Text));
+                    if (name == "아치 제목")
+                        Assert.Equal("60", ui.Run(() => Ui.ById<TextBox>(window, "StyleWarpAmount").Text));
+                }
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-presets-arch"));
+
+                // 실행 취소 한 번에 한 스타일씩 거꾸로(아치 → 유리 반사 → 네온 → 스타일 없음)
+                for (var k = steps.Count - 2; k >= -1; k--)
+                {
+                    ui.Run(() =>
+                    {
+                        Ui.Focus(Canvas(window));
+                        Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control);
+                    });
+                    if (k < 0)
+                    {
+                        await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
+                        break;
+                    }
+                    var (index, pixels) = steps[k];
+                    await ui.WaitUntil(() => StyleJson(StyleOf(window, id)) == StyleJson(presets[index].Style), Wait, "실행 취소 → " + presets[index].Name);
+                    await ui.WaitUntil(() => !Differs(pixels, PreviewPixels(window)), Wait, presets[index].Name + " 미리 보기로 돌아옴");
+                }
+                ui.Run(() =>
+                {
+                    Assert.False(Ui.ById<CheckBox>(window, "StyleGlowOn").IsChecked == true);
+                    Assert.Equal("없음", Ui.ById<ComboBox>(window, "StyleWarpKind").SelectedItem);
+                });
                 Assert.Empty(ui.TakeErrors());
             }
             finally

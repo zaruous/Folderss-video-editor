@@ -840,12 +840,13 @@ namespace VideoEditor.Ui
             return panel;
         }
 
-        // 스타일 모음 단추: 어두운 바탕(흰 글자·속 빈 글자도 보이게)에 썸네일을 반 크기로 놓는다.
-        // 썸네일 PNG의 가운데가 글자 가운데라 가운데 맞춤으로 두면 모두 같은 크기·위치로 보인다(넘치는 효과 여백은 잘림)
-        // 폭은 좁은 속성 패널(안쪽 약 200px)에도 한 줄에 둘씩 들어가게
-        private const double PresetTileWidth = 84;
-        private const double PresetTileHeight = 44;
-        private const double PresetThumbnailScale = 0.5;
+        // 스타일 모음 단추: 어두운 바탕(흰 글자·속 빈 글자도 보이게)에 썸네일을 줄여 놓는다(배율은 모두 같고, 칠한 곳이 틀보다 크면 그것만 더 줄임).
+        // 16개라 좁은 속성 패널(안쪽 약 200px)에도 한 줄에 셋씩 들어가게 — 단추 한 칸 = 틀 56 + 안쪽 여백·테두리 4 + 사이 3 = 63px
+        private const double PresetTileWidth = 56;
+        private const double PresetTileHeight = 38;
+        private const double PresetThumbnailScale = 0.34;
+        // 칠한 곳을 잴 때 이 알파 이하(옅은 흐림·광선 끝)는 빼고 잰다 — 틀 밖으로 나가면 잘린다
+        private const byte ThumbnailInkAlpha = 24;
         private static readonly System.Windows.Media.Brush PresetBackdrop = FrozenBrush(System.Windows.Media.Color.FromRgb(0x50, 0x50, 0x50));
 
         /// <summary>
@@ -865,14 +866,14 @@ namespace VideoEditor.Ui
                 {
                     Text = name,
                     Foreground = System.Windows.Media.Brushes.White,
-                    FontSize = 11,
+                    FontSize = 10,
                     TextWrapping = TextWrapping.Wrap,
                     TextAlignment = TextAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(4, 0, 4, 0)
+                    Margin = new Thickness(2, 0, 2, 0)
                 };
                 var frame = new Border { Width = PresetTileWidth, Height = PresetTileHeight, Background = PresetBackdrop, CornerRadius = new CornerRadius(3), ClipToBounds = true, Child = fallback };
-                var button = new Button { Content = frame, Padding = new Thickness(2), Margin = new Thickness(0, 0, 4, 4), ToolTip = name };
+                var button = new Button { Content = frame, Padding = new Thickness(1), Margin = new Thickness(0, 0, 3, 3), ToolTip = name };
                 AutomationProperties.SetAutomationId(button, "StylePreset" + i);
                 AutomationProperties.SetName(button, name);
                 button.Click += (s, e) => Edit(id, c =>
@@ -897,23 +898,30 @@ namespace VideoEditor.Ui
             return gallery;
         }
 
-        /// <summary>썸네일을 단추 틀에 넣는다(이미 그려 둔 것이면 바로, 아니면 다 그린 뒤 UI 스레드에서). 그리개가 없거나 실패하면 이름 글자를 그대로 둔다.</summary>
+        /// <summary>
+        /// 썸네일을 단추 틀(Width·Height를 정한 Border)에 넣는다(이미 그려 둔 것이면 바로, 아니면 다 그린 뒤 UI 스레드에서). 그리개가 없거나 실패하면 이름 글자를 그대로 둔다.
+        /// 썸네일 PNG의 가운데는 배치 상자 가운데라 반사·휘기는 칠한 곳이 한쪽으로 치우친다 — 칠한 곳의 가운데를 틀 가운데에 두고,
+        /// 칠한 곳이 틀(양옆 2px 남김)보다 크면 그만큼 더 줄인다(기본 배율보다 키우지는 않음).
+        /// </summary>
         private void ShowThumbnail(Border frame, TextStyle style, string automationId)
         {
             void Show(System.Windows.Media.Imaging.BitmapSource picture)
             {
+                var ink = InkBounds(picture);
+                var scale = Math.Min(PresetThumbnailScale, Math.Min((frame.Width - 4) / ink.Width, (frame.Height - 4) / ink.Height));
                 var image = new Image
                 {
                     Source = picture,
-                    Width = picture.PixelWidth * PresetThumbnailScale,
-                    Height = picture.PixelHeight * PresetThumbnailScale,
-                    Stretch = System.Windows.Media.Stretch.Fill,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
+                    Width = picture.PixelWidth * scale,
+                    Height = picture.PixelHeight * scale,
+                    Stretch = System.Windows.Media.Stretch.Fill
                 };
                 System.Windows.Media.RenderOptions.SetBitmapScalingMode(image, System.Windows.Media.BitmapScalingMode.HighQuality);
                 AutomationProperties.SetAutomationId(image, automationId);
-                frame.Child = image;
+                // Canvas는 틀보다 큰 그림을 자기 자리로 자르지 않는다 — 넘치는 곳은 틀(ClipToBounds)이 자른다
+                Canvas.SetLeft(image, frame.Width / 2 - (ink.X + ink.Width / 2) * scale);
+                Canvas.SetTop(image, frame.Height / 2 - (ink.Y + ink.Height / 2) * scale);
+                frame.Child = new Canvas { Children = { image } };
             }
             var task = _services.TextStylePreview(style);
             if (task.IsCompleted)
@@ -928,6 +936,29 @@ namespace VideoEditor.Ui
                     return;
                 Dispatcher.BeginInvoke(new Action(() => Show(t.Result)));
             }, System.Threading.Tasks.TaskScheduler.Default);
+        }
+
+        /// <summary>썸네일에서 알파가 <see cref="ThumbnailInkAlpha"/>를 넘는 픽셀의 경계(픽셀 단위). 그런 픽셀이 없으면 그림 전체.</summary>
+        private static Rect InkBounds(System.Windows.Media.Imaging.BitmapSource picture)
+        {
+            var bgra = new System.Windows.Media.Imaging.FormatConvertedBitmap(picture, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+            int width = bgra.PixelWidth, height = bgra.PixelHeight;
+            var pixels = new byte[width * height * 4];
+            bgra.CopyPixels(pixels, width * 4, 0);
+            int left = width, top = height, right = -1, bottom = -1;
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    if (pixels[(y * width + x) * 4 + 3] <= ThumbnailInkAlpha)
+                        continue;
+                    left = Math.Min(left, x);
+                    right = Math.Max(right, x);
+                    top = Math.Min(top, y);
+                    bottom = Math.Max(bottom, y);
+                }
+            }
+            return right < 0 ? new Rect(0, 0, width, height) : new Rect(left, top, right - left + 1, bottom - top + 1);
         }
 
         private static System.Windows.Media.Brush FrozenBrush(System.Windows.Media.Color color)
