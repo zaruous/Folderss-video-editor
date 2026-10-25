@@ -172,7 +172,7 @@ namespace VideoEditor.Ui
         /// <summary>맞춤 방식의 보일 이름.</summary>
         public static string FitName(ClipFit fit)
         {
-            return fit == ClipFit.Fill ? "화면 채우기" : fit == ClipFit.Stretch ? "늘이기" : "화면에 맞춤";
+            return fit == ClipFit.Fill ? "화면 채우기" : fit == ClipFit.Stretch ? "늘이기" : fit == ClipFit.Blur ? "흐린 배경으로 채우기" : "화면에 맞춤";
         }
 
         /// <summary>맞춤 방식 설명(메뉴·툴팁).</summary>
@@ -180,6 +180,7 @@ namespace VideoEditor.Ui
         {
             return fit == ClipFit.Fill ? "비율을 지켜 꽉 채우고 넘치는 곳은 잘라 냄"
                 : fit == ClipFit.Stretch ? "비율을 무시하고 화면 크기로"
+                : fit == ClipFit.Blur ? "다 보이게 하고 남는 곳은 같은 그림을 흐리게 깔아 채움"
                 : "비율을 지켜 다 보이게(남는 곳은 빔)";
         }
 

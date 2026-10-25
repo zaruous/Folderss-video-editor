@@ -426,7 +426,7 @@ namespace VideoEditor.Ui
                 {
                     // 화면 맞춤 방식(고른 클립 모두에) — 지금 방식에 표시
                     var fit = new MenuItem { Header = new TextBlock { Text = "화면 맞춤 방식" } };
-                    foreach (var kind in new[] { ClipFit.Fit, ClipFit.Fill, ClipFit.Stretch })
+                    foreach (var kind in new[] { ClipFit.Fit, ClipFit.Fill, ClipFit.Blur, ClipFit.Stretch })
                     {
                         var option = Item(EditorServices.FitName(kind) + " — " + EditorServices.FitHint(kind), "", () => _commands.SetFit(kind, clip.Id));
                         option.IsChecked = clip.Fit == kind;

@@ -190,11 +190,26 @@ namespace VideoEditor.Core
                     var boxWidth = Math.Max(2, (int)Math.Round(options.Width * scale / shrink));
                     var boxHeight = Math.Max(2, (int)Math.Round(options.Height * scale / shrink));
                     var fit = clip.Kind == ClipKind.Media ? clip.Fit : ClipFit.Fit;
-                    chain.AppendFormat(CultureInfo.InvariantCulture,
-                        fit == ClipFit.Fill ? ",scale=w={0}:h={1}:force_original_aspect_ratio=increase,crop={0}:{1},format=rgba"
-                        : fit == ClipFit.Stretch ? ",scale=w={0}:h={1},setsar=1,format=rgba"
-                        : ",scale=w={0}:h={1}:force_original_aspect_ratio=decrease,format=rgba",
-                        boxWidth, boxHeight);
+                    if (fit == ClipFit.Blur)
+                    {
+                        // 흐린 배경: 같은 그림을 둘로 나눠 하나는 틀을 채우게 키워 작게 줄였다 흐리고 늘인 뒤 조금 어둡게, 하나는 맞춤으로 그 가운데에
+                        var smallWidth = Math.Max(4, boxWidth / 8);
+                        var smallHeight = Math.Max(4, boxHeight / 8);
+                        var radius = Math.Max(1, Math.Min(8, Math.Min(smallWidth, smallHeight) / 2 - 1));
+                        chain.AppendFormat(CultureInfo.InvariantCulture,
+                            ",split[ba{0}][bb{0}];[ba{0}]scale=w={1}:h={2}:force_original_aspect_ratio=increase,crop={1}:{2},scale={3}:{4},boxblur={5}:2,scale={1}:{2},"
+                            + "colorchannelmixer=rr=0.8:gg=0.8:bb=0.8,format=rgba[bg{0}];[bb{0}]scale=w={1}:h={2}:force_original_aspect_ratio=decrease,format=rgba[bf{0}];"
+                            + "[bg{0}][bf{0}]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2:format=auto,format=rgba",
+                            n, boxWidth, boxHeight, smallWidth, smallHeight, radius);
+                    }
+                    else
+                    {
+                        chain.AppendFormat(CultureInfo.InvariantCulture,
+                            fit == ClipFit.Fill ? ",scale=w={0}:h={1}:force_original_aspect_ratio=increase,crop={0}:{1},format=rgba"
+                            : fit == ClipFit.Stretch ? ",scale=w={0}:h={1},setsar=1,format=rgba"
+                            : ",scale=w={0}:h={1}:force_original_aspect_ratio=decrease,format=rgba",
+                            boxWidth, boxHeight);
+                    }
                     if (Math.Abs(clip.Rotation) > 0.01)
                     {
                         var radians = N(clip.Rotation * Math.PI / 180);

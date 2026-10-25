@@ -42,6 +42,10 @@ namespace VideoEditor.Tests
             Assert.Contains(",scale=w=640:h=360:force_original_aspect_ratio=increase,crop=640:360,format=rgba", Filter(Photo(ClipFit.Fill).Project));
             Assert.Contains(",scale=w=320:h=180:force_original_aspect_ratio=increase,crop=320:180,format=rgba", Filter(Photo(ClipFit.Fill, 0.5).Project));
             Assert.Contains(",scale=w=640:h=360,setsar=1,format=rgba", Filter(Photo(ClipFit.Stretch).Project));
+            // 흐린 배경: 채우기로 키워 작게(1/8) 흐리고 늘인 바탕 위에 맞춤으로
+            var blur = Filter(Photo(ClipFit.Blur).Project);
+            Assert.Contains(",split[ba0][bb0];[ba0]scale=w=640:h=360:force_original_aspect_ratio=increase,crop=640:360,scale=80:45,boxblur=8:2,scale=640:360,", blur);
+            Assert.Contains("[bb0]scale=w=640:h=360:force_original_aspect_ratio=decrease,format=rgba[bf0];[bg0][bf0]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2:format=auto,format=rgba", blur);
         }
 
         [Fact]
@@ -107,10 +111,13 @@ namespace VideoEditor.Tests
             var fit = Corner(ClipFit.Fit);
             var fill = Corner(ClipFit.Fill);
             var stretch = Corner(ClipFit.Stretch);
-            _out.WriteLine("왼쪽 위 모서리 — 맞춤 " + fit + " · 채우기 " + fill + " · 늘이기 " + stretch);
+            var blur = Corner(ClipFit.Blur);
+            _out.WriteLine("왼쪽 위 모서리 — 맞춤 " + fit + " · 채우기 " + fill + " · 늘이기 " + stretch + " · 흐린 배경 " + blur);
             Assert.True(fit.R < 30, "맞춤은 빈 곳 " + fit);
             Assert.True(fill.R > 200 && fill.B < 60, "채우기 " + fill);
             Assert.True(stretch.R > 200 && stretch.B < 60, "늘이기 " + stretch);
+            // 흐린 배경: 빈 곳이 같은 그림(빨강)을 조금 어둡게(80%) 깐 것
+            Assert.True(blur.R > 150 && blur.R < 230 && blur.B < 60, "흐린 배경 " + blur);
         }
     }
 

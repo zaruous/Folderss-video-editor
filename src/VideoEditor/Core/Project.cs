@@ -242,7 +242,9 @@ namespace VideoEditor.Core
         /// <summary>화면 채우기: 비율을 지켜 꽉 채우고 넘치는 곳은 가운데 기준으로 자름.</summary>
         Fill,
         /// <summary>늘이기: 비율을 무시하고 화면 크기로.</summary>
-        Stretch
+        Stretch,
+        /// <summary>흐린 배경으로 채우기: 비율을 지켜 다 보이게 하고, 남는 곳은 같은 그림을 채우기로 키워 흐리게 깔아 채움(세로 쇼츠에 가로 사진 등).</summary>
+        Blur
     }
 
     public sealed class ClipWord

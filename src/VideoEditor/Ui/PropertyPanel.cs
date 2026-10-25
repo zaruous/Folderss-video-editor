@@ -163,7 +163,7 @@ namespace VideoEditor.Ui
                 var fits = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
                 AutomationProperties.SetAutomationId(fits, "PropFit");
                 AutomationProperties.SetName(fits, "맞춤 방식");
-                var fitKinds = new[] { ClipFit.Fit, ClipFit.Fill, ClipFit.Stretch };
+                var fitKinds = new[] { ClipFit.Fit, ClipFit.Fill, ClipFit.Blur, ClipFit.Stretch };
                 foreach (var kind in fitKinds)
                     fits.Items.Add(new ComboBoxItem { Content = EditorServices.FitName(kind), ToolTip = EditorServices.FitHint(kind) });
                 fits.SelectionChanged += (s, e) =>

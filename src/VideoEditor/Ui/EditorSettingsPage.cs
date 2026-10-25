@@ -16,7 +16,7 @@ namespace VideoEditor.Ui
         private TextBox _path;
         private TextBox _imageSeconds;
         private ComboBox _photoFit;
-        private static readonly ClipFit[] Fits = { ClipFit.Fill, ClipFit.Fit, ClipFit.Stretch };
+        private static readonly ClipFit[] Fits = { ClipFit.Fill, ClipFit.Blur, ClipFit.Fit, ClipFit.Stretch };
         private TextBox _ytDlp;
         private TextBox _downloadFolder;
 
