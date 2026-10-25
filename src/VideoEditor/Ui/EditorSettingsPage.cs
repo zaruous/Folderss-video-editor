@@ -4,16 +4,19 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using Folderss.Plugins;
+using VideoEditor.Core;
 using VideoEditor.Media;
 
 namespace VideoEditor.Ui
 {
-    /// <summary>Folderss 설정 창의 "동영상 편집" 탭: FFmpeg 경로(비우면 자동으로 찾음), 사진·글자 기본 길이, yt-dlp 경로, 다운로드 폴더.</summary>
+    /// <summary>Folderss 설정 창의 "동영상 편집" 탭: FFmpeg 경로(비우면 자동으로 찾음), 사진·글자 기본 길이, 사진을 놓을 때 맞춤 방식, yt-dlp 경로, 다운로드 폴더.</summary>
     internal sealed class EditorSettingsPage : IPluginSettingsPage
     {
         private readonly EditorServices _services;
         private TextBox _path;
         private TextBox _imageSeconds;
+        private ComboBox _photoFit;
+        private static readonly ClipFit[] Fits = { ClipFit.Fill, ClipFit.Blur, ClipFit.Fit, ClipFit.Stretch };
         private TextBox _ytDlp;
         private TextBox _downloadFolder;
 
@@ -60,6 +63,16 @@ namespace VideoEditor.Ui
             _imageSeconds = new TextBox { Width = 80, HorizontalAlignment = HorizontalAlignment.Left, Text = UiKit.Number(_services.ImageSeconds), Margin = new Thickness(0, 4, 0, 0) };
             AutomationProperties.SetAutomationId(_imageSeconds, "SettingsImageSeconds");
             panel.Children.Add(_imageSeconds);
+            var fitLabel = UiKit.Label("사진을 타임라인에 놓을 때 — 놓은 뒤에도 클립 오른쪽 메뉴·속성 [화면]에서 바꿀 수 있습니다");
+            fitLabel.Margin = new Thickness(0, 12, 0, 0);
+            fitLabel.TextWrapping = TextWrapping.Wrap;
+            panel.Children.Add(fitLabel);
+            _photoFit = new ComboBox { Width = 360, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 0) };
+            AutomationProperties.SetAutomationId(_photoFit, "SettingsPhotoFit");
+            foreach (var fit in Fits)
+                _photoFit.Items.Add(EditorServices.FitName(fit) + " — " + EditorServices.FitHint(fit));
+            _photoFit.SelectedIndex = Array.IndexOf(Fits, _services.PhotoFit);
+            panel.Children.Add(_photoFit);
             var ytDlpLabel = UiKit.Label("yt-dlp 경로 (URL·유튜브에서 가져오기) — 비우면 PATH·winget 설치 위치·플러그인이 받은 것을 찾습니다");
             ytDlpLabel.Margin = new Thickness(0, 12, 0, 0);
             ytDlpLabel.TextWrapping = TextWrapping.Wrap;
@@ -117,6 +130,8 @@ namespace VideoEditor.Ui
             double seconds;
             if (UiKit.TryNumber(_imageSeconds.Text, out seconds) && seconds > 0 && seconds <= 3600)
                 _services.Manager.SetSetting(EditorServices.ImageSecondsKey, UiKit.Number(seconds));
+            if (_photoFit.SelectedIndex >= 0)
+                _services.Manager.SetSetting(EditorServices.PhotoFitKey, Fits[_photoFit.SelectedIndex].ToString());
             var ytDlp = _ytDlp.Text.Trim();
             if (ytDlp != (_services.Setting(EditorServices.YtDlpPathKey) ?? ""))
             {

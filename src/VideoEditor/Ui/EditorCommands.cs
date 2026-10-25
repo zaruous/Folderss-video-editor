@@ -344,6 +344,168 @@ namespace VideoEditor.Ui
             Run(p => TimelineEdits.AddTrack(p, kind), (kind == TrackKind.Video ? "동영상" : "오디오") + " 트랙을 더했습니다.");
         }
 
+        // ---------- 전환 ----------
+
+        /// <summary>전환을 넣었다 — 넣은 클립 Id(타임라인이 배지를 반짝인다).</summary>
+        public event Action<IReadOnlyList<string>> TransitionsApplied;
+
+        /// <summary>전환을 넣을 수 있는 고른 클립(화면 클립, 자막 큐 제외)의 Id.</summary>
+        private List<string> TransitionTargets()
+        {
+            return _session.SelectedClips
+                .Where(c => c.IsVisual && Project.TrackOf(c) is Track t && t.Kind == TrackKind.Video && !t.Subtitles)
+                .Select(c => c.Id).ToList();
+        }
+
+        /// <summary>[효과] 고른 클립마다 그 앞(앞 클립에서 바뀌어 들어오는 곳)에 전환을 넣는다. 타임라인 위치는 그대로.</summary>
+        public void ApplyTransition(string id, double seconds)
+        {
+            var ids = TransitionTargets();
+            if (ids.Count == 0)
+            {
+                Status("전환을 넣을 클립(바뀌어 들어올 뒤 클립)을 타임라인에서 고르세요. 클립 사이마다 넣으려면 [모든 클립 사이에]를 누르세요.");
+                return;
+            }
+            ApplyTransition(id, seconds, ids);
+        }
+
+        /// <summary>효과 탭에서 끈 전환을 클립에 놓음 — 데이터는 "효과 id|초".</summary>
+        public void DropTransition(string data, string clipId)
+        {
+            var parts = (data ?? "").Split('|');
+            if (parts.Length != 2 || Transitions.Find(parts[0]) == null || !UiKit.TryNumber(parts[1], out var seconds))
+                return;
+            ApplyTransition(parts[0], seconds, new[] { clipId });
+        }
+
+        private void ApplyTransition(string effect, double seconds, IReadOnlyList<string> ids)
+        {
+            var def = Transitions.Find(effect);
+            if (def == null)
+                return;
+            var frames = Math.Max(1, Project.Rate.ToFrames(seconds));
+            if (Run(p =>
+                {
+                    foreach (var id in ids)
+                        TimelineEdits.SetTransition(p, p.FindClip(id), def.Id, frames);
+                }, "'" + def.Name + "' 전환을 " + (ids.Count == 1 ? "클립" : ids.Count + "개 클립") + " 앞에 넣었습니다(" + UiKit.Number(seconds) + "초)."))
+                ShowTransitions(ids);
+        }
+
+        /// <summary>전환을 넣은 클립을 골라 두고 타임라인 배지를 반짝인다(어디에 들어갔는지 보이게).</summary>
+        private void ShowTransitions(IReadOnlyList<string> ids)
+        {
+            _session.Select(ids.Select(Project.FindClip).Where(c => c != null));
+            TransitionsApplied?.Invoke(ids);
+        }
+
+        /// <summary>[모든 클립 사이에] 고른 클립의 트랙(없으면 주 트랙)에서 서로 붙어 있는 클립 사이마다 전환을 넣는다.</summary>
+        public void ApplyTransitionBetween(string effect, double seconds)
+        {
+            var def = Transitions.Find(effect);
+            if (def == null)
+                return;
+            var selected = _session.SelectedClips.Select(Project.TrackOf).FirstOrDefault(t => t != null && t.Kind == TrackKind.Video && !t.Subtitles);
+            var track = selected ?? Project.MainTrack;
+            var clips = track.Clips.Where(c => c.IsVisual).OrderBy(c => c.Start).ToList();
+            var ids = clips.Skip(1).Where((c, i) => c.Start == clips[i].End).Select(c => c.Id).ToList();
+            var places = ids.Count;
+            if (places == 0)
+            {
+                Status("'" + track.Name + "'에 서로 붙어 있는 클립이 없어 전환을 넣을 곳이 없습니다.");
+                return;
+            }
+            var trackId = track.Id;
+            var frames = Math.Max(1, Project.Rate.ToFrames(seconds));
+            if (Run(p => TimelineEdits.SetTransitionsBetween(p, p.FindTrack(trackId), def.Id, frames),
+                    "'" + def.Name + "' 전환을 '" + track.Name + "'의 클립 사이 " + places + "곳에 넣었습니다(" + UiKit.Number(seconds) + "초)."))
+                ShowTransitions(ids);
+        }
+
+        /// <summary>[전환 빼기] 고른 클립 앞의 전환을 뺀다.</summary>
+        public void RemoveTransition()
+        {
+            var ids = TransitionTargets().Where(id => Project.FindClip(id).TransitionIn > 0).ToList();
+            if (ids.Count == 0)
+            {
+                Status("고른 클립에 전환이 없습니다.");
+                return;
+            }
+            Run(p =>
+            {
+                foreach (var id in ids)
+                {
+                    var clip = p.FindClip(id);
+                    TimelineEdits.SetTransition(p, clip, clip.Transition, 0);
+                }
+            }, "전환을 뺐습니다.");
+        }
+
+        /// <summary>[효과 폴더 열기] 사용자 전환 효과 폴더를 만들고(처음이면 쓰는 법 README.txt도) 탐색기로 연다.</summary>
+        public void OpenTransitionFolder()
+        {
+            var folder = _services.TransitionFolder;
+            try
+            {
+                Directory.CreateDirectory(folder);
+                var readme = Path.Combine(folder, "README.txt");
+                if (!File.Exists(readme))
+                    File.WriteAllText(readme, TransitionFolderReadme.Replace("\r\n", "\n").Replace("\n", Environment.NewLine), new System.Text.UTF8Encoding(true));
+                Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { folder }, UseShellExecute = false });
+                Status("효과 폴더: *.json에 효과를 적고 [효과] 탭의 [다시 읽기]를 누르세요(쓰는 법은 README.txt).");
+            }
+            catch (Exception ex)
+            {
+                Status("효과 폴더를 열지 못했습니다: " + ex.Message);
+            }
+        }
+
+        private const string TransitionFolderReadme =
+@"전환 효과 폴더
+
+이 폴더의 *.json 파일에 효과를 적고 [효과] 탭의 [다시 읽기]를 누르면 효과가 더해집니다.
+
+{
+  ""transitions"": [
+    { ""id"": ""MyWipe"", ""name"": ""내 대각선 닦기"", ""group"": ""내 효과"", ""xfade"": ""wipetl"" },
+    { ""id"": ""Ring"", ""name"": ""고리"", ""group"": ""모양"", ""expr"": ""if(lt(abs(hypot(X-W/2,Y-H/2)/H-0.3),(1-P)*0.8),B,A)"" }
+  ]
+}
+
+- id: 영문으로 시작하는 영문·숫자·_·- (프로젝트에 저장되는 이름, 기본 효과와 겹치면 안 됨)
+- name: 효과 탭에 보일 이름(40자까지), group: 묶음(없으면 ""내 효과"")
+- xfade: FFmpeg xfade 효과 이름(wipeleft, circleopen, pixelize 등) — 또는
+- expr: 수식. X·Y 픽셀 위치, W·H 화면 크기, P 진행(1에서 0으로), A 앞 화면 값, B 새 화면 값, PLANE 색 평면,
+  a0~a3(x,y)·b0~b3(x,y) 다른 위치의 값.
+  글자는 영문·숫자·공백과 . , + - * / ^ ( ) 만, 함수는 if ifnot lt lte gt gte eq between clip not abs min max hypot
+  sin cos tan asin acos atan atan2 sinh cosh tanh sqrt pow exp log floor ceil round trunc mod sgn squish gauss isnan isinf.
+  수식 효과는 내장 효과보다 그리기가 느립니다.
+- ffmpeg: 필요한 FFmpeg 주 버전(선택)
+
+사용자 효과를 넣은 클립은 프로젝트 파일에 효과 정의를 함께 저장하므로, 이 폴더가 없는 PC에서도 같게 그려집니다.
+";
+
+        /// <summary>[화면 맞춤 방식]: 오른쪽 메뉴를 연 클립(고른 클립 가운데 있으면 고른 클립 모두)의 맞춤 방식을 바꾼다.</summary>
+        public void SetFit(ClipFit fit, string clipId = null)
+        {
+            var selected = _session.SelectedClips.Where(c => c.Kind == ClipKind.Media && c.IsVisual).Select(c => c.Id).ToList();
+            var ids = clipId == null || selected.Contains(clipId) ? selected : new List<string> { clipId };
+            if (ids.Count == 0)
+            {
+                Status("맞춤 방식을 바꿀 동영상·사진 클립을 고르세요.");
+                return;
+            }
+            Run(p => TimelineEdits.SetFit(p, ids.Select(p.FindClip), fit),
+                "'" + EditorServices.FitName(fit) + "'(으)로 바꿨습니다" + (ids.Count > 1 ? "(클립 " + ids.Count + "개)." : ".") + " — " + EditorServices.FitHint(fit));
+        }
+
+        /// <summary>자막 트랙의 [말하는 단어 강조] 켜기·끄기.</summary>
+        public void SetWordHighlight(string trackId, bool on)
+        {
+            Run(p => TimelineEdits.SetWordHighlight(p, p.FindTrack(trackId), on),
+                on ? "말하는 단어를 노란색으로 강조합니다(음성 인식으로 만든 큐만 — 글을 고친 큐는 강조하지 않습니다)." : "말하는 단어 강조를 껐습니다.");
+        }
+
         public void AddSubtitleTrack()
         {
             Run(p => TimelineEdits.AddSubtitleTrack(p), "자막 트랙을 더했습니다. SRT·VTT를 끌어 놓거나 [파일 > 자막 가져오기…]로 큐를 넣으세요.");
@@ -424,6 +586,70 @@ namespace VideoEditor.Ui
                 "자막 " + cues.Count + "개를 가져왔습니다(" + Path.GetFileName(path) + ").") ? cues.Count : 0;
         }
 
+        /// <summary>
+        /// [음성 인식으로 자막 만들기]: 고른 클립 중 소리 있는 것이 있으면 그 클립만, 없으면 타임라인 전체 소리를 이 PC에서 인식해(whisper.cpp)
+        /// 새 자막 트랙에 큐로 놓는다. 시각은 타임라인 위치(클립이면 클립 시작·속도에 맞춤). clipId를 주면 그 클립(오른쪽 메뉴).
+        /// </summary>
+        public async Task SpeechToText(string clipId = null)
+        {
+            _player.Stop();
+            var clip = (clipId != null ? new[] { Project.FindClip(clipId) } : (IEnumerable<Clip>)_session.SelectedClips)
+                .FirstOrDefault(c => c != null && c.Kind == ClipKind.Media && c.HasAudio);
+            var project = Project;
+            if (clip == null && !project.AllClips.Any(c => c.Kind == ClipKind.Media && c.HasAudio))
+            {
+                Status("소리가 있는 클립이 없습니다. 내레이션(동영상·오디오)을 타임라인에 놓고 다시 하세요.");
+                return;
+            }
+            var tool = await NeedTool();
+            if (tool == null)
+                return;
+            // 창이 떠 있는 동안 인식하므로 지금 상태의 사본으로(편집과 섞이지 않게)
+            var copy = ProjectFile.FromSnapshot(ProjectFile.Snapshot(project));
+            var target = clip != null ? copy.FindClip(clip.Id) : null;
+            var rate = copy.Rate;
+            var source = target != null
+                ? "고른 클립 — " + target.Name + " (" + rate.Timecode(target.Start) + " ~ " + rate.Timecode(target.End) + ")"
+                : "타임라인 전체 소리 (00:00:00:00 ~ " + rate.Timecode(copy.Duration) + ", 모든 트랙을 섞은 것)";
+            SpeechToTextDialog dialog;
+            try
+            {
+                dialog = new SpeechToTextDialog(_services, source, target == null, (whisper, options, progress, cancellation) => target != null
+                    ? SpeechRecognizer.RecognizeClip(tool, whisper, options, target, rate, progress, cancellation)
+                    : SpeechRecognizer.RecognizeTimeline(tool, whisper, options, copy, progress, cancellation));
+                var owner = UiKit.OwnerOf(_owner);
+                if (owner != null && owner.IsLoaded)
+                    dialog.Owner = owner;
+            }
+            catch (Exception ex)
+            {
+                Status("음성 인식 창을 열지 못했습니다: " + ex.Message);
+                return;
+            }
+            if (dialog.ShowDialog() != true || dialog.Result == null)
+                return;
+            var result = dialog.Result;
+            var cues = result.Cues;
+            if (cues.Count == 0)
+            {
+                Status("말소리를 찾지 못했습니다(" + dialog.Model.Label + " 모델). 말이 있는 클립을 골랐는지, 인식할 말이 맞는지 확인하세요.");
+                return;
+            }
+            var seconds = (int)Math.Round(dialog.Elapsed.TotalSeconds);
+            // 대본을 줬으면 몇 문장에 시각을 맞췄는지(대본에 없는 말은 인식한 글로 남는다)
+            var script = result.Sentences == 0 ? "틀린 글은 큐를 골라 속성에서 고치세요."
+                : result.Matched == 0 ? "대본과 맞는 말을 찾지 못해 인식한 글로 넣었습니다(대본이 이 소리의 것인지 확인하세요)."
+                : "대본 문장 " + result.Matched + "개에 시각을 맞췄습니다" + (result.Unscripted > 0 ? "(대본에 없는 말 " + result.Unscripted + "곳은 인식한 글로)." : ".");
+            var highlight = dialog.HighlightWords;
+            Run(p =>
+                {
+                    var track = TimelineEdits.ImportSubtitles(p, cues);
+                    if (track != null && highlight)
+                        track.WordHighlight = true;
+                },
+                "음성 인식으로 자막 " + cues.Count + "개를 만들었습니다(" + dialog.Model.Label + " 모델, " + (seconds >= 60 ? seconds / 60 + "분 " : "") + seconds % 60 + "초). " + script);
+        }
+
         /// <summary>[URL에서 가져오기]: 직접 링크·유튜브 주소 또는 유튜브 검색으로 받아 미디어 목록에 더한다.</summary>
         public void ImportFromUrl()
         {
@@ -470,8 +696,9 @@ namespace VideoEditor.Ui
             var failed = new List<string>();
             foreach (var path in paths)
             {
+                // 이미 있는 미디어는 그대로 — 파일을 바꿔 넣었으면(같은 이름의 다른 사진) 다시 읽는다
                 var known = Project.FindMedia(path);
-                if (known != null)
+                if (known != null && !MediaProbe.IsStale(known))
                 {
                     infos.Add(known);
                     continue;
@@ -497,8 +724,11 @@ namespace VideoEditor.Ui
             {
                 foreach (var info in infos)
                 {
-                    if (p.FindMedia(info.Path) == null)
+                    var existing = p.FindMedia(info.Path);
+                    if (existing == null)
                         p.Media.Add(info);
+                    else if (!ReferenceEquals(existing, info))
+                        existing.CopyFrom(info);
                 }
                 var firstVideo = infos.FirstOrDefault(i => i.Kind == MediaKind.Video);
                 if (firstVideo != null && Core.ProjectSettings.AdoptFirstVideo(p, firstVideo))
@@ -525,10 +755,19 @@ namespace VideoEditor.Ui
             return infos.Count;
         }
 
+        /// <summary>미디어 클립을 만든다(사진은 설정의 길이·맞춤 방식 — 기본은 화면 채우기).</summary>
+        private Clip NewClip(MediaInfo media, FrameRate rate, long frame)
+        {
+            var clip = TimelineEdits.CreateClip(media, rate, frame, rate.ToFrames(_services.ImageSeconds));
+            if (media.Kind == MediaKind.Image)
+                clip.Fit = _services.PhotoFit;
+            return clip;
+        }
+
         /// <summary>미디어를 트랙에 놓는다. 종류가 맞지 않으면 알맞은 트랙으로(오디오 → 오디오 트랙, 동영상을 오디오 트랙에 놓으면 소리만).</summary>
         private Clip PlaceMedia(Project p, MediaInfo media, Track target, long frame, ref Track newTrack)
         {
-            var clip = TimelineEdits.CreateClip(media, p.Rate, frame, p.Rate.ToFrames(_services.ImageSeconds));
+            var clip = NewClip(media, p.Rate, frame);
             var isAudio = media.Kind == MediaKind.Audio;
             // 빈 곳이나 자막 트랙에 놓으면 새 트랙(동영상은 자막 아래) — 앞서 만든 새 트랙은 종류가 같을 때만 다시 쓴다
             if (target == null || target.Subtitles)
@@ -555,7 +794,7 @@ namespace VideoEditor.Ui
         {
             Run(p =>
             {
-                var clip = TimelineEdits.CreateClip(media, p.Rate, 0, p.Rate.ToFrames(_services.ImageSeconds));
+                var clip = NewClip(media, p.Rate, 0);
                 var track = media.Kind == MediaKind.Audio
                     ? p.AudioTracks.FirstOrDefault(t => !t.Locked) ?? TimelineEdits.AddTrack(p, TrackKind.Audio)
                     : p.MainTrack;
@@ -852,11 +1091,50 @@ namespace VideoEditor.Ui
                 _session.Open(path);
                 var missing = Project.Media.Count(m => !File.Exists(m.Path));
                 Status("열었습니다: " + path + (missing > 0 ? " — 찾을 수 없는 미디어 " + missing + "개" : ""));
+                _ = RefreshMediaAsync();
             }
             catch (Exception ex)
             {
                 UiKit.Inform(_owner, "프로젝트 열기", "열지 못했습니다: " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// 연 프로젝트의 미디어 가운데 읽은 뒤 바뀐 파일(같은 이름으로 바꿔 넣은 사진 등)을 다시 읽어 크기·길이를 고친다 —
+        /// 미디어 패널·미리 보기 틀이 낡은 크기를 보이지 않게. 실행 취소에는 남기지 않는다.
+        /// </summary>
+        private async Task RefreshMediaAsync()
+        {
+            var tool = _services.Tool ?? await _services.LocateAsync();
+            var project = Project;
+            if (tool == null)
+                return;
+            var fresh = new List<MediaInfo>();
+            foreach (var media in project.Media.ToList())
+            {
+                if (!MediaProbe.IsStale(media))
+                    continue;
+                try
+                {
+                    fresh.Add(await MediaProbe.Probe(tool, media.Path, CancellationToken.None));
+                }
+                catch (Exception)
+                {
+                    // 읽지 못한 파일은 그대로 둔다(미디어가 아닌 것으로 바뀜 등)
+                }
+            }
+            // 그사이 다른 프로젝트를 열었으면 버린다
+            if (fresh.Count == 0 || !ReferenceEquals(project, Project))
+                return;
+            var resized = fresh.Where(f => project.FindMedia(f.Path) is MediaInfo old && (old.Width != f.Width || old.Height != f.Height || Math.Abs(old.DurationSeconds - f.DurationSeconds) > 0.05))
+                .Select(f => Path.GetFileName(f.Path)).ToList();
+            _session.Refresh(p =>
+            {
+                foreach (var info in fresh)
+                    p.FindMedia(info.Path)?.CopyFrom(info);
+            });
+            if (resized.Count > 0)
+                Status("바뀐 미디어 " + resized.Count + "개의 크기·길이를 다시 읽었습니다: " + string.Join(", ", resized.Take(5)) + (resized.Count > 5 ? " 외" : ""));
         }
 
         public bool Save()

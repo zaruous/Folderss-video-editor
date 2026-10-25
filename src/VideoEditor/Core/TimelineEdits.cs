@@ -229,6 +229,7 @@ namespace VideoEditor.Core
             var delta = newStart - clip.Start;
             clip.SourceIn += (long)Math.Round(delta * clip.Speed, MidpointRounding.AwayFromZero);
             clip.Start = newStart;
+            clip.ShiftWords(delta);
             SetDuration(clip, end - newStart);
         }
 
@@ -249,6 +250,7 @@ namespace VideoEditor.Core
             var originalOut = clip.SourceOut;
             SetEnd(clip, frame);
             right.Start = frame;
+            right.ShiftWords(frame - clip.Start);
             right.SourceIn = clip.SourceOut;
             right.SourceOut = originalOut;
             if (!right.HasSourceLimit)
@@ -426,6 +428,46 @@ namespace VideoEditor.Core
             return audio;
         }
 
+        // ---------- 전환 ----------
+
+        /// <summary>
+        /// 클립 앞에 전환 효과를 넣는다(frames = 0이면 뺀다). 앞 클립이 붙어 있으면 그 클립에서, 없으면 아래 트랙·바탕에서 바뀐다.
+        /// 앞 클립이 그 길이만큼 밑에 더 그려질 뿐 타임라인 위치는 바뀌지 않는다. 길이는 클립 길이까지.
+        /// id는 효과 목록의 것이거나 클립에 이미 든 효과(효과 파일이 없는 PC에서 연 프로젝트)여야 한다.
+        /// </summary>
+        public static void SetTransition(Project project, Clip clip, string id, long frames)
+        {
+            RequireClip(clip);
+            var track = project.TrackOf(clip);
+            EnsureEditable(track);
+            if (!clip.IsVisual || track.Kind == TrackKind.Audio)
+                throw new EditException("화면이 있는 클립에만 전환을 넣을 수 있습니다.");
+            if (track.Subtitles)
+                throw new EditException("자막 큐에는 전환을 넣지 않습니다.");
+            var def = Transitions.Find(id);
+            if (def != null)
+                Transitions.Assign(clip, def);
+            else if (id != clip.Transition)
+                throw new EditException("모르는 전환 효과입니다: " + id);
+            clip.TransitionIn = Math.Max(0, Math.Min(frames, clip.Duration));
+        }
+
+        /// <summary>트랙에서 앞 클립과 붙어 있는 클립마다(클립과 클립 사이마다) 전환을 넣는다. 넣은 곳 수.</summary>
+        public static int SetTransitionsBetween(Project project, Track track, string id, long frames)
+        {
+            EnsureEditable(track);
+            var clips = track.Clips.Where(c => c.IsVisual).OrderBy(c => c.Start).ToList();
+            var count = 0;
+            for (var i = 1; i < clips.Count; i++)
+            {
+                if (clips[i].Start != clips[i - 1].End)
+                    continue;
+                SetTransition(project, clips[i], id, frames);
+                count++;
+            }
+            return count;
+        }
+
         // ---------- 트랙 ----------
 
         /// <summary>트랙을 더한다(동영상은 맨 위 — 자막 트랙이 있으면 그 아래라 자막이 늘 위에 그려진다, 오디오는 맨 아래).</summary>
@@ -475,6 +517,8 @@ namespace VideoEditor.Core
                 var previous = clips.Count > 0 ? clips[clips.Count - 1] : null;
                 if (previous != null && start <= previous.Start)
                 {
+                    // 합친 큐는 단어 시각이 맞지 않는다
+                    previous.Words = null;
                     // 같은 프레임에 시작하면 한 큐로 — 같은 글은 한 번만, 합쳐도 2,000자까지
                     if (!previous.Text.Contains(cue.Text, StringComparison.Ordinal))
                         previous.Text = SubtitleFile.Cut(previous.Text + "\n" + cue.Text, SubtitleFile.MaxTextLength);
@@ -483,7 +527,9 @@ namespace VideoEditor.Core
                 }
                 if (previous != null && previous.End > start)
                     previous.SourceOut = start - previous.Start;
-                clips.Add(CreateText(cue.Text, start, end - start));
+                var text = CreateText(cue.Text, start, end - start);
+                text.Words = cue.Words?.Select(w => new ClipWord { Text = w.Text, Start = rate.ToFrames(w.Start) - start, End = rate.ToFrames(w.End) - start }).ToList();
+                clips.Add(text);
             }
             if (clips.Count == 0)
                 return null;
@@ -497,6 +543,30 @@ namespace VideoEditor.Core
             var track = AddSubtitleTrack(project);
             track.Clips.AddRange(clips);
             return track;
+        }
+
+        /// <summary>화면 클립(동영상·사진)의 맞춤 방식을 바꾼다. 바꾼 클립 수.</summary>
+        public static int SetFit(Project project, IEnumerable<Clip> clips, ClipFit fit)
+        {
+            if (!Enum.IsDefined(fit))
+                throw new EditException("모르는 맞춤 방식입니다.");
+            var count = 0;
+            foreach (var clip in clips.Where(c => c != null && c.Kind == ClipKind.Media && c.IsVisual))
+            {
+                EnsureEditable(project.TrackOf(clip));
+                clip.Fit = fit;
+                count++;
+            }
+            return count;
+        }
+
+        /// <summary>자막 트랙의 [말하는 단어 강조]를 켜거나 끈다.</summary>
+        public static void SetWordHighlight(Project project, Track track, bool on)
+        {
+            if (track == null || !track.Subtitles)
+                throw new EditException("자막 트랙에서만 말하는 단어를 강조할 수 있습니다.");
+            EnsureEditable(track);
+            track.WordHighlight = on;
         }
 
         public static void RemoveTrack(Project project, Track track)

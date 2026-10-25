@@ -30,9 +30,38 @@ namespace VideoEditor.Core
         public string AudioCodec { get; set; }
         /// <summary>오디오 채널 수(0 = 모름).</summary>
         public int AudioChannels { get; set; }
+        /// <summary>읽을 때의 파일 크기·고친 시각(UTC 틱) — 같은 이름으로 파일을 바꿔 넣었는지 알아보려고(0 = 모름, 예전 프로젝트).</summary>
+        public long FileSize { get; set; }
+        public long FileTime { get; set; }
 
         [JsonIgnore]
         public string Name { get { return System.IO.Path.GetFileName(Path); } }
+
+        /// <summary>다시 읽은 정보로 바꾼다(경로는 그대로).</summary>
+        public void CopyFrom(MediaInfo other)
+        {
+            Kind = other.Kind;
+            DurationSeconds = other.DurationSeconds;
+            Width = other.Width;
+            Height = other.Height;
+            FrameRate = other.FrameRate;
+            HasVideo = other.HasVideo;
+            HasAudio = other.HasAudio;
+            VideoCodec = other.VideoCodec;
+            AudioCodec = other.AudioCodec;
+            AudioChannels = other.AudioChannels;
+            FileSize = other.FileSize;
+            FileTime = other.FileTime;
+        }
+
+        /// <summary>화면(프로젝트) 비율과 3% 넘게 다른 그림인지 — 맞춤이면 빈 곳, 채우기면 잘리는 곳이 생긴다.</summary>
+        public bool AspectDiffers(int width, int height)
+        {
+            if (Kind == MediaKind.Audio || Width <= 0 || Height <= 0 || width <= 0 || height <= 0)
+                return false;
+            var ratio = ((double)Width / Height) / ((double)width / height);
+            return ratio > 1.03 || ratio < 1 / 1.03;
+        }
     }
 
     public enum TrackKind
@@ -55,6 +84,9 @@ namespace VideoEditor.Core
         public bool Locked { get; set; }
         /// <summary>자막 트랙(동영상 트랙만): 글자 클립을 큐로 보고 트랙 공통 모양으로 화면 아래에 입힌다(libass). 글자 클립만 놓인다.</summary>
         public bool Subtitles { get; set; }
+        /// <summary>자막 트랙: 말하는 단어를 노란색으로 강조(단어 시각이 있는 큐 — 음성 인식으로 만든 것).</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool WordHighlight { get; set; }
         public double Height { get; set; } = 56;
         public List<Clip> Clips { get; set; } = new List<Clip>();
 
@@ -110,13 +142,24 @@ namespace VideoEditor.Core
         public long FadeOut { get; set; }
 
         // 화면
-        /// <summary>앞 클립에서 이 클립으로 겹쳐 바뀌는 길이(프레임) — 크로스페이드.</summary>
+        /// <summary>앞 클립에서 이 클립으로 겹쳐 바뀌는 길이(프레임). 앞 클립이 그만큼 밑에 더 그려지고, 타임라인 위치는 그대로다.</summary>
         public long TransitionIn { get; set; }
+        /// <summary>전환 효과 id(<see cref="Transitions"/>, 기본 디졸브 = 예전 크로스페이드).</summary>
+        [JsonConverter(typeof(LenientConverter<string>))]
+        public string Transition { get; set; } = Transitions.DefaultId;
+        /// <summary>사용자 효과(효과 파일)의 정의 — 그 파일이 없는 PC에서 열어도 같게 그리도록 함께 저장한다. 기본 효과는 null.</summary>
+        [JsonConverter(typeof(LenientConverter<TransitionDef>))]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public TransitionDef TransitionDef { get; set; }
         /// <summary>화면 가운데에서 떨어진 정도(프로젝트 픽셀).</summary>
         public double X { get; set; }
         public double Y { get; set; }
-        /// <summary>크기 배율(1 = 화면에 맞춤).</summary>
+        /// <summary>크기 배율(1 = 화면 크기의 틀).</summary>
         public double Scale { get; set; } = 1;
+        /// <summary>틀에 놓는 방식(맞춤·채우기·늘이기). 예전 프로젝트는 맞춤.</summary>
+        [JsonConverter(typeof(LenientEnumConverter<ClipFit>))]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public ClipFit Fit { get; set; }
         /// <summary>시계 방향 회전(도).</summary>
         public double Rotation { get; set; }
         public double Opacity { get; set; } = 1;
@@ -164,13 +207,51 @@ namespace VideoEditor.Core
             return frame >= Start && frame < End;
         }
 
+        /// <summary>글자 클립(자막 큐)의 단어 시각 — 음성 인식으로 만든 큐에만. 클립 시작부터의 프레임.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<ClipWord> Words { get; set; }
+
         public Clip CloneWithNewId()
         {
             var copy = (Clip)MemberwiseClone();
             copy.Id = Track.NewId();
             copy.Style = Style?.Clone();
+            copy.Words = Words?.Select(w => new ClipWord { Text = w.Text, Start = w.Start, End = w.End }).ToList();
             return copy;
         }
+
+        /// <summary>단어 시각을 frames만큼 앞으로 당긴다(클립 시작을 뒤로 옮겼을 때 — 단어가 소리의 같은 자리에 남게).</summary>
+        internal void ShiftWords(long frames)
+        {
+            if (Words == null)
+                return;
+            foreach (var word in Words)
+            {
+                word.Start -= frames;
+                word.End -= frames;
+            }
+        }
+    }
+
+    /// <summary>자막 큐의 단어 하나와 그 시각(클립 시작부터의 프레임, [Start, End)).</summary>
+    /// <summary>화면 클립을 화면(또는 크기 배율만큼의 틀)에 놓는 방식.</summary>
+    public enum ClipFit
+    {
+        /// <summary>화면에 맞춤: 비율을 지켜 다 보이게(남는 곳은 비어 아래 트랙·검정이 보임).</summary>
+        Fit,
+        /// <summary>화면 채우기: 비율을 지켜 꽉 채우고 넘치는 곳은 가운데 기준으로 자름.</summary>
+        Fill,
+        /// <summary>늘이기: 비율을 무시하고 화면 크기로.</summary>
+        Stretch,
+        /// <summary>흐린 배경으로 채우기: 비율을 지켜 다 보이게 하고, 남는 곳은 같은 그림을 채우기로 키워 흐리게 깔아 채움(세로 쇼츠에 가로 사진 등).</summary>
+        Blur
+    }
+
+    public sealed class ClipWord
+    {
+        public string Text { get; set; }
+        public long Start { get; set; }
+        public long End { get; set; }
     }
 
     public sealed class Marker

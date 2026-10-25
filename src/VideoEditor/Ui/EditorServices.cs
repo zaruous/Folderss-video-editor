@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Threading;
@@ -19,6 +20,7 @@ namespace VideoEditor.Ui
     {
         public const string FfmpegPathKey = "ffmpegPath";
         public const string ImageSecondsKey = "imageSeconds";
+        public const string PhotoFitKey = "photoFit";
         public const string PlayerMutedKey = "playerMuted";
         public const string PreviewScaleKey = "previewScale";
         public const string LastFolderKey = "lastFolder";
@@ -30,6 +32,7 @@ namespace VideoEditor.Ui
 
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Task<BitmapSource>> _transitionPreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
         private Task<FfmpegTool> _locating;
         private Task<YtDlpTool> _locatingYtDlp;
         // 썸네일·파형 FFmpeg를 한꺼번에 수십 개 띄우지 않게
@@ -38,6 +41,7 @@ namespace VideoEditor.Ui
         public EditorServices(IPluginManager manager)
         {
             Manager = manager;
+            LoadTransitions();
         }
 
         public IPluginManager Manager { get; }
@@ -56,6 +60,18 @@ namespace VideoEditor.Ui
         /// <summary>플러그인이 yt-dlp·Deno를 내려받는 곳(데이터 폴더\yt-dlp, 데이터 폴더\deno).</summary>
         public string YtDlpFolder { get { return Path.Combine(Manager.DataDirectory, "yt-dlp"); } }
         public string DenoFolder { get { return Path.Combine(Manager.DataDirectory, "deno"); } }
+
+        /// <summary>음성 인식(whisper.cpp)과 모델을 두는 곳(데이터 폴더\whisper, 모델은 그 아래 models).</summary>
+        public string WhisperFolder { get { return Path.Combine(Manager.DataDirectory, "whisper"); } }
+
+        private WhisperTool _whisper;
+
+        /// <summary>받아 둔 whisper.cpp(없으면 null).</summary>
+        public WhisperTool Whisper
+        {
+            get { return _whisper != null && File.Exists(_whisper.CliPath) ? _whisper : (_whisper = WhisperTool.Locate(WhisperFolder)); }
+            set { _whisper = value; }
+        }
 
         /// <summary>유튜브 약관·권리 안내를 확인했는지(한 번 확인하면 설정에 기억).</summary>
         public bool YtDlpNoticeAccepted
@@ -145,6 +161,27 @@ namespace VideoEditor.Ui
             {
                 return false;
             }
+        }
+
+        /// <summary>사진을 타임라인에 놓을 때 맞춤 방식(기본: 화면 채우기 — 사진이 화면을 꽉 채움).</summary>
+        public ClipFit PhotoFit
+        {
+            get { return Enum.TryParse<ClipFit>(Setting(PhotoFitKey), out var fit) && Enum.IsDefined(fit) ? fit : ClipFit.Fill; }
+        }
+
+        /// <summary>맞춤 방식의 보일 이름.</summary>
+        public static string FitName(ClipFit fit)
+        {
+            return fit == ClipFit.Fill ? "화면 채우기" : fit == ClipFit.Stretch ? "늘이기" : fit == ClipFit.Blur ? "흐린 배경으로 채우기" : "화면에 맞춤";
+        }
+
+        /// <summary>맞춤 방식 설명(메뉴·툴팁).</summary>
+        public static string FitHint(ClipFit fit)
+        {
+            return fit == ClipFit.Fill ? "비율을 지켜 꽉 채우고 넘치는 곳은 잘라 냄"
+                : fit == ClipFit.Stretch ? "비율을 무시하고 화면 크기로"
+                : fit == ClipFit.Blur ? "다 보이게 하고 남는 곳은 같은 그림을 흐리게 깔아 채움"
+                : "비율을 지켜 다 보이게(남는 곳은 빔)";
         }
 
         /// <summary>이미지·사진 클립 기본 길이(초, 기본 5).</summary>
@@ -273,6 +310,80 @@ namespace VideoEditor.Ui
         }
 
         public const int WaveformPeaksPerSecond = 50;
+
+        // ---------- 전환 효과 ----------
+
+        /// <summary>사용자 전환 효과 폴더(데이터 폴더\transitions) — *.json을 넣고 [다시 읽기]를 누르면 효과 탭에 더해진다.</summary>
+        public string TransitionFolder { get { return Path.Combine(Manager.DataDirectory, "transitions"); } }
+
+        /// <summary>마지막으로 사용자 효과 폴더를 읽을 때 건너뛴 정의·파일과 그 까닭.</summary>
+        public IReadOnlyList<string> TransitionErrors { get; private set; } = Array.Empty<string>();
+
+        /// <summary>사용자 효과 폴더를 (다시) 읽는다.</summary>
+        public void LoadTransitions()
+        {
+            try
+            {
+                TransitionErrors = Transitions.LoadFolder(TransitionFolder);
+            }
+            catch (Exception ex)
+            {
+                TransitionErrors = new[] { "효과 폴더를 읽지 못했습니다: " + ex.Message };
+            }
+        }
+
+        /// <summary>
+        /// 효과 미리 보기 띠(<see cref="Transitions.PreviewFrames"/>칸). 그리는 방법이 같으면 한 번만 그려 데이터 폴더\cache\transitions에 둔다.
+        /// FFmpeg가 없거나 실패하면 null(다음에 다시 시도).
+        /// </summary>
+        public Task<BitmapSource> TransitionPreview(TransitionDef def)
+        {
+            var key = Transitions.PreviewKey(def);
+            var file = Path.Combine(Manager.DataDirectory, "cache", "transitions", key + ".png");
+            var tool = Tool;
+            if (tool == null && !File.Exists(file))
+                return Task.FromResult<BitmapSource>(null);
+            return _transitionPreviews.GetOrAdd(key, k => Task.Run(async () =>
+            {
+                try
+                {
+                    if (File.Exists(file))
+                        return Decode(await File.ReadAllBytesAsync(file).ConfigureAwait(false));
+                    byte[] png;
+                    await PictureGate.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        png = await MediaPictures.TransitionStrip(tool, def, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        PictureGate.Release();
+                    }
+                    var picture = Decode(png);
+                    if (picture != null)
+                    {
+                        // 다 쓴 뒤에 이름을 바꿔 넣는다(쓰다 끊겨도 깨진 캐시가 남지 않게)
+                        Directory.CreateDirectory(Path.GetDirectoryName(file));
+                        var part = file + "." + Guid.NewGuid().ToString("N") + ".part";
+                        await File.WriteAllBytesAsync(part, png).ConfigureAwait(false);
+                        try
+                        {
+                            File.Move(part, file, false);
+                        }
+                        catch (IOException)
+                        {
+                            File.Delete(part);
+                        }
+                    }
+                    return picture;
+                }
+                catch (Exception)
+                {
+                    _transitionPreviews.TryRemove(k, out _);
+                    return null;
+                }
+            }));
+        }
 
         public static BitmapSource Decode(byte[] png)
         {

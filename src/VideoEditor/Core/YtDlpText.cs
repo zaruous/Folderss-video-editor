@@ -495,5 +495,7 @@ namespace VideoEditor.Core
         public string Url { get; set; }
         public long Size { get; set; }
         public string ChecksumsUrl { get; set; }
+        /// <summary>릴리스 API에 적힌 SHA-256(digest, 소문자) — 체크섬 파일이 없는 릴리스.</summary>
+        public string Sha256 { get; set; }
     }
 }

@@ -16,6 +16,7 @@
   <ItemGroup>
     <Compile Include="..\..\src\VideoEditor\Core\**\*.cs" Link="Core\%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="..\..\src\VideoEditor\Media\**\*.cs" Link="Media\%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\..\src\VideoEditor\Core\transitions.json" LogicalName="VideoEditor.Core.transitions.json" Link="Core\transitions.json" />
     <!-- yt-dlp 출력 표본(실제 출력을 저장해 둔 것) -->
     <None Include="Samples\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

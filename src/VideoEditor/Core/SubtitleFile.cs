@@ -14,6 +14,8 @@ namespace VideoEditor.Core
         public double Start { get; set; }
         public double End { get; set; }
         public string Text { get; set; }
+        /// <summary>단어(어절)마다의 시각 — 음성 인식으로 만든 큐에만(파일에서 읽은 큐는 null).</summary>
+        public List<SubtitleCue> Words { get; set; }
     }
 
     /// <summary>

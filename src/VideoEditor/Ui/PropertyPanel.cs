@@ -157,12 +157,102 @@ namespace VideoEditor.Ui
             panel.Children.Add(NumberRow("위치 X", "PropX", -4000, 4000, "px", id, c => c.X, (c, v) => c.X = v));
             panel.Children.Add(NumberRow("위치 Y", "PropY", -4000, 4000, "px", id, c => c.Y, (c, v) => c.Y = v));
             panel.Children.Add(NumberRow("크기", "PropScale", 5, 400, "%", id, c => c.Scale * 100, (c, v) => c.Scale = Math.Max(0.05, v / 100)));
+            // 맞춤 방식(동영상·사진): 화면에 맞춤 · 화면 채우기 · 늘이기
+            if (_session.Project.FindClip(id)?.Kind == ClipKind.Media)
+            {
+                var fits = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
+                AutomationProperties.SetAutomationId(fits, "PropFit");
+                AutomationProperties.SetName(fits, "맞춤 방식");
+                var fitKinds = new[] { ClipFit.Fit, ClipFit.Fill, ClipFit.Blur, ClipFit.Stretch };
+                foreach (var kind in fitKinds)
+                    fits.Items.Add(new ComboBoxItem { Content = EditorServices.FitName(kind), ToolTip = EditorServices.FitHint(kind) });
+                fits.SelectionChanged += (s, e) =>
+                {
+                    if (_updating || fits.SelectedIndex < 0)
+                        return;
+                    var fit = fitKinds[fits.SelectedIndex];
+                    var current = _session.Project.FindClip(id);
+                    if (current != null && current.Fit != fit)
+                        Edit(id, c => c.Fit = fit, null);
+                };
+                _refreshers.Add(() =>
+                {
+                    var c = _session.Project.FindClip(id);
+                    if (c == null)
+                        return;
+                    var was = _updating;
+                    _updating = true;
+                    try
+                    {
+                        fits.SelectedIndex = Array.IndexOf(fitKinds, c.Fit);
+                    }
+                    finally
+                    {
+                        _updating = was;
+                    }
+                });
+                var fitRow = new DockPanel();
+                var fitLabel = UiKit.Label("맞춤 방식");
+                fitLabel.Width = 84;
+                fitRow.Children.Add(fitLabel);
+                fitRow.Children.Add(fits);
+                panel.Children.Add(fitRow);
+            }
             panel.Children.Add(NumberRow("회전", "PropRotation", -360, 360, "°", id, c => c.Rotation, (c, v) => c.Rotation = v));
             panel.Children.Add(NumberRow("불투명도", "PropOpacity", 0, 100, "%", id, c => c.Opacity * 100, (c, v) => c.Opacity = Math.Max(0, Math.Min(1, v / 100))));
-            panel.Children.Add(NumberRow("크로스페이드", "PropTransition", 0, 10, "초", id,
+            // 전환 효과 종류(길이는 아래 줄) — 효과 탭에서 고르거나 끌어 놓아도 된다
+            var kinds = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
+            AutomationProperties.SetAutomationId(kinds, "PropTransitionKind");
+            AutomationProperties.SetName(kinds, "전환 효과");
+            // 보이는 효과: 효과 목록 + 이 클립에만 저장된 효과(효과 파일이 없는 PC에서 연 프로젝트)
+            var shown = new List<TransitionDef>();
+            kinds.SelectionChanged += (s, e) =>
+            {
+                if (_updating || kinds.SelectedIndex < 0 || kinds.SelectedIndex >= shown.Count)
+                    return;
+                var def = shown[kinds.SelectedIndex];
+                var current = _session.Project.FindClip(id);
+                if (current != null && current.Transition != def.Id)
+                    Edit(id, c => Transitions.Assign(c, def), null);
+            };
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                // 값을 보이는 것만으로 편집이 일어나지 않게
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var defs = Transitions.All.ToList();
+                    if (Transitions.Find(c.Transition) == null && c.TransitionDef != null && c.TransitionDef.Id == c.Transition)
+                        defs.Add(c.TransitionDef);
+                    if (!defs.SequenceEqual(shown))
+                    {
+                        shown.Clear();
+                        shown.AddRange(defs);
+                        kinds.Items.Clear();
+                        foreach (var def in shown)
+                            kinds.Items.Add(def.Name);
+                    }
+                    kinds.SelectedIndex = Math.Max(0, shown.FindIndex(d => d.Id == c.Transition));
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
+            var kindRow = new DockPanel();
+            var kindLabel = UiKit.Label("전환 효과");
+            kindLabel.Width = 84;
+            kindRow.Children.Add(kindLabel);
+            kindRow.Children.Add(kinds);
+            panel.Children.Add(kindRow);
+            panel.Children.Add(NumberRow("전환 길이", "PropTransition", 0, 10, "초", id,
                 c => _session.Project.Rate.ToSeconds(c.TransitionIn),
                 (c, v) => c.TransitionIn = Math.Min(c.Duration, _session.Project.Rate.ToFrames(Math.Max(0, v)))));
-            var hint = UiKit.Label("크로스페이드: 같은 트랙의 바로 앞 클립에서 겹쳐 바뀝니다(앞 클립 끝이 이 길이만큼 이어짐).", true);
+            var hint = UiKit.Label("전환: 같은 트랙의 바로 앞 클립에서 이 길이만큼 겹쳐 바뀝니다(앞 클립이 밑에 더 그려지고 타임라인 위치는 그대로). 소리도 그동안 겹쳐 바뀝니다. 앞 클립이 없으면 바탕에서 바뀝니다.", true);
             hint.TextWrapping = TextWrapping.Wrap;
             hint.Margin = new Thickness(0, 4, 0, 8);
             panel.Children.Add(hint);

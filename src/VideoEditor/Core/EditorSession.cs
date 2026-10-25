@@ -131,6 +131,15 @@ namespace VideoEditor.Core
             return true;
         }
 
+        /// <summary>
+        /// 사용자 편집이 아닌 것(파일에서 다시 읽은 미디어 정보)을 바꾼다 — 실행 취소에 남기지 않고 저장 안 한 표시도 하지 않는다.
+        /// </summary>
+        public void Refresh(Action<Project> change)
+        {
+            change(Project);
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+
         public bool Undo()
         {
             _lastMergeKey = null;
