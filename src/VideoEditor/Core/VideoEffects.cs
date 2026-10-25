@@ -179,6 +179,10 @@ namespace VideoEditor.Core
             SciFiScan.Def,
             RayScan.Def,
             GlitchScan.Def,
+            RgbSplit.Def,
+            BlockGlitch.Def,
+            LineSlip.Def,
+            BadSignal.Def,
         };
 
         public static VideoEffectDef Find(string id)
