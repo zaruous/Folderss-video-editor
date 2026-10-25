@@ -315,9 +315,10 @@ namespace VideoEditor.Core
                 var size = Math.Max(4, clip.FontSize * options.Width / project.Width);
                 var font = string.IsNullOrEmpty(options.FontFile) ? "" : "fontfile=" + FilterValue(options.FontFile) + ":";
                 return string.Format(CultureInfo.InvariantCulture,
-                    "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba,drawtext={4}textfile={5}:expansion=none:fontsize={6}:fontcolor={7}:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing={8}",
+                    "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba,drawtext={4}textfile={5}:expansion=none:fontsize={6}:fontcolor={7}:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing={8}{9}",
                     options.Width, options.Height, fps, N(rate.ToSeconds(segFrames)), font, FilterValue(textFile),
-                    N(size), FilterValue(clip.Style?.Fill?.Kind == FillKind.None ? "black@0.0" : TextColor(clip.Style?.Fill?.Colors?.FirstOrDefault() ?? clip.TextColor)), N(size * 0.2));
+                    N(size), FilterValue(clip.Style?.Fill?.Kind == FillKind.None ? "black@0.0" : TextColor(clip.Style?.Fill?.Colors?.FirstOrDefault() ?? clip.TextColor)), N(size * 0.2),
+                    DrawtextBorder(clip.Style?.Outline, (double)options.Width / project.Width));
             }
             if (clip.MediaKind == MediaKind.Image)
             {
@@ -499,6 +500,19 @@ namespace VideoEditor.Core
         internal static string N(double value)
         {
             return value.ToString("0.######", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// 그리개 없이 drawtext로 그릴 때의 윤곽선(":borderw=…:bordercolor=…"): 두께 = 윤곽선 두께 × 출력 배율(정수 픽셀, 최소 1).
+        /// drawtext는 이음 모양을 고를 수 없어 이음은 무시하고, 테두리 안쪽을 글자로 덮으므로 채우기가 비치면(없음·반투명) 속에 테두리 색이 보인다.
+        /// 꺼졌거나 두께가 0이면 빈 문자열.
+        /// </summary>
+        internal static string DrawtextBorder(TextOutline outline, double scale)
+        {
+            if (outline == null || !outline.Enabled || !double.IsFinite(outline.Width) || !double.IsFinite(scale) || outline.Width <= 0 || scale <= 0)
+                return "";
+            var width = (int)Math.Max(1, Math.Round(Math.Min(outline.Width, 50) * scale));
+            return string.Format(CultureInfo.InvariantCulture, ":borderw={0}:bordercolor={1}", width, FilterValue(TextColor(TextStyle.NormalizeColor(outline.Color, "#000000"))));
         }
 
         /// <summary>"#RRGGBB" → FFmpeg 색(0xRRGGBB), "#AARRGGBB" → 0xRRGGBBAA. 잘못된 값은 흰색.</summary>

@@ -26,8 +26,8 @@ namespace VideoEditor.Core
     /// </summary>
     public static class StyledTextLayout
     {
-        /// <summary>각진 이음의 끝이 늘어나는 한도(윤곽선 두께/2의 배수). 그리개의 Pen.MiterLimit도 이 값을 쓴다.</summary>
-        public const double MiterLimit = 4;
+        /// <summary>각진 이음의 끝이 늘어나는 한도(펜 두께 절반의 배수 — 펜은 윤곽선 두께의 두 배). 그리개의 Pen.MiterLimit도 이 값을 쓴다.</summary>
+        public const double MiterLimit = 2;
         /// <summary>안티에일리어싱 가장자리가 잘리지 않게 두는 여백(픽셀).</summary>
         public const double EdgeMargin = 1;
         /// <summary>그리개가 그리는 그림의 화소 상한(4096² 정도). 캔버스가 더 크면 렌더 그래프가 줄여 요청하고 키워 얹는다.</summary>
@@ -52,13 +52,9 @@ namespace VideoEditor.Core
             var scale = Length(effectScale);
             boxHeight = Length(boxHeight);
             var outline = 0.0;
+            // 윤곽선은 글자 밖으로 두께만큼, 각진 이음은 모서리에서 한도만큼 더 나간다
             if (style.Outline != null && style.Outline.Enabled)
-            {
-                // 윤곽선은 글자 윤곽 양쪽으로 반씩, 각진 이음은 모서리에서 한도만큼 더 나간다
-                outline = Length(style.Outline.Width) * scale / 2;
-                if (style.Outline.Join == LineJoinKind.Miter)
-                    outline *= MiterLimit;
-            }
+                outline = TextEffects.OutlineExtent(Length(style.Outline.Width) * scale, style.Outline.Join);
             double left = outline, right = outline, top = outline, bottom = outline;
             if (style.Shadow != null && style.Shadow.Enabled)
             {

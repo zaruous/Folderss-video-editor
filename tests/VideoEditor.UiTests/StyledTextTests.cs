@@ -20,7 +20,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 namespace VideoEditor.UiTests
 {
     /// <summary>
-    /// 꾸민 글자(이슈 #3·#13): WPF 그리개의 픽셀, 꾸미기 탭(글꼴), 미리 보기 = 내보내기.
+    /// 꾸민 글자(이슈 #3·#13·#14·#15): WPF 그리개의 픽셀, 꾸미기 탭(글꼴·채우기·윤곽선), 미리 보기 = 내보내기.
     /// 그리개·요청은 플러그인 형식이라 리플렉션으로 만들고, 요청은 JSON을 플러그인의 TextImageRequest로 역직렬화해 만든다.
     /// </summary>
     public class StyledTextTests
@@ -44,6 +44,23 @@ namespace VideoEditor.UiTests
             public byte[] Bgra;
 
             public int Alpha(int x, int y) { return Bgra[(y * Width + x) * 4 + 3]; }
+
+            public (int R, int G, int B, int A) Pixel(int x, int y)
+            {
+                var i = (y * Width + x) * 4;
+                return (Bgra[i + 2], Bgra[i + 1], Bgra[i], Bgra[i + 3]);
+            }
+
+            /// <summary>가장자리 1px 줄(위·아래·왼쪽·오른쪽)에서 조금이라도 칠한 픽셀 수.</summary>
+            public int BorderInk()
+            {
+                var count = 0;
+                for (var x = 0; x < Width; x++)
+                    count += (Alpha(x, 0) > 0 ? 1 : 0) + (Alpha(x, Height - 1) > 0 ? 1 : 0);
+                for (var y = 1; y < Height - 1; y++)
+                    count += (Alpha(0, y) > 0 ? 1 : 0) + (Alpha(Width - 1, y) > 0 ? 1 : 0);
+                return count;
+            }
 
             public bool Painted(int x, int y) { return Alpha(x, y) > 128; }
 
@@ -89,13 +106,13 @@ namespace VideoEditor.UiTests
             return Activator.CreateInstance(type);
         }
 
-        private static object Request(object rasterizer, string text, int canvasWidth = 1280, int canvasHeight = 720, double fontSize = 80, string style = null)
+        private static object Request(object rasterizer, string text, int canvasWidth = 1280, int canvasHeight = 720, double fontSize = 80, string style = null, double effectScale = 1.0)
         {
             var json = JsonSerializer.Serialize(new
             {
                 Text = text,
                 FontPixelSize = fontSize,
-                EffectScale = 1.0,
+                EffectScale = effectScale,
                 CanvasWidth = canvasWidth,
                 CanvasHeight = canvasHeight
             });
@@ -200,6 +217,84 @@ namespace VideoEditor.UiTests
             // 채우기 없음(윤곽선도 없음): 칠한 픽셀이 없다
             var none = await Render(rasterizer, Request(rasterizer, "가나다 ABC", style: "\"Fill\":{\"Kind\":\"None\",\"Colors\":[\"#FFFFFF\"]}"), "fill-none");
             Assert.Equal(0, none.PaintedCount());
+        }
+
+        private const string WhiteFill = "\"Fill\":{\"Kind\":\"Solid\",\"Colors\":[\"#FFFFFF\"]}";
+
+        private static string Outline(double width, string join = "Round")
+        {
+            return "\"Outline\":{\"Enabled\":true,\"Color\":\"#000000\",\"Width\":" + width.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"Join\":\"" + join + "\"}";
+        }
+
+        [UiFact]
+        public async Task Rasterizer_Outline_BlackBandOutsideTheFill_HollowWithoutFill()
+        {
+            var rasterizer = NewRasterizer();
+            var plain = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill), "outline-off");
+            var outlined = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill + "," + Outline(8)), "outline-on");
+            var middle = outlined.Height / 2;
+            var (plainLeft, plainRight) = plain.Extent(plain.Height / 2, plain.Height / 2 + 1);
+            var (left, right) = outlined.Extent(middle, middle + 1);
+            _out.WriteLine("윤곽선 없음 폭 " + (plainRight - plainLeft) + " · 두께 8 폭 " + (right - left));
+            // 칠한 폭이 양쪽으로 두께(8px)씩 넓어지고, 바깥 띠는 검정·그 안(글자)은 흰색
+            Assert.InRange(right - left - (plainRight - plainLeft), 16 - 2, 16 + 2);
+            var band = outlined.Pixel(left + 3, middle);
+            var inside = outlined.Pixel(left + 8 + 4, middle);
+            _out.WriteLine("띠 " + band + " · 안 " + inside);
+            Assert.True(band.A == 255 && band.R < 40 && band.G < 40 && band.B < 40, "바깥 띠는 검정 " + band);
+            Assert.True(inside.A == 255 && inside.R > 230 && inside.G > 230 && inside.B > 230, "글자 안은 흰색 " + inside);
+
+            // 효과 배율 2(예: 1080p 프로젝트를 4K로 내보낼 때)면 띠도 두 배(16px) — 글자 크기는 그대로 두고 배율만 바꾼다
+            var doubled = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill + "," + Outline(8), effectScale: 2), "outline-scale-2");
+            var (doubledLeft, doubledRight) = doubled.Extent(doubled.Height / 2, doubled.Height / 2 + 1);
+            _out.WriteLine("배율 2 폭 " + (doubledRight - doubledLeft));
+            Assert.InRange(doubledRight - doubledLeft - (plainRight - plainLeft), 32 - 2, 32 + 2);
+            Assert.Equal(0, doubled.BorderInk());
+
+            // 채우기 없음 + 윤곽선: 바깥 가장자리는 같고 속은 비었다(투명)
+            var hollow = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200,
+                style: "\"Fill\":{\"Kind\":\"None\",\"Colors\":[\"#FFFFFF\"]}," + Outline(8)), "outline-hollow");
+            Assert.Equal(outlined.Width, hollow.Width);
+            var (hollowLeft, hollowRight) = hollow.Extent(middle, middle + 1);
+            Assert.InRange(hollowLeft - left, -1, 1);
+            Assert.InRange(hollowRight - right, -1, 1);
+            Assert.True(hollow.Pixel(hollowLeft + 3, middle).A == 255, "바깥 띠는 칠함");
+            Assert.Equal(0, hollow.Alpha(hollowLeft + 8 + 4, middle));
+            Assert.Equal(0, hollow.Alpha((hollowLeft + hollowRight) / 2, middle));
+
+            // 반투명 채우기: 윤곽선 안쪽 절반이 비쳐 어두워지지 않는다(글자 밖으로만 그림)
+            var glass = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200,
+                style: "\"Fill\":{\"Kind\":\"Solid\",\"Colors\":[\"#80FFFFFF\"]}," + Outline(8)), "outline-glass");
+            var glassInside = glass.Pixel(left + 8 + 4, middle);
+            _out.WriteLine("반투명 안 " + glassInside);
+            Assert.InRange(glassInside.A, 100, 160);
+            Assert.True(glassInside.R > 230 && glassInside.G > 230 && glassInside.B > 230, "반투명 흰색 그대로 " + glassInside);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_OutlineJoins_DifferAtCorners_ThickOutlineStaysInside()
+        {
+            // "W"의 뾰족한 꼭짓점: 각지게(한도 2) > 둥글게 > 깎아서 순으로 칠한 넓이가 크다
+            var rasterizer = NewRasterizer();
+            var counts = new System.Collections.Generic.Dictionary<string, int>();
+            foreach (var join in new[] { "Round", "Miter", "Bevel" })
+            {
+                var png = await Render(rasterizer, Request(rasterizer, "W", fontSize: 200, style: WhiteFill + "," + Outline(12, join)), "outline-join-" + join);
+                counts[join] = png.PaintedCount();
+                Assert.Equal(0, png.BorderInk());
+            }
+            _out.WriteLine("칠한 픽셀 둥글게 " + counts["Round"] + " · 각지게 " + counts["Miter"] + " · 깎아서 " + counts["Bevel"]);
+            Assert.True(counts["Miter"] > counts["Round"] + 20, "각지게 > 둥글게");
+            Assert.True(counts["Round"] > counts["Bevel"] + 20, "둥글게 > 깎아서");
+
+            // 가장 두꺼운 50px도(각지게 모서리 끝까지) 그림 가장자리 1px 줄에 닿지 않는다
+            foreach (var join in new[] { "Miter", "Round" })
+            {
+                var thick = await Render(rasterizer, Request(rasterizer, "WAV가", fontSize: 120, style: WhiteFill + "," + Outline(50, join)), "outline-50-" + join);
+                _out.WriteLine("두께 50 " + join + " " + thick.Width + "×" + thick.Height + " · 칠한 픽셀 " + thick.PaintedCount());
+                Assert.True(thick.PaintedCount() > 1000);
+                Assert.Equal(0, thick.BorderInk());
+            }
         }
 
         [UiFact]
@@ -477,6 +572,104 @@ namespace VideoEditor.UiTests
                     ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
                 await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
                 await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        [EditorFact]
+        public async Task StyleTab_Outline_ChangesPreview_WidthDragIsOneUndoStep()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                var id = await AddStyledText(ui, window, "윤곽선 ABC");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                await ui.WaitFor(() => Ui.ById<CheckBox>(window, "StyleOutlineOn"), Wait, "윤곽선 칸");
+                var before = ui.Run(() =>
+                {
+                    // 꺼져 있으면 색·두께·이음은 고칠 수 없다
+                    Assert.False(Ui.ById<CheckBox>(window, "StyleOutlineOn").IsChecked == true);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleOutlineWidth").IsEnabled);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleOutlineColor").IsEnabled);
+                    Assert.False(Ui.ById<ComboBox>(window, "StyleOutlineJoin").IsEnabled);
+                    Assert.Equal("둥글게", Ui.ById<ComboBox>(window, "StyleOutlineJoin").SelectedItem);
+                    return PreviewPixels(window);
+                });
+
+                // 켜기 → 스타일이 생기고(검정 4px) 그리개로 그린다 — 미리 보기 바탕도 검정이라 윤곽선 자체는 아직 안 보인다
+                ui.Run(() => Ui.ClickToggle(Ui.ById<CheckBox>(window, "StyleOutlineOn")));
+                await ui.WaitUntil(() => StyleOf(window, id) is object style && (bool)Get(Get(style, "Outline"), "Enabled"), Wait, "윤곽선 켜기");
+                await ui.WaitUntil(() => Differs(before, PreviewPixels(window)), Wait, "그리개 미리 보기");
+                await Task.Delay(500);
+                var on = ui.Run(() =>
+                {
+                    Assert.True(Ui.ById<TextBox>(window, "StyleOutlineWidth").IsEnabled);
+                    Assert.True(Ui.ById<TextBox>(window, "StyleOutlineColor").IsEnabled);
+                    Assert.True(Ui.ById<ComboBox>(window, "StyleOutlineJoin").IsEnabled);
+                    Assert.Equal("#000000", Ui.ById<TextBox>(window, "StyleOutlineColor").Text);
+                    Assert.Equal("4", Ui.ById<TextBox>(window, "StyleOutlineWidth").Text);
+                    return PreviewPixels(window);
+                });
+
+                // 색을 빨강으로 → 검정 바탕에서 윤곽선이 보인다
+                ui.Run(() =>
+                {
+                    var hex = Ui.ById<TextBox>(window, "StyleOutlineColor");
+                    Ui.Focus(hex);
+                    hex.Text = "ef4444";
+                    Ui.Press(hex, System.Windows.Input.Key.Enter);
+                });
+                await ui.WaitUntil(() => (string)Get(Get(StyleOf(window, id), "Outline"), "Color") == "#EF4444", Wait, "빨간 윤곽선");
+                // 칸을 떠나도(적용한 값 그대로) 편집이 더 생기지 않는다 — 실행 취소 키는 글 칸이 아닌 편집기로
+                ui.Run(() => Ui.Focus(Canvas(window)));
+                await ui.WaitUntil(() => Differs(on, PreviewPixels(window)), Wait, "빨간 윤곽선 미리 보기");
+                await Task.Delay(500);
+                var red = ui.Run(() => PreviewPixels(window));
+
+                // 두께 슬라이더를 끄는 동안(값 여러 번)은 실행 취소 한 단계 — 미리 보기는 더 두꺼워진다
+                ui.Run(() =>
+                {
+                    var slider = Ui.ById<Slider>(window, "StyleOutlineWidthSlider");
+                    foreach (var value in new[] { 10.0, 20.0, 30.0 })
+                        slider.Value = value;
+                });
+                await ui.WaitUntil(() => Math.Abs((double)Get(Get(StyleOf(window, id), "Outline"), "Width") - 30) < 1e-6, Wait, "두께 30");
+                await ui.WaitUntil(() => Differs(red, PreviewPixels(window)), Wait, "두께 미리 보기");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-tab-outline"));
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => Math.Abs((double)Get(Get(StyleOf(window, id), "Outline"), "Width") - 4) < 1e-6, Wait, "실행 취소 한 번에 두께 4");
+                Assert.True(ui.Run(() => (bool)Get(Get(StyleOf(window, id), "Outline"), "Enabled")));
+                Assert.Equal("#EF4444", ui.Run(() => (string)Get(Get(StyleOf(window, id), "Outline"), "Color")));
+                await ui.WaitUntil(() => !Differs(red, PreviewPixels(window)), Wait, "두께 4 미리 보기로 돌아옴");
+
+                // 이음 각지게 → 값이 바뀌고, 실행 취소 두 번(이음·색)
+                ui.Run(() => Ui.ById<ComboBox>(window, "StyleOutlineJoin").SelectedIndex = 1);
+                await ui.WaitUntil(() => Get(Get(StyleOf(window, id), "Outline"), "Join").ToString() == "Miter", Wait, "각지게");
+                foreach (var step in new[] { "이음", "색" })
+                    ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => (string)Get(Get(StyleOf(window, id), "Outline"), "Color") == "#000000", Wait, "색 실행 취소");
+
+                // 색 칸에 적기만 하고(Enter 없이) 메뉴로 켜기를 실행 취소 → 칸이 꺼진 뒤 포커스를 잃어도 적던 색을 적용하지 않는다(스타일 없던 처음으로)
+                ui.Run(() =>
+                {
+                    var hex = Ui.ById<TextBox>(window, "StyleOutlineColor");
+                    Ui.Focus(hex);
+                    hex.Text = "00ff00";
+                    Ui.Menu(window, "편집", "실행 취소");
+                });
+                await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
+                ui.Run(() => Ui.Focus(Canvas(window)));
+                await Task.Delay(300);
+                Assert.Null(ui.Run(() => StyleOf(window, id)));
+                Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
+                await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+                Assert.False(ui.Run(() => Ui.ById<TextBox>(window, "StyleOutlineWidth").IsEnabled));
                 Assert.Empty(ui.TakeErrors());
             }
             finally
