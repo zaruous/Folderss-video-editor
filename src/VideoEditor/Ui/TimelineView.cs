@@ -219,6 +219,14 @@ namespace VideoEditor.Ui
             menu.Items.Add(MenuItem("동영상 트랙 추가", () => _commands.AddTrack(TrackKind.Video)));
             menu.Items.Add(MenuItem("오디오 트랙 추가", () => _commands.AddTrack(TrackKind.Audio)));
             menu.Items.Add(MenuItem("자막 트랙 추가", _commands.AddSubtitleTrack));
+            if (track != null && track.Subtitles)
+            {
+                menu.Items.Add(new Separator());
+                var highlight = MenuItem("말하는 단어 강조(음성 인식 자막)", () => _commands.SetWordHighlight(track.Id, !track.WordHighlight));
+                highlight.IsChecked = track.WordHighlight;
+                System.Windows.Automation.AutomationProperties.SetAutomationId(highlight, "WordHighlightMenu");
+                menu.Items.Add(highlight);
+            }
             if (track != null && track != _session.Project.MainTrack)
             {
                 menu.Items.Add(new Separator());

@@ -229,6 +229,7 @@ namespace VideoEditor.Core
             var delta = newStart - clip.Start;
             clip.SourceIn += (long)Math.Round(delta * clip.Speed, MidpointRounding.AwayFromZero);
             clip.Start = newStart;
+            clip.ShiftWords(delta);
             SetDuration(clip, end - newStart);
         }
 
@@ -249,6 +250,7 @@ namespace VideoEditor.Core
             var originalOut = clip.SourceOut;
             SetEnd(clip, frame);
             right.Start = frame;
+            right.ShiftWords(frame - clip.Start);
             right.SourceIn = clip.SourceOut;
             right.SourceOut = originalOut;
             if (!right.HasSourceLimit)
@@ -515,6 +517,8 @@ namespace VideoEditor.Core
                 var previous = clips.Count > 0 ? clips[clips.Count - 1] : null;
                 if (previous != null && start <= previous.Start)
                 {
+                    // 합친 큐는 단어 시각이 맞지 않는다
+                    previous.Words = null;
                     // 같은 프레임에 시작하면 한 큐로 — 같은 글은 한 번만, 합쳐도 2,000자까지
                     if (!previous.Text.Contains(cue.Text, StringComparison.Ordinal))
                         previous.Text = SubtitleFile.Cut(previous.Text + "\n" + cue.Text, SubtitleFile.MaxTextLength);
@@ -523,7 +527,9 @@ namespace VideoEditor.Core
                 }
                 if (previous != null && previous.End > start)
                     previous.SourceOut = start - previous.Start;
-                clips.Add(CreateText(cue.Text, start, end - start));
+                var text = CreateText(cue.Text, start, end - start);
+                text.Words = cue.Words?.Select(w => new ClipWord { Text = w.Text, Start = rate.ToFrames(w.Start) - start, End = rate.ToFrames(w.End) - start }).ToList();
+                clips.Add(text);
             }
             if (clips.Count == 0)
                 return null;
@@ -537,6 +543,15 @@ namespace VideoEditor.Core
             var track = AddSubtitleTrack(project);
             track.Clips.AddRange(clips);
             return track;
+        }
+
+        /// <summary>자막 트랙의 [말하는 단어 강조]를 켜거나 끈다.</summary>
+        public static void SetWordHighlight(Project project, Track track, bool on)
+        {
+            if (track == null || !track.Subtitles)
+                throw new EditException("자막 트랙에서만 말하는 단어를 강조할 수 있습니다.");
+            EnsureEditable(track);
+            track.WordHighlight = on;
         }
 
         public static void RemoveTrack(Project project, Track track)

@@ -46,6 +46,8 @@ namespace VideoEditor.Core
                     continue;
                 var start = Math.Max(0, rate.ToSeconds(clip.Start - from) - half) * scale;
                 var end = (rate.ToSeconds(clip.End - from) - half) * scale;
+                if (track.WordHighlight && CanHighlight(clip))
+                    text = Highlight(rate, clip, from, start / scale, scale);
                 events.Append("Dialogue: 0,").Append(Time(start)).Append(',').Append(Time(end)).Append(",Default,,0,0,0,,").Append(text).Append('\n');
             }
             if (events.Length == 0)
@@ -69,6 +71,50 @@ namespace VideoEditor.Core
             ass.Append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
             ass.Append(events);
             return ass.ToString();
+        }
+
+        /// <summary>강조할 단어 색(ASS &amp;HBBGGRR — 노랑 #FFD700)과 원래 글자 색(흰색).</summary>
+        public const string HighlightColour = "&H00D7FF&";
+        private const string PlainColour = "&HFFFFFF&";
+
+        /// <summary>단어 시각이 큐 글과 맞는지(글자·숫자가 같아야 — 큐 글을 고쳤으면 강조하지 않는다).</summary>
+        public static bool CanHighlight(Clip clip)
+        {
+            if (clip.Words == null || clip.Words.Count == 0)
+                return false;
+            var words = string.Concat(clip.Words.Select(w => w.Text)).Where(char.IsLetterOrDigit);
+            return words.SequenceEqual((clip.Text ?? "").Where(char.IsLetterOrDigit));
+        }
+
+        /// <summary>
+        /// 말하는 단어만 노랗게: 단어마다 {\r}(앞 단어의 변화를 끊음)와 그 단어가 말해질 때 노랑, 다음 단어가 시작할 때 흰색으로 바뀌는 \t를 붙인다.
+        /// \t 시각은 대사 시작부터의 밀리초(× 시간 배율)이고, 같은 시각 두 개(\t(0,0,…))는 대사 내내 서서히 바뀌는 뜻이라 1ms 폭으로 쓴다.
+        /// 단어 시각도 큐처럼 반 프레임 앞으로 적는다.
+        /// </summary>
+        private static string Highlight(FrameRate rate, Clip clip, long from, double lineStart, int scale)
+        {
+            var half = rate.ToSeconds(1) / 2;
+            long At(long offset) => (long)Math.Round(Math.Max(0, Math.Max(0, rate.ToSeconds(clip.Start + offset - from) - half) - lineStart) * 1000 * scale);
+            var result = new StringBuilder();
+            for (var i = 0; i < clip.Words.Count; i++)
+            {
+                var word = clip.Words[i];
+                var on = At(word.Start);
+                var off = i + 1 < clip.Words.Count ? Math.Max(on, At(clip.Words[i + 1].Start)) : Math.Max(on, At(word.End));
+                result.Append("{\\r");
+                // 대사 시작에 이미 말하는 단어는 처음부터 노랑(\t(0,1,…)은 0ms에서 아직 바뀌기 전이라 한 장 미리 보기에 흰색으로 나온다)
+                if (off > 0 && on == 0)
+                    result.AppendFormat(CultureInfo.InvariantCulture, "\\1c{0}\\t({1},{2},\\1c{3})", HighlightColour, off, off + 1, PlainColour);
+                else if (off > 0)
+                {
+                    result.AppendFormat(CultureInfo.InvariantCulture, "\\t({0},{1},\\1c{2})\\t({3},{4},\\1c{5})",
+                        on, on + 1, HighlightColour, off, off + 1, PlainColour);
+                }
+                result.Append('}').Append(Escape(word.Text));
+                if (i + 1 < clip.Words.Count)
+                    result.Append(' ');
+            }
+            return result.ToString();
         }
 
         /// <summary>초 → ASS 시각 "시:분:초.백분의일초".</summary>

@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using VideoEditor.Core;
@@ -407,6 +408,123 @@ namespace VideoEditor.Tests
             {
                 _report(value);
             }
+        }
+    }
+
+    /// <summary>말하는 단어 강조: 음성 인식 큐의 단어 시각을 클립에 두고, 자막 트랙에서 켜면 지금 단어만 노랗게(libass \t).</summary>
+    public class WordHighlightTests
+    {
+        private readonly ITestOutputHelper _out;
+
+        public WordHighlightTests(ITestOutputHelper output)
+        {
+            _out = output;
+        }
+
+        /// <summary>0~2초 큐 "가나 다라" — 단어 0~1초, 1~2초(30fps → 0~30, 30~60프레임).</summary>
+        private static (Project Project, Track Track, Clip Cue) Spoken(bool highlight = true)
+        {
+            var project = TestProjects.Empty();
+            var cue = new SubtitleCue
+            {
+                Start = 0, End = 2, Text = "가나 다라",
+                Words = new List<SubtitleCue> { new SubtitleCue { Start = 0, End = 1, Text = "가나" }, new SubtitleCue { Start = 1, End = 2, Text = "다라" } }
+            };
+            var track = TimelineEdits.ImportSubtitles(project, new[] { cue });
+            TimelineEdits.SetWordHighlight(project, track, highlight);
+            return (project, track, track.Clips[0]);
+        }
+
+        [Fact]
+        public void ImportedCue_KeepsWordFrames_FromClipStart()
+        {
+            var (_, _, clip) = Spoken();
+            Assert.Equal(new[] { ("가나", 0L, 30L), ("다라", 30L, 60L) }, clip.Words.Select(w => (w.Text, w.Start, w.End)));
+        }
+
+        [Fact]
+        public void Ass_HighlightsOnlyTheSpokenWord()
+        {
+            var (project, track, _) = Spoken();
+            var ass = SubtitleAss.Build(project, track, 0, project.Duration);
+            // 단어마다 {\r}로 앞 변화를 끊고, 말해질 때(반 프레임 앞) 노랑 → 다음 단어 시작에 흰색. 대사 시작에 말하는 단어는 처음부터 노랑
+            Assert.Contains("Dialogue: 0,0:00:00.00,0:00:01.98,Default,,0,0,0,,"
+                + "{\\r\\1c&H00D7FF&\\t(983,984,\\1c&HFFFFFF&)}가나 {\\r\\t(983,984,\\1c&H00D7FF&)\\t(1983,1984,\\1c&HFFFFFF&)}다라\n", ass);
+            // 큐 도중부터 그리면 이미 지난 단어는 흰색 그대로, 시각은 그리는 구간 시작 기준
+            var mid = SubtitleAss.Build(project, track, 45, 46);
+            Assert.Contains(",,{\\r}가나 {\\r\\1c&H00D7FF&\\t(483,484,\\1c&HFFFFFF&)}다라\n", mid);
+        }
+
+        [Fact]
+        public void Ass_PlainWhenOffOrTextEdited()
+        {
+            var (project, track, clip) = Spoken(highlight: false);
+            Assert.Contains(",,가나 다라\n", SubtitleAss.Build(project, track, 0, project.Duration));
+            TimelineEdits.SetWordHighlight(project, track, true);
+            clip.Text = "가나 다라 마바";
+            Assert.False(SubtitleAss.CanHighlight(clip));
+            Assert.Contains(",,가나 다라 마바\n", SubtitleAss.Build(project, track, 0, project.Duration));
+            // 줄바꿈·띄어쓰기만 다르면 그대로 강조
+            clip.Text = "가나\n다라";
+            Assert.True(SubtitleAss.CanHighlight(clip));
+        }
+
+        [Fact]
+        public void SplitAndTrim_KeepWordsOnTheSound()
+        {
+            var (project, track, clip) = Spoken();
+            var right = TimelineEdits.Split(project, new[] { clip }, 30).Single();
+            Assert.Equal(30, right.Start);
+            Assert.Equal(new[] { (-30L, 0L), (0L, 30L) }, right.Words.Select(w => (w.Start, w.End)));
+            Assert.Equal(new[] { (0L, 30L), (30L, 60L) }, clip.Words.Select(w => (w.Start, w.End)));
+            Assert.NotSame(clip.Words, right.Words);
+            // 앞을 다듬으면 단어가 소리의 같은 자리에 남는다(클립 시작 기준이 옮겨짐)
+            TimelineEdits.TrimStart(project, clip, 15);
+            Assert.Equal(new[] { (-15L, 15L), (15L, 45L) }, clip.Words.Select(w => (w.Start, w.End)));
+        }
+
+        [Fact]
+        public void ProjectFile_KeepsWords_AndCleansUntrustedOnes()
+        {
+            var (project, track, _) = Spoken();
+            var json = JsonNode.Parse(ProjectFile.Snapshot(project));
+            var copy = ProjectFile.FromSnapshot(json.ToJsonString());
+            var subtitles = copy.VideoTracks.Single(t => t.Subtitles);
+            Assert.True(subtitles.WordHighlight);
+            Assert.Equal(2, subtitles.Clips[0].Words.Count);
+            // 빈 단어·너무 긴 단어는 빼고, 끝이 시작보다 앞이면 고친다. 자막 트랙이 아니면 강조를 끈다
+            var words = json["VideoTracks"][1]["Clips"][0]["Words"].AsArray();
+            words.Add(JsonNode.Parse("{\"Text\":\"\",\"Start\":5,\"End\":6}"));
+            words.Add(JsonNode.Parse("{\"Text\":\"" + new string('가', 101) + "\",\"Start\":5,\"End\":6}"));
+            words[1]["End"] = 10;
+            json["VideoTracks"][0]["WordHighlight"] = true;
+            var cleaned = ProjectFile.FromSnapshot(json.ToJsonString());
+            Assert.False(cleaned.MainTrack.WordHighlight);
+            Assert.Equal(new[] { ("가나", 0L, 30L), ("다라", 30L, 30L) }, cleaned.VideoTracks[1].Clips[0].Words.Select(w => (w.Text, w.Start, w.End)));
+        }
+
+        [FfmpegFact]
+        public void Preview_ShowsTheSpokenWordInYellow()
+        {
+            var (project, track, _) = Spoken();
+            project.Width = 640;
+            project.Height = 360;
+            int Yellow(byte[] bgra)
+            {
+                var count = 0;
+                for (var i = 0; i < bgra.Length; i += 4)
+                {
+                    if (bgra[i + 2] > 200 && bgra[i + 1] > 150 && bgra[i] < 80)
+                        count++;
+                }
+                return count;
+            }
+            var on = Yellow(PreviewRenderer.Frame(FfmpegMedia.Tool, project, 45, 640, 360, CancellationToken.None).GetAwaiter().GetResult());
+            TimelineEdits.SetWordHighlight(project, track, false);
+            var off = Yellow(PreviewRenderer.Frame(FfmpegMedia.Tool, project, 45, 640, 360, CancellationToken.None).GetAwaiter().GetResult());
+            _out.WriteLine("노란 픽셀: 강조 " + on + " · 끔 " + off);
+            Assert.True(on > 50, "강조 " + on);
+            Assert.Equal(0, off);
         }
     }
 }

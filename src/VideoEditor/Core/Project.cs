@@ -55,6 +55,9 @@ namespace VideoEditor.Core
         public bool Locked { get; set; }
         /// <summary>자막 트랙(동영상 트랙만): 글자 클립을 큐로 보고 트랙 공통 모양으로 화면 아래에 입힌다(libass). 글자 클립만 놓인다.</summary>
         public bool Subtitles { get; set; }
+        /// <summary>자막 트랙: 말하는 단어를 노란색으로 강조(단어 시각이 있는 큐 — 음성 인식으로 만든 것).</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool WordHighlight { get; set; }
         public double Height { get; set; } = 56;
         public List<Clip> Clips { get; set; } = new List<Clip>();
 
@@ -171,13 +174,38 @@ namespace VideoEditor.Core
             return frame >= Start && frame < End;
         }
 
+        /// <summary>글자 클립(자막 큐)의 단어 시각 — 음성 인식으로 만든 큐에만. 클립 시작부터의 프레임.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<ClipWord> Words { get; set; }
+
         public Clip CloneWithNewId()
         {
             var copy = (Clip)MemberwiseClone();
             copy.Id = Track.NewId();
             copy.Style = Style?.Clone();
+            copy.Words = Words?.Select(w => new ClipWord { Text = w.Text, Start = w.Start, End = w.End }).ToList();
             return copy;
         }
+
+        /// <summary>단어 시각을 frames만큼 앞으로 당긴다(클립 시작을 뒤로 옮겼을 때 — 단어가 소리의 같은 자리에 남게).</summary>
+        internal void ShiftWords(long frames)
+        {
+            if (Words == null)
+                return;
+            foreach (var word in Words)
+            {
+                word.Start -= frames;
+                word.End -= frames;
+            }
+        }
+    }
+
+    /// <summary>자막 큐의 단어 하나와 그 시각(클립 시작부터의 프레임, [Start, End)).</summary>
+    public sealed class ClipWord
+    {
+        public string Text { get; set; }
+        public long Start { get; set; }
+        public long End { get; set; }
     }
 
     public sealed class Marker

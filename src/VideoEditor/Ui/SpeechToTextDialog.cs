@@ -25,6 +25,7 @@ namespace VideoEditor.Ui
         public const string ModelKey = "speechModel";
         public const string LanguageKey = "speechLanguage";
         public const string PromptKey = "speechPrompt";
+        public const string HighlightKey = "speechHighlight";
 
         private readonly EditorServices _services;
         private readonly Recognizer _recognize;
@@ -36,6 +37,7 @@ namespace VideoEditor.Ui
             Margin = new Thickness(0, 4, 0, 0), MaxLength = SubtitleFile.MaxBytes / 2
         };
         private Button _scriptFile;
+        private readonly CheckBox _highlight = new CheckBox { Margin = new Thickness(0, 12, 0, 0) };
         private readonly List<RadioButton> _models = new List<RadioButton>();
         private readonly TextBlock _status = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) };
         private readonly ProgressBar _progress = new ProgressBar { Height = 14, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
@@ -103,6 +105,11 @@ namespace VideoEditor.Ui
             AutomationProperties.SetName(_script, "대본");
             panel.Children.Add(_script);
 
+            _highlight.Content = new TextBlock { Text = "말하는 단어를 노란색으로 강조(쇼츠 자막) — 자막 트랙 오른쪽 메뉴에서 나중에 켜고 끌 수도 있습니다", TextWrapping = TextWrapping.Wrap };
+            _highlight.IsChecked = services.Setting(HighlightKey) == "true";
+            AutomationProperties.SetAutomationId(_highlight, "SpeechHighlight");
+            panel.Children.Add(_highlight);
+
             var modelLabel = UiKit.Label("모델");
             modelLabel.Margin = new Thickness(0, 12, 0, 0);
             panel.Children.Add(modelLabel);
@@ -154,6 +161,9 @@ namespace VideoEditor.Ui
         public SpeechResult Result { get; private set; }
 
         public SpeechModel Model { get; private set; }
+
+        /// <summary>새 자막 트랙에서 말하는 단어를 강조할지.</summary>
+        public bool HighlightWords { get; private set; }
 
         public TimeSpan Elapsed { get; private set; }
 
@@ -216,6 +226,8 @@ namespace VideoEditor.Ui
             _services.SaveSetting(ModelKey, model.Id);
             _services.SaveSetting(LanguageKey, language);
             _services.SaveSetting(PromptKey, prompt);
+            HighlightWords = _highlight.IsChecked == true;
+            _services.SaveSetting(HighlightKey, HighlightWords ? "true" : null);
             _cancel = new CancellationTokenSource();
             var cancellation = _cancel.Token;
             SetBusy(true);
@@ -262,6 +274,7 @@ namespace VideoEditor.Ui
             _language.IsEnabled = !busy;
             _prompt.IsEnabled = !busy;
             _script.IsEnabled = !busy;
+            _highlight.IsEnabled = !busy;
             _scriptFile.IsEnabled = !busy;
             foreach (var radio in _models)
                 radio.IsEnabled = !busy;

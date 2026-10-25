@@ -48,6 +48,7 @@ namespace VideoEditor.UiTests
                     Assert.NotNull(Ui.ById<RadioButton>(dialog, "SpeechModel_turbo"));
                     Assert.Equal("한국어", ((ComboBoxItem)Ui.ById<ComboBox>(dialog, "SpeechLanguage").SelectedItem).Content);
                     Assert.NotNull(Ui.ById<Button>(dialog, "SpeechScriptFileButton"));
+                    Assert.False(Ui.ById<CheckBox>(dialog, "SpeechHighlight").IsChecked);
                     Ui.Snap(dialog, plugin.ShotFolder, "speech-to-text");
                 });
 

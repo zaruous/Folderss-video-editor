@@ -485,6 +485,13 @@ namespace VideoEditor.Ui
 사용자 효과를 넣은 클립은 프로젝트 파일에 효과 정의를 함께 저장하므로, 이 폴더가 없는 PC에서도 같게 그려집니다.
 ";
 
+        /// <summary>자막 트랙의 [말하는 단어 강조] 켜기·끄기.</summary>
+        public void SetWordHighlight(string trackId, bool on)
+        {
+            Run(p => TimelineEdits.SetWordHighlight(p, p.FindTrack(trackId), on),
+                on ? "말하는 단어를 노란색으로 강조합니다(음성 인식으로 만든 큐만 — 글을 고친 큐는 강조하지 않습니다)." : "말하는 단어 강조를 껐습니다.");
+        }
+
         public void AddSubtitleTrack()
         {
             Run(p => TimelineEdits.AddSubtitleTrack(p), "자막 트랙을 더했습니다. SRT·VTT를 끌어 놓거나 [파일 > 자막 가져오기…]로 큐를 넣으세요.");
@@ -619,7 +626,13 @@ namespace VideoEditor.Ui
             var script = result.Sentences == 0 ? "틀린 글은 큐를 골라 속성에서 고치세요."
                 : result.Matched == 0 ? "대본과 맞는 말을 찾지 못해 인식한 글로 넣었습니다(대본이 이 소리의 것인지 확인하세요)."
                 : "대본 문장 " + result.Matched + "개에 시각을 맞췄습니다" + (result.Unscripted > 0 ? "(대본에 없는 말 " + result.Unscripted + "곳은 인식한 글로)." : ".");
-            Run(p => TimelineEdits.ImportSubtitles(p, cues),
+            var highlight = dialog.HighlightWords;
+            Run(p =>
+                {
+                    var track = TimelineEdits.ImportSubtitles(p, cues);
+                    if (track != null && highlight)
+                        track.WordHighlight = true;
+                },
                 "음성 인식으로 자막 " + cues.Count + "개를 만들었습니다(" + dialog.Model.Label + " 모델, " + (seconds >= 60 ? seconds / 60 + "분 " : "") + seconds % 60 + "초). " + script);
         }
 
