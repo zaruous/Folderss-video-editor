@@ -29,7 +29,7 @@ namespace VideoEditor.Ui
         private bool _disposed;
 
         /// <summary>그리는 방식을 바꾸면 올린다(캐시 키에 들어가 예전 PNG를 쓰지 않게).</summary>
-        public int Version { get { return 2; } }
+        public int Version { get { return 3; } }
 
         /// <summary>어느 스레드에서 불러도 된다. 배경 그리기 스레드에 맡기고 끝날 때까지(최대 30초) 기다린다.</summary>
         public void Render(TextImageRequest request, string pngPath, CancellationToken cancellation)
@@ -199,7 +199,11 @@ namespace VideoEditor.Ui
             using (var context = visual.RenderOpen())
             {
                 context.PushTransform(new TranslateTransform(layout.OriginX + halfWidth - centerX, layout.OriginY + halfHeight - centerY));
-                // 채우기(단색·선형·원형, 없음이면 칠하지 않음). 윤곽선·그림자는 다음 작업에서 더한다
+                // 윤곽선을 먼저, 채우기를 위에 — 펜 두께의 바깥 절반(= 윤곽선 두께)만 보인다. 그림자는 다음 작업에서 더한다
+                var outline = OutlinePen(style.Outline, request.EffectScale);
+                if (outline != null && !ink.IsEmpty)
+                    DrawOutline(context, outline, geometry, style.Fill);
+                // 채우기(단색·선형·원형, 없음이면 칠하지 않음)
                 var fill = FillBrush(style.Fill);
                 if (fill != null)
                     context.DrawGeometry(fill, null, geometry);
@@ -294,6 +298,56 @@ namespace VideoEditor.Ui
             brush.MappingMode = BrushMappingMode.RelativeToBoundingBox;
             brush.Freeze();
             return brush;
+        }
+
+        /// <summary>
+        /// 윤곽선 펜: 두께 = 윤곽선 두께 × 효과 배율 × 2(글자 윤곽 양쪽으로 반씩 — 바깥쪽 절반이 윤곽선 두께), 이음은 둥글게·각지게·깎아서,
+        /// 각진 이음 한도는 <see cref="StyledTextLayout.MiterLimit"/>(여백 계산과 같은 값). 꺼졌거나 두께가 0이면 null.
+        /// </summary>
+        private static Pen OutlinePen(TextOutline outline, double effectScale)
+        {
+            if (!outline.Enabled)
+                return null;
+            // 효과 배율은 여백 계산(StyledTextLayout)과 같게 — 유한한 양수만, 아니면 0
+            var thickness = outline.Width * (double.IsFinite(effectScale) && effectScale > 0 ? effectScale : 0) * 2;
+            if (!(thickness > 0))
+                return null;
+            var pen = new Pen(SolidBrush(outline.Color), thickness)
+            {
+                LineJoin = outline.Join == LineJoinKind.Miter ? PenLineJoin.Miter : outline.Join == LineJoinKind.Bevel ? PenLineJoin.Bevel : PenLineJoin.Round,
+                MiterLimit = StyledTextLayout.MiterLimit
+            };
+            pen.Freeze();
+            return pen;
+        }
+
+        /// <summary>
+        /// 윤곽선을 그린다. 채우기가 불투명하면 글자 아래에 그대로(채우기가 안쪽 절반을 덮어 가장자리 이음새가 없다),
+        /// 채우기가 비치면(없음·반투명 색) 글자 밖으로만 잘라 그린다 — 안쪽 절반이 비쳐 보이지 않게, 없음이면 속이 빈 글자.
+        /// </summary>
+        private static void DrawOutline(DrawingContext context, Pen pen, Geometry geometry, TextFill fill)
+        {
+            if (IsOpaque(fill))
+            {
+                context.DrawGeometry(null, pen, geometry);
+                return;
+            }
+            var outside = geometry.GetRenderBounds(pen);
+            outside.Inflate(1, 1);
+            var clip = new CombinedGeometry(GeometryCombineMode.Exclude, new RectangleGeometry(outside), geometry);
+            clip.Freeze();
+            context.PushClip(clip);
+            context.DrawGeometry(null, pen, geometry);
+            context.Pop();
+        }
+
+        /// <summary>채우기가 글자를 다 덮는지: 없음이 아니고 쓰는 색이 모두 불투명.</summary>
+        private static bool IsOpaque(TextFill fill)
+        {
+            if (fill.Kind == FillKind.None)
+                return false;
+            var colors = fill.Kind == FillKind.Solid ? fill.Colors.Take(1) : fill.Colors;
+            return colors.All(c => UiKit.ParseColor(c, Colors.White).A == 255);
         }
 
         private static Brush SolidBrush(string color)

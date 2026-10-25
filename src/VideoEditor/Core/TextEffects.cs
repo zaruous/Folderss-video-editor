@@ -18,6 +18,16 @@ namespace VideoEditor.Core
             return (0.5 - dx * half, 0.5 - dy * half, 0.5 + dx * half, 0.5 + dy * half);
         }
 
+        /// <summary>
+        /// 윤곽선이 글자 밖으로 번지는 거리(픽셀). 그리개는 두께 width × 2인 펜으로 채우기 전에 그려 바깥쪽 width만 보이게 하므로
+        /// 둥글게·깎아서는 width, 각지게는 모서리 끝이 펜 두께 절반의 <see cref="StyledTextLayout.MiterLimit"/>배까지 나가 width × 2.
+        /// </summary>
+        public static double OutlineExtent(double width, LineJoinKind join)
+        {
+            var extent = double.IsFinite(width) && width > 0 ? width : 0;
+            return join == LineJoinKind.Miter ? extent * StyledTextLayout.MiterLimit : extent;
+        }
+
         /// <summary>정지점 위치: 0~1을 고르게 나눈다(색이 1개면 [0]).</summary>
         public static double[] GradientStops(int count)
         {

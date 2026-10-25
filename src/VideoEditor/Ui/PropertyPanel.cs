@@ -435,7 +435,8 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
-        /// [꾸미기] 꾸민 글자 스타일 — 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬)과 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도).
+        /// [꾸미기] 꾸민 글자 스타일 — 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬), 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도),
+        /// 윤곽선 묶음(켜기·색·두께·이음).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
         /// </summary>
         private UIElement StyleTab(string id)
@@ -592,6 +593,59 @@ namespace VideoEditor.Ui
                 }
             });
 
+            // 윤곽선: 켜기 · 색 · 두께(0~50px) · 이음(둥글게·각지게·깎아서) — 색·두께·이음은 켰을 때만 고친다
+            panel.Children.Add(Section("윤곽선"));
+            var outlineOn = new CheckBox { Content = "윤곽선 그리기", VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetAutomationId(outlineOn, "StyleOutlineOn");
+            outlineOn.Click += (s, e) => Edit(id, c => OutlineOf(c).Enabled = outlineOn.IsChecked == true, null);
+            panel.Children.Add(Row("윤곽선", outlineOn));
+            var outlineColor = UiKit.ColorRow("색", "StyleOutlineColor",
+                () => _session.Project.FindClip(id)?.Style?.Outline?.Color ?? "#000000",
+                hex => Edit(id, c => OutlineOf(c).Color = hex, null));
+            panel.Children.Add(outlineColor);
+            var outlineWidth = NumberRow("두께", "StyleOutlineWidth", 0, 50, "px", id,
+                c => c.Style?.Outline?.Width ?? 4, (c, v) => OutlineOf(c).Width = Math.Max(0, Math.Min(50, v)));
+            panel.Children.Add(outlineWidth);
+            // 순서는 아래 배열(둥글게·각지게·깎아서)
+            var joins = new[] { LineJoinKind.Round, LineJoinKind.Miter, LineJoinKind.Bevel };
+            var outlineJoin = new ComboBox();
+            AutomationProperties.SetAutomationId(outlineJoin, "StyleOutlineJoin");
+            AutomationProperties.SetName(outlineJoin, "이음");
+            foreach (var name in new[] { "둥글게", "각지게", "깎아서" })
+                outlineJoin.Items.Add(name);
+            outlineJoin.SelectionChanged += (s, e) =>
+            {
+                if (_updating || outlineJoin.SelectedIndex < 0)
+                    return;
+                var join = joins[outlineJoin.SelectedIndex];
+                Edit(id, c => OutlineOf(c).Join = join, null);
+            };
+            var joinRow = Row("이음", outlineJoin);
+            panel.Children.Add(joinRow);
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var outline = c.Style?.Outline;
+                    var on = outline?.Enabled == true;
+                    outlineOn.IsChecked = on;
+                    outlineColor.Refresh();
+                    outlineJoin.SelectedIndex = Math.Max(0, Array.IndexOf(joins, outline?.Join ?? LineJoinKind.Round));
+                    outlineColor.IsEnabled = on;
+                    outlineWidth.IsEnabled = on;
+                    joinRow.IsEnabled = on;
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
+
             _refreshers.Add(() =>
             {
                 var c = _session.Project.FindClip(id);
@@ -631,6 +685,12 @@ namespace VideoEditor.Ui
             if (fill.Colors.Count == 0)
                 fill.Colors.Add("#FFFFFF");
             return fill;
+        }
+
+        /// <summary>고칠 클립의 윤곽선(스타일·윤곽선이 없으면 만든다).</summary>
+        private static TextOutline OutlineOf(Clip clip)
+        {
+            return StyleOf(clip).Outline ??= new TextOutline();
         }
 
         /// <summary>밝은 색인지(사람 눈 밝기 0.6 넘음) — 그라데이션 둘째 색을 대비되게 고를 때.</summary>

@@ -693,9 +693,10 @@ namespace VideoEditor.Tests
             Assert.Equal(0, StyledTextLayout.Spread(style, 1, 50).Vertical);
             style.Outline.Enabled = true;
             style.Outline.Width = 10;
-            Assert.Equal(5, StyledTextLayout.Spread(style, 1, 50).Horizontal, 6);
+            // 윤곽선은 글자 밖으로 두께만큼(펜은 두 배 두께, 바깥 절반만 보임), 각지게는 모서리 끝까지 두 배
+            Assert.Equal(10, StyledTextLayout.Spread(style, 1, 50).Horizontal, 6);
             style.Outline.Join = LineJoinKind.Miter;
-            Assert.Equal(5 * StyledTextLayout.MiterLimit, StyledTextLayout.Spread(style, 1, 50).Horizontal, 6);
+            Assert.Equal(20, StyledTextLayout.Spread(style, 1, 50).Horizontal, 6);
             style.Outline.Enabled = false;
             style.Glow.Enabled = true;
             style.Glow.Size = 12;

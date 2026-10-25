@@ -82,7 +82,7 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
 | 채우기 | `Fill.Kind` | `None`/`Solid`/`Linear`/`Radial`, 기본 `Solid` |
 | | `Fill.Colors` | 1~4개, `#RRGGBB` 또는 `#AARRGGBB`. 넘치는 것은 버리고, 없으면 흰색 |
 | | `Fill.Angle` | 0~360°(0° = 왼쪽→오른쪽) |
-| 윤곽선 | `Outline.Enabled`, `Color`, `Width`, `Join` | `Width` 0~50, `Join`은 `Round`/`Miter`/`Bevel` |
+| 윤곽선 | `Outline.Enabled`, `Color`, `Width`, `Join` | `Width` 0~50(글자 밖으로 보이는 두께), `Join`은 `Round`/`Miter`/`Bevel` |
 | 그림자 | `Shadow.Enabled`, `Color`, `Distance`, `Angle`, `Blur`, `Opacity` | `Distance` 0~200, `Angle` 0~360°(0° = 오른쪽, 시계 방향), `Blur` 0~100, `Opacity` 0~1 |
 | 광선 | `Glow.Enabled`, `Color`, `Size`, `Opacity` | `Size` 0~100 |
 | 반사 | `Reflection.Enabled`, `Size`, `Gap`, `Opacity` | `Size` 10~100%, `Gap` 0~100 |
@@ -174,7 +174,7 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
 - 시험: 0° 선형은 왼쪽이 색1·오른쪽이 색2, 원형은 가운데가 색1, 4색, "없음"이면 칠한 픽셀이 0개.
 
 **T5 윤곽선** — 이슈 [#15](https://github.com/zaruous/Folderss-video-editor/issues/15)
-- 구현: Core는 효과 범위(두께/2, 마이터 연장). Ui는 `Pen`.
+- 구현: Core는 효과 범위(두께, 각지게는 두 배 — 한도 2). Ui는 두께 × 2인 `Pen`을 채우기 전에 그려 바깥쪽 절반(= 두께)만 보이게.
 - 시험: 채우기 없음 + 윤곽선이면 속이 빈 글자, 이음 방식마다 모서리가 다름, 굵은 윤곽선도 가장자리가 잘리지 않음.
 
 **T6 그림자** — 이슈 [#16](https://github.com/zaruous/Folderss-video-editor/issues/16)
@@ -251,3 +251,4 @@ ECC `orch-add-feature` 단계를 따른다: 0 요구 사항 → 1 조사·재사
 | 2026-10-24 | T2(#12) PNG 렌더 경로(`TextImage`·`StyledTextLayout`·`RenderGraph` crop+pad)·캐시(`TextImageCache`)·그리개 인수 — 가짜 그리개로 그래프·보안·캐시·FFmpeg 통합 시험 통과(Windows). Ui는 아직 null을 넘김. 리뷰 반영: 그리개가 취소를 안 봐도 30초 제한, 덮어쓰지 않는 옮기기, 빈 PNG 거절, PNG 입력 `-f image2 -pattern_type none`(경로의 `%`), 키에 모든 속성이 들어가는지 리플렉션 시험. **T3로 넘김:** 재생 시작(`StartVideo`)이 UI 스레드에서 취소 없이 그림 → 캐시 채우기를 배경으로, 시작 때 `TextImageCache.Cleanup(RenderEnvironment.TempRoot())`, 글자 탭 색 → `Style.Fill` |
 | 2026-10-24 | T3(#13) WPF 그리개(`Ui/StyledTextRasterizer` — 배경 STA 스레드 하나, 줄·글자 단위 배치, 없는 글꼴은 맑은 고딕) + 꾸미기 탭(글꼴·굵게·기울임·자간·행간·정렬) + 미리 보기·재생·스냅샷·내보내기 연결. T2에서 넘긴 것 처리: 재생 전에 꾸민 글자를 배경에서 미리 그림(`PreviewRenderer.PrepareTextImages`), 시작 때 캐시 정리, 글자 탭 색 → 채우기. 캔버스가 1,600만 화소를 넘으면 줄여 그리고 그래프에서 키움(§5). 화면 시험 17개(꾸민 글자 7개) 통과, `DragTrim_Overlay_Properties`의 칸이 보이기 전에 키를 보내던 경쟁 상태도 고침. 리뷰 반영: 클립을 고르기만 해도 편집(채우기 덮어쓰기)되던 것과 숫자 칸을 지나가기만 해도 편집되던 것, 예전 글자를 처음 꾸밀 때 왼쪽 맞춤으로 이어받기(`FromLegacy`), 재생 준비 중에도 재생 중으로 표시, 포기한 그리기의 `.part` 정리, 대체 글꼴이 섞인 줄 높이, 유니코드 줄 구분자, 오른쪽→왼쪽 글자 줄은 자간 없이 |
 | 2026-10-25 | T4(#14) 채우기: 단색·선형·원형 그라데이션·없음. Core `TextEffects.GradientPoints`(각도 → 끝점: 각도 방향으로 상자를 투영한 길이만큼 늘려 첫 색·끝 색이 모서리까지 닿음, 0° 왼쪽→오른쪽·90° 위→아래·45° 왼쪽 위→오른쪽 아래. 각도는 글자 영역을 0~1로 정규화한 상자 기준이라 가로로 긴 글자에서는 45°가 더 세로로 보임)·`GradientStops`, 그리개는 글자 모양 경계 상자 기준 붓(선형·원형, 색이 하나면 단색, 없음이면 칠하지 않음) — 그리개 Version 2. 색 칸 `UiKit.ColorRow`(팔레트 11색 + 16진, 잘못 적으면 되돌림 — 윤곽선·그림자·광선에서도 씀). 꾸미기 탭 "채우기" 묶음: 종류, 색 1~4(그라데이션으로 바꿀 때 색이 하나면 대비되는 둘째 색을 더함), 색 추가·빼기(2~4), 각도(선형만). drawtext 대체 경로에서도 채우기 없음은 투명. 리뷰 반영: 칸에 포커스를 둔 채 메뉴로 실행 취소한 뒤 칸을 떠나면 옛 값을 다시 적용하던 것(색 칸·숫자 칸 모두 — 마지막으로 보인 값과 비교), 팔레트가 목록을 열기 전까지 빈칸·화면 낭독이 형식 이름으로 읽던 것(데이터 항목 + 틀), 색 1과 [글자] 탭 글자 색 맞춤. T2·T3은 `styled-text` 대신 main에 바로 병합되어 이 작업도 main에서 가지를 냄 |
+| 2026-10-25 | T5(#15) 윤곽선: 색·두께(0~50px)·이음(둥글게·각지게·깎아서). 두께는 글자 밖으로 보이는 폭 — 그리개는 두께 × 2인 펜으로 채우기 전에 그려 안쪽 절반을 채우기가 덮게 함(가장자리 이음새 없음). 채우기가 비치면(없음·반투명 색) 윤곽선을 글자 밖으로만 잘라 그려 "없음"은 속이 빈 글자, 반투명은 안쪽이 어두워지지 않음. 각진 이음 한도 `StyledTextLayout.MiterLimit`를 4 → 2로(펜 두께 절반 기준 — 모서리 끝이 두께의 두 배까지), 여백은 Core `TextEffects.OutlineExtent`(둥글게·깎아서 = 두께, 각지게 = 두께 × 2) — 그리개 Version 3. drawtext 대체 경로(긴 글)는 `borderw`·`bordercolor` — 이음은 고를 수 없고, 테두리 안쪽을 글자로 덮는 방식이라 채우기가 비치면(없음·반투명) 속에 테두리 색이 보임. 검토 반영: 실행 취소로 윤곽선이 꺼지며 색 칸이 포커스를 잃을 때 적던 색을 적용하던 것(꺼진 색 칸은 적용하지 않음), 효과 배율 2 픽셀 시험. 꾸미기 탭 "윤곽선" 묶음: 켜기, 색(`ColorRow`), 두께(슬라이더 끄기 = 실행 취소 한 단계), 이음 — 색·두께·이음은 켰을 때만. 미리 보기 바탕이 검정이라 기본 검정 윤곽선은 검정 바탕에서 안 보임(화면 시험은 빨강으로 바꿔 확인) |

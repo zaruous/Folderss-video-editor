@@ -371,9 +371,9 @@ namespace VideoEditor.Ui
 
         private void Commit()
         {
-            // 숨은 칸(접힌 색 칸)과 고치지 않은 글은 적용하지 않는다
+            // 숨은 칸(접힌 색 칸)·꺼진 칸(실행 취소로 윤곽선이 꺼지며 포커스를 잃을 때)과 고치지 않은 글은 적용하지 않는다
             var text = (_hex.Text ?? "").Trim();
-            if (!IsVisible || text == _shown)
+            if (!IsVisible || !IsEnabled || text == _shown)
                 return;
             if (text.Length == 6 || text.Length == 8)
                 text = "#" + text;
