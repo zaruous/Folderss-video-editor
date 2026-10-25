@@ -23,6 +23,7 @@ namespace VideoEditor.Ui
         private readonly ListBox _list = new ListBox { BorderThickness = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Stretch };
         private readonly TabControl _tabs = new TabControl();
         private Point _dragStart;
+        private bool _dragFromItem;
         private bool _folderLoaded;
 
         public MediaPanel(EditorSession session, EditorServices services, EditorCommands commands)
@@ -36,6 +37,9 @@ namespace VideoEditor.Ui
             var folderTab = new TabItem { Header = "폴더", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
             _tabs.Items.Add(folderTab);
             _tabs.Items.Add(new TabItem { Header = "글자", Content = TextTab() });
+            var effectsTab = new TabItem { Header = "효과", Content = EffectsTab() };
+            AutomationProperties.SetAutomationId(effectsTab, "EffectsTab");
+            _tabs.Items.Add(effectsTab);
             _tabs.SelectionChanged += (s, e) =>
             {
                 if (_tabs.SelectedItem == folderTab && !_folderLoaded)
@@ -69,11 +73,19 @@ namespace VideoEditor.Ui
             AutomationProperties.SetName(_list, "프로젝트 미디어");
             _list.SelectionMode = SelectionMode.Extended;
             _list.SetResourceReference(BackgroundProperty, "PanelBackground");
-            _list.MouseDoubleClick += (s, e) => AddSelected();
-            _list.PreviewMouseLeftButtonDown += (s, e) => _dragStart = e.GetPosition(_list);
+            _list.MouseDoubleClick += (s, e) =>
+            {
+                if (OnItem(_list, e))
+                    AddSelected();
+            };
+            _list.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                _dragStart = e.GetPosition(_list);
+                _dragFromItem = OnItem(_list, e);
+            };
             _list.PreviewMouseMove += (s, e) =>
             {
-                if (e.LeftButton != MouseButtonState.Pressed || _list.SelectedItems.Count == 0)
+                if (e.LeftButton != MouseButtonState.Pressed || !_dragFromItem || _list.SelectedItems.Count == 0)
                     return;
                 var point = e.GetPosition(_list);
                 if (Math.Abs(point.X - _dragStart.X) < 6 && Math.Abs(point.Y - _dragStart.Y) < 6)
@@ -116,6 +128,12 @@ namespace VideoEditor.Ui
             empty.Visibility = _session.Project.Media.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             panel.Children.Add(grid);
             return panel;
+        }
+
+        /// <summary>마우스가 목록 항목 위에서 눌렸는지(스크롤바를 끌 때 끌어 놓기·두 번 누르기가 시작되지 않게).</summary>
+        private static bool OnItem(ItemsControl list, MouseEventArgs e)
+        {
+            return e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(list, source) != null;
         }
 
         private void FillMenu(ContextMenu menu)
@@ -244,6 +262,89 @@ namespace VideoEditor.Ui
             AutomationProperties.SetAutomationId(box, "NewTextBox");
             panel.Children.Add(box);
             panel.Children.Add(UiKit.TextButton("글자 추가", "AddTextButton", () => _commands.AddText(box.Text)));
+            return panel;
+        }
+
+        // ---------- 효과 ----------
+
+        /// <summary>
+        /// [효과] 전환 효과: 목록에서 고르고 [고른 클립에 넣기]·[모든 클립 사이에] — 또는 효과를 타임라인의 클립으로 끌어 놓는다.
+        /// 클립 앞(앞 클립에서 바뀌어 들어오는 곳)에 들어가고, 앞 클립이 그 길이만큼 밑에 더 그려질 뿐 타임라인 위치는 바뀌지 않는다.
+        /// </summary>
+        private UIElement EffectsTab()
+        {
+            var panel = new DockPanel { Margin = new Thickness(8) };
+            var top = new StackPanel();
+            var hint = UiKit.Label("전환 효과 — 클립 앞(앞 클립에서 바뀌어 들어오는 곳)에 넣습니다. 효과를 타임라인의 클립으로 끌어 놓아도 됩니다. 타임라인 위치는 바뀌지 않습니다.", true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            top.Children.Add(hint);
+
+            var lengthRow = new DockPanel { Margin = new Thickness(0, 6, 0, 6) };
+            var lengthLabel = UiKit.Label("길이");
+            lengthLabel.Width = 40;
+            DockPanel.SetDock(lengthLabel, Dock.Left);
+            lengthRow.Children.Add(lengthLabel);
+            var unit = UiKit.Label(" 초", true);
+            DockPanel.SetDock(unit, Dock.Right);
+            lengthRow.Children.Add(unit);
+            var seconds = new TextBox { Text = UiKit.Number(Transitions.DefaultSeconds), VerticalContentAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetAutomationId(seconds, "TransitionSeconds");
+            AutomationProperties.SetName(seconds, "전환 길이(초)");
+            lengthRow.Children.Add(seconds);
+            top.Children.Add(lengthRow);
+
+            var list = new ListBox { BorderThickness = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            AutomationProperties.SetAutomationId(list, "TransitionList");
+            AutomationProperties.SetName(list, "전환 효과");
+            list.SetResourceReference(BackgroundProperty, "PanelBackground");
+            foreach (var kind in Transitions.All)
+            {
+                var item = new ListBoxItem { Content = new TextBlock { Text = Transitions.Name(kind), Margin = new Thickness(4, 3, 4, 3) }, Tag = kind };
+                AutomationProperties.SetAutomationId(item, "Transition_" + kind);
+                AutomationProperties.SetName(item, Transitions.Name(kind));
+                list.Items.Add(item);
+            }
+            list.SelectedIndex = 0;
+
+            TransitionKind Chosen() => list.SelectedItem is ListBoxItem chosen ? (TransitionKind)chosen.Tag : TransitionKind.Fade;
+            // 길이는 0.1~10초(잘못 쓰면 기본 길이)
+            double Seconds() => UiKit.TryNumber(seconds.Text, out var value) ? Math.Max(0.1, Math.Min(10, value)) : Transitions.DefaultSeconds;
+
+            var buttons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
+            buttons.Children.Add(UiKit.TextButton("고른 클립에 넣기", "TransitionApplyButton", () => _commands.ApplyTransition(Chosen(), Seconds())));
+            buttons.Children.Add(UiKit.TextButton("모든 클립 사이에", "TransitionAllButton", () => _commands.ApplyTransitionBetween(Chosen(), Seconds())));
+            buttons.Children.Add(UiKit.TextButton("전환 빼기", "TransitionRemoveButton", _commands.RemoveTransition));
+            foreach (FrameworkElement button in buttons.Children)
+                button.Margin = new Thickness(0, 0, 4, 4);
+            top.Children.Add(buttons);
+            DockPanel.SetDock(top, Dock.Top);
+            panel.Children.Add(top);
+
+            // 두 번 누르면 고른 클립에, 끌어서 타임라인의 클립에 놓으면 그 클립에
+            list.MouseDoubleClick += (s, e) =>
+            {
+                if (OnItem(list, e))
+                    _commands.ApplyTransition(Chosen(), Seconds());
+            };
+            var dragStart = new Point();
+            var fromItem = false;
+            list.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                dragStart = e.GetPosition(list);
+                fromItem = OnItem(list, e);
+            };
+            list.PreviewMouseMove += (s, e) =>
+            {
+                if (e.LeftButton != MouseButtonState.Pressed || !fromItem || list.SelectedItem == null)
+                    return;
+                var point = e.GetPosition(list);
+                if (Math.Abs(point.X - dragStart.X) < 6 && Math.Abs(point.Y - dragStart.Y) < 6)
+                    return;
+                var data = new DataObject();
+                data.SetData(TimelineCanvas.TransitionDataFormat, Chosen() + "|" + UiKit.Number(Seconds()));
+                DragDrop.DoDragDrop(list, data, DragDropEffects.Copy);
+            };
+            panel.Children.Add(list);
             return panel;
         }
     }

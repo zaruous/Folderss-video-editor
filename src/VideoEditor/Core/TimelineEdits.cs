@@ -426,6 +426,41 @@ namespace VideoEditor.Core
             return audio;
         }
 
+        // ---------- 전환 ----------
+
+        /// <summary>
+        /// 클립 앞에 전환 효과를 넣는다(frames = 0이면 뺀다). 앞 클립이 붙어 있으면 그 클립에서, 없으면 아래 트랙·바탕에서 바뀐다.
+        /// 앞 클립이 그 길이만큼 밑에 더 그려질 뿐 타임라인 위치는 바뀌지 않는다. 길이는 클립 길이까지.
+        /// </summary>
+        public static void SetTransition(Project project, Clip clip, TransitionKind kind, long frames)
+        {
+            RequireClip(clip);
+            var track = project.TrackOf(clip);
+            EnsureEditable(track);
+            if (!clip.IsVisual || track.Kind == TrackKind.Audio)
+                throw new EditException("화면이 있는 클립에만 전환을 넣을 수 있습니다.");
+            if (track.Subtitles)
+                throw new EditException("자막 큐에는 전환을 넣지 않습니다.");
+            clip.Transition = Enum.IsDefined(kind) ? kind : TransitionKind.Fade;
+            clip.TransitionIn = Math.Max(0, Math.Min(frames, clip.Duration));
+        }
+
+        /// <summary>트랙에서 앞 클립과 붙어 있는 클립마다(클립과 클립 사이마다) 전환을 넣는다. 넣은 곳 수.</summary>
+        public static int SetTransitionsBetween(Project project, Track track, TransitionKind kind, long frames)
+        {
+            EnsureEditable(track);
+            var clips = track.Clips.Where(c => c.IsVisual).OrderBy(c => c.Start).ToList();
+            var count = 0;
+            for (var i = 1; i < clips.Count; i++)
+            {
+                if (clips[i].Start != clips[i - 1].End)
+                    continue;
+                SetTransition(project, clips[i], kind, frames);
+                count++;
+            }
+            return count;
+        }
+
         // ---------- 트랙 ----------
 
         /// <summary>트랙을 더한다(동영상은 맨 위 — 자막 트랙이 있으면 그 아래라 자막이 늘 위에 그려진다, 오디오는 맨 아래).</summary>

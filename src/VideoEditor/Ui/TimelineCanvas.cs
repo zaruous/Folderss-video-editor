@@ -10,6 +10,7 @@ using System.Windows.Automation.Provider;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using VideoEditor.Core;
 
 namespace VideoEditor.Ui
@@ -33,6 +34,8 @@ namespace VideoEditor.Ui
     {
         public const double RulerHeight = 28;
         public const string MediaDataFormat = "VideoEditor.MediaPaths";
+        /// <summary>효과 탭에서 끄는 전환 — "종류|초".</summary>
+        public const string TransitionDataFormat = "VideoEditor.Transition";
         private const double EdgeGrip = 7;
         private const double DragThreshold = 3;
         private const double SnapPixels = 8;
@@ -70,6 +73,13 @@ namespace VideoEditor.Ui
         private static readonly Pen PlayheadPen = FrozenPen(PlayheadBrush, 1.5);
         private static readonly Pen SnapPen = FrozenPen(SnapBrush, 1);
         private static readonly Pen TransitionPen = FrozenPen(Brushes.White, 1.5);
+        // 전환 표시: 두 클립이 만나는 자리에 걸친 노란 배지(⇄) + 전환이 일어나는 구간의 반투명 띠
+        private static readonly Brush TransitionBadgeBrush = Frozen(Color.FromRgb(0xFA, 0xCC, 0x15));
+        private static readonly Brush TransitionGlyphBrush = Frozen(Color.FromRgb(0x1F, 0x29, 0x37));
+        private static readonly Brush TransitionRegionBrush = Frozen(Color.FromArgb(0x55, 0xFA, 0xCC, 0x15));
+        private static readonly Pen TransitionBadgePen = FrozenPen(new SolidColorBrush(Color.FromArgb(0xB0, 0, 0, 0)), 1);
+        private const double BadgeWidth = 26;
+        private const double BadgeHeight = 18;
 
         private static Brush Frozen(Color color)
         {
@@ -137,6 +147,8 @@ namespace VideoEditor.Ui
         public event Action<string> StatusMessage;
         /// <summary>파일·미디어를 끌어 놓음: 경로들, 놓은 트랙(줄 아래 빈 곳이면 null), 프레임.</summary>
         public event Action<string[], Track, long> MediaDropped;
+        /// <summary>효과 탭의 전환을 클립에 놓음 — ("종류|초", 클립 Id).</summary>
+        public event Action<string, string> TransitionDropped;
         /// <summary>오른쪽 클릭: 클립(없으면 null), 트랙(없으면 null), 프레임. 받은 쪽이 메뉴를 연다.</summary>
         public event Action<Clip, Track, long> ContextRequested;
 
@@ -359,6 +371,18 @@ namespace VideoEditor.Ui
                 PointerMove(point, Keyboard.Modifiers);
                 return;
             }
+            // 전환 배지: 효과 이름·길이를 알려 주고 누르면 그 클립을 고른다
+            var transition = HitTransition(point);
+            if (transition != null)
+            {
+                Cursor = Cursors.Hand;
+                var tip = "전환: " + Transitions.Name(transition.Transition) + " · " + UiKit.Number(_session.Project.Rate.ToSeconds(transition.TransitionIn)) + "초 (누르면 이 클립을 골라 속성에서 바꿉니다)";
+                if (!Equals(ToolTip, tip))
+                    ToolTip = tip;
+                return;
+            }
+            if (ToolTip != null)
+                ToolTip = null;
             TimelineRow row;
             Zone zone;
             var clip = HitClip(point, out row, out zone);
@@ -408,6 +432,15 @@ namespace VideoEditor.Ui
                 _drag = DragKind.Scrub;
                 _dragStarted = true;
                 _session.Playhead = XToFrame(point.X);
+                return;
+            }
+            // 전환 배지를 누르면 전환이 든 클립을 고른다(끌기는 하지 않음 — 배지는 두 클립에 걸쳐 있다)
+            var transition = HitTransition(point);
+            if (transition != null)
+            {
+                _session.Select(new[] { transition });
+                StatusMessage?.Invoke("전환: " + Transitions.Name(transition.Transition) + " · " + UiKit.Number(_session.Project.Rate.ToSeconds(transition.TransitionIn))
+                                      + "초 — 속성 [화면] 탭에서 효과·길이를 바꾸거나 [효과] 탭에서 다른 효과를 넣습니다.");
                 return;
             }
             TimelineRow row;
@@ -545,9 +578,24 @@ namespace VideoEditor.Ui
             return null;
         }
 
+        /// <summary>효과 탭에서 끈 전환("종류|초")을 놓을 클립(놓은 자리의 클립 — 그 클립 앞에 넣는다).</summary>
+        private Clip TransitionTarget(DragEventArgs e)
+        {
+            if (!e.Data.GetDataPresent(TransitionDataFormat))
+                return null;
+            var clip = HitClip(e.GetPosition(this), out var row, out _);
+            return clip != null && row != null && row.Track.Kind == TrackKind.Video && !row.Track.Subtitles ? clip : null;
+        }
+
         protected override void OnDragOver(DragEventArgs e)
         {
             base.OnDragOver(e);
+            if (e.Data.GetDataPresent(TransitionDataFormat))
+            {
+                e.Effects = TransitionTarget(e) != null ? DragDropEffects.Copy : DragDropEffects.None;
+                e.Handled = true;
+                return;
+            }
             var paths = DroppedPaths(e.Data);
             if (paths == null || paths.Length == 0)
             {
@@ -575,6 +623,14 @@ namespace VideoEditor.Ui
         protected override void OnDrop(DragEventArgs e)
         {
             base.OnDrop(e);
+            if (e.Data.GetDataPresent(TransitionDataFormat))
+            {
+                var target = TransitionTarget(e);
+                if (target != null)
+                    TransitionDropped?.Invoke(e.Data.GetData(TransitionDataFormat) as string, target.Id);
+                e.Handled = true;
+                return;
+            }
             var paths = DroppedPaths(e.Data);
             var point = e.GetPosition(this);
             var track = RowAt(point.Y)?.Track;
@@ -647,6 +703,9 @@ namespace VideoEditor.Ui
                         continue;
                     DrawClip(dc, row, clip, rect, rate);
                 }
+                // 전환 배지는 양쪽 클립 위에 걸치므로 줄의 클립을 다 그린 뒤에
+                foreach (var clip in TransitionClips(row))
+                    DrawTransition(dc, row, clip, rate);
                 if (row.Track.Locked || row.Track.Hidden || (row.Track.Muted && row.Track.Kind == TrackKind.Audio))
                     dc.DrawRectangle(ShadeBrush, null, new Rect(0, row.Top, width, row.Height));
             }
@@ -770,17 +829,108 @@ namespace VideoEditor.Ui
             if (rect.Height > 30)
                 dc.DrawText(Text(rate.Timecode(clip.Duration), 10, WaveBrush), new Point(textLeft, rect.Top + 16));
             dc.Pop();
-            // 전환(크로스페이드) 표시: 앞쪽 비스듬한 선
-            if (clip.TransitionIn > 0)
-            {
-                var w = Math.Min(rect.Width, clip.TransitionIn * _pixelsPerFrame);
-                dc.DrawLine(TransitionPen, new Point(rect.Left, rect.Bottom), new Point(rect.Left + w, rect.Top));
-            }
             // 페이드
             if (clip.FadeIn > 0)
                 dc.DrawLine(TransitionPen, new Point(rect.Left, rect.Bottom - 1), new Point(rect.Left + Math.Min(rect.Width, clip.FadeIn * _pixelsPerFrame), rect.Bottom - 8));
             if (clip.FadeOut > 0)
                 dc.DrawLine(TransitionPen, new Point(rect.Right - Math.Min(rect.Width, clip.FadeOut * _pixelsPerFrame), rect.Bottom - 8), new Point(rect.Right, rect.Bottom - 1));
+        }
+
+        /// <summary>줄에서 전환이 있는 화면 클립(자막 트랙 제외).</summary>
+        private static IEnumerable<Clip> TransitionClips(TimelineRow row)
+        {
+            if (row.Track.Kind != TrackKind.Video || row.Track.Subtitles)
+                return Enumerable.Empty<Clip>();
+            return row.Track.Clips.Where(c => c.TransitionIn > 0 && c.IsVisual);
+        }
+
+        /// <summary>전환 배지 자리: 클립 시작(앞 클립과 만나는 자리)에 걸쳐 클립 높이 가운데. 확대 수준과 상관없이 같은 크기.</summary>
+        private Rect BadgeRect(TimelineRow row, Clip clip)
+        {
+            var rect = ClipRect(row, clip.Start, clip.End);
+            var x = FrameToX(clip.Start);
+            return new Rect(x - BadgeWidth / 2, rect.Top + (rect.Height - BadgeHeight) / 2, BadgeWidth, BadgeHeight);
+        }
+
+        /// <summary>
+        /// 전환 표시: 전환 구간(클립 앞쪽 전환 길이)에 반투명 노란 띠와 비스듬한 선, 두 클립이 만나는 자리에 노란 ⇄ 배지,
+        /// 자리가 있으면 배지 옆에 효과 이름. 방금 넣은 전환은 배지 둘레가 잠깐 반짝인다.
+        /// </summary>
+        private void DrawTransition(DrawingContext dc, TimelineRow row, Clip clip, FrameRate rate)
+        {
+            var rect = ClipRect(row, clip.Start, clip.End);
+            var w = Math.Min(rect.Width, clip.TransitionIn * _pixelsPerFrame);
+            dc.DrawRectangle(TransitionRegionBrush, null, new Rect(rect.Left, rect.Top, Math.Max(2, w), rect.Height));
+            dc.DrawLine(TransitionPen, new Point(rect.Left, rect.Bottom), new Point(rect.Left + w, rect.Top));
+            var badge = BadgeRect(row, clip);
+            var flash = FlashLevel(clip.Id);
+            if (flash > 0)
+            {
+                var glow = new Pen(new SolidColorBrush(Color.FromArgb((byte)(flash * 255), 0xFA, 0xCC, 0x15)), 3);
+                var ring = badge;
+                ring.Inflate(5, 5);
+                dc.DrawRoundedRectangle(null, glow, ring, ring.Height / 2, ring.Height / 2);
+            }
+            dc.DrawRoundedRectangle(TransitionBadgeBrush, _session.IsSelected(clip) ? SelectedPen : TransitionBadgePen, badge, BadgeHeight / 2, BadgeHeight / 2);
+            var glyph = Text("⇄", 12, TransitionGlyphBrush, true);
+            dc.DrawText(glyph, new Point(badge.Left + (badge.Width - glyph.Width) / 2, badge.Top + (badge.Height - glyph.Height) / 2));
+            // 이름은 배지 오른쪽(클립 안에 자리가 있을 때)
+            var name = Text(Transitions.Name(clip.Transition) + " " + UiKit.Number(rate.ToSeconds(clip.TransitionIn)) + "초", 10, Brushes.White, true);
+            if (rect.Width > BadgeWidth / 2 + name.Width + 10 && rect.Height > 40)
+            {
+                var label = new Rect(badge.Right + 3, rect.Bottom - name.Height - 4, name.Width + 6, name.Height + 2);
+                dc.PushClip(new RectangleGeometry(rect));
+                dc.DrawRoundedRectangle(ShadeBrush, null, label, 3, 3);
+                dc.DrawText(name, new Point(label.Left + 3, label.Top + 1));
+                dc.Pop();
+            }
+        }
+
+        /// <summary>점에 있는 전환 배지의 클립(뒤 클립 — 전환이 들어 있는 쪽).</summary>
+        private Clip HitTransition(Point point)
+        {
+            var row = RowAt(point.Y);
+            return row == null ? null : TransitionClips(row).FirstOrDefault(c => BadgeRect(row, c).Contains(point));
+        }
+
+        // ---------- 방금 넣은 전환 반짝임 ----------
+
+        private readonly HashSet<string> _flashIds = new HashSet<string>();
+        private DateTime _flashStart;
+        private DispatcherTimer _flashTimer;
+        private static readonly TimeSpan FlashTime = TimeSpan.FromSeconds(1.6);
+
+        /// <summary>전환을 넣은 클립의 배지를 잠깐 반짝여 어디에 들어갔는지 보인다.</summary>
+        public void FlashTransitions(IEnumerable<string> clipIds)
+        {
+            _flashIds.Clear();
+            foreach (var id in clipIds)
+                _flashIds.Add(id);
+            _flashStart = DateTime.UtcNow;
+            if (_flashTimer == null)
+            {
+                _flashTimer = new DispatcherTimer(DispatcherPriority.Render, Dispatcher) { Interval = TimeSpan.FromMilliseconds(40) };
+                _flashTimer.Tick += (s, e) =>
+                {
+                    if (DateTime.UtcNow - _flashStart > FlashTime)
+                    {
+                        _flashIds.Clear();
+                        _flashTimer.Stop();
+                    }
+                    InvalidateVisual();
+                };
+            }
+            _flashTimer.Start();
+            InvalidateVisual();
+        }
+
+        /// <summary>반짝임 세기(0~1): 세 번 깜빡이며 옅어진다.</summary>
+        private double FlashLevel(string clipId)
+        {
+            if (!_flashIds.Contains(clipId))
+                return 0;
+            var t = (DateTime.UtcNow - _flashStart).TotalSeconds / FlashTime.TotalSeconds;
+            return t >= 1 ? 0 : (1 - t) * (0.5 + 0.5 * Math.Cos(t * 3 * 2 * Math.PI));
         }
 
         private void DrawWaveform(DrawingContext dc, Clip clip, Rect rect, FrameRate rate)
@@ -904,7 +1054,11 @@ namespace VideoEditor.Ui
             protected override string GetNameCore()
             {
                 var rate = _canvas.Session.Project.Rate;
-                return _track.Name + " · " + _clip.Name + " · " + rate.Timecode(_clip.Start) + "–" + rate.Timecode(_clip.End);
+                var name = _track.Name + " · " + _clip.Name + " · " + rate.Timecode(_clip.Start) + "–" + rate.Timecode(_clip.End);
+                // 화면 읽기 프로그램·시험에도 전환이 들어 있다는 것을 알린다
+                if (_clip.TransitionIn > 0 && _clip.IsVisual && !_track.Subtitles)
+                    name += " · 전환 " + Transitions.Name(_clip.Transition) + " " + UiKit.Number(rate.ToSeconds(_clip.TransitionIn)) + "초";
+                return name;
             }
 
             protected override string GetAutomationIdCore()

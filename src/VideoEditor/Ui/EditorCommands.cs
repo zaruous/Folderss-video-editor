@@ -344,6 +344,97 @@ namespace VideoEditor.Ui
             Run(p => TimelineEdits.AddTrack(p, kind), (kind == TrackKind.Video ? "동영상" : "오디오") + " 트랙을 더했습니다.");
         }
 
+        // ---------- 전환 ----------
+
+        /// <summary>전환을 넣었다 — 넣은 클립 Id(타임라인이 배지를 반짝인다).</summary>
+        public event Action<IReadOnlyList<string>> TransitionsApplied;
+
+        /// <summary>전환을 넣을 수 있는 고른 클립(화면 클립, 자막 큐 제외)의 Id.</summary>
+        private List<string> TransitionTargets()
+        {
+            return _session.SelectedClips
+                .Where(c => c.IsVisual && Project.TrackOf(c) is Track t && t.Kind == TrackKind.Video && !t.Subtitles)
+                .Select(c => c.Id).ToList();
+        }
+
+        /// <summary>[효과] 고른 클립마다 그 앞(앞 클립에서 바뀌어 들어오는 곳)에 전환을 넣는다. 타임라인 위치는 그대로.</summary>
+        public void ApplyTransition(TransitionKind kind, double seconds)
+        {
+            var ids = TransitionTargets();
+            if (ids.Count == 0)
+            {
+                Status("전환을 넣을 클립(바뀌어 들어올 뒤 클립)을 타임라인에서 고르세요. 클립 사이마다 넣으려면 [모든 클립 사이에]를 누르세요.");
+                return;
+            }
+            ApplyTransition(kind, seconds, ids);
+        }
+
+        /// <summary>효과 탭에서 끈 전환을 클립에 놓음 — 데이터는 "종류|초".</summary>
+        public void DropTransition(string data, string clipId)
+        {
+            var parts = (data ?? "").Split('|');
+            if (parts.Length != 2 || !Enum.TryParse(parts[0], out TransitionKind kind) || !Enum.IsDefined(kind) || !UiKit.TryNumber(parts[1], out var seconds))
+                return;
+            ApplyTransition(kind, seconds, new[] { clipId });
+        }
+
+        private void ApplyTransition(TransitionKind kind, double seconds, IReadOnlyList<string> ids)
+        {
+            var frames = Math.Max(1, Project.Rate.ToFrames(seconds));
+            if (Run(p =>
+                {
+                    foreach (var id in ids)
+                        TimelineEdits.SetTransition(p, p.FindClip(id), kind, frames);
+                }, "'" + Transitions.Name(kind) + "' 전환을 " + (ids.Count == 1 ? "클립" : ids.Count + "개 클립") + " 앞에 넣었습니다(" + UiKit.Number(seconds) + "초)."))
+                ShowTransitions(ids);
+        }
+
+        /// <summary>전환을 넣은 클립을 골라 두고 타임라인 배지를 반짝인다(어디에 들어갔는지 보이게).</summary>
+        private void ShowTransitions(IReadOnlyList<string> ids)
+        {
+            _session.Select(ids.Select(Project.FindClip).Where(c => c != null));
+            TransitionsApplied?.Invoke(ids);
+        }
+
+        /// <summary>[모든 클립 사이에] 고른 클립의 트랙(없으면 주 트랙)에서 서로 붙어 있는 클립 사이마다 전환을 넣는다.</summary>
+        public void ApplyTransitionBetween(TransitionKind kind, double seconds)
+        {
+            var selected = _session.SelectedClips.Select(Project.TrackOf).FirstOrDefault(t => t != null && t.Kind == TrackKind.Video && !t.Subtitles);
+            var track = selected ?? Project.MainTrack;
+            var clips = track.Clips.Where(c => c.IsVisual).OrderBy(c => c.Start).ToList();
+            var ids = clips.Skip(1).Where((c, i) => c.Start == clips[i].End).Select(c => c.Id).ToList();
+            var places = ids.Count;
+            if (places == 0)
+            {
+                Status("'" + track.Name + "'에 서로 붙어 있는 클립이 없어 전환을 넣을 곳이 없습니다.");
+                return;
+            }
+            var trackId = track.Id;
+            var frames = Math.Max(1, Project.Rate.ToFrames(seconds));
+            if (Run(p => TimelineEdits.SetTransitionsBetween(p, p.FindTrack(trackId), kind, frames),
+                    "'" + Transitions.Name(kind) + "' 전환을 '" + track.Name + "'의 클립 사이 " + places + "곳에 넣었습니다(" + UiKit.Number(seconds) + "초)."))
+                ShowTransitions(ids);
+        }
+
+        /// <summary>[전환 빼기] 고른 클립 앞의 전환을 뺀다.</summary>
+        public void RemoveTransition()
+        {
+            var ids = TransitionTargets().Where(id => Project.FindClip(id).TransitionIn > 0).ToList();
+            if (ids.Count == 0)
+            {
+                Status("고른 클립에 전환이 없습니다.");
+                return;
+            }
+            Run(p =>
+            {
+                foreach (var id in ids)
+                {
+                    var clip = p.FindClip(id);
+                    TimelineEdits.SetTransition(p, clip, clip.Transition, 0);
+                }
+            }, "전환을 뺐습니다.");
+        }
+
         public void AddSubtitleTrack()
         {
             Run(p => TimelineEdits.AddSubtitleTrack(p), "자막 트랙을 더했습니다. SRT·VTT를 끌어 놓거나 [파일 > 자막 가져오기…]로 큐를 넣으세요.");

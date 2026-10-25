@@ -110,8 +110,10 @@ namespace VideoEditor.Core
         public long FadeOut { get; set; }
 
         // 화면
-        /// <summary>앞 클립에서 이 클립으로 겹쳐 바뀌는 길이(프레임) — 크로스페이드.</summary>
+        /// <summary>앞 클립에서 이 클립으로 겹쳐 바뀌는 길이(프레임). 앞 클립이 그만큼 밑에 더 그려지고, 타임라인 위치는 그대로다.</summary>
         public long TransitionIn { get; set; }
+        /// <summary>전환 효과 종류(기본 디졸브 = 예전 크로스페이드).</summary>
+        public TransitionKind Transition { get; set; }
         /// <summary>화면 가운데에서 떨어진 정도(프로젝트 픽셀).</summary>
         public double X { get; set; }
         public double Y { get; set; }

@@ -129,6 +129,10 @@ namespace VideoEditor.Core
                     clip.Speed = 1;
                 if (clip.SourceOut <= clip.SourceIn)
                     clip.SourceOut = clip.SourceIn + 1;
+                // JsonStringEnumConverter는 정수도 받는다 — 정의되지 않은 효과는 디졸브로
+                if (!Enum.IsDefined(clip.Transition))
+                    clip.Transition = TransitionKind.Fade;
+                clip.TransitionIn = Math.Max(0, clip.TransitionIn);
                 if (clip.Kind != ClipKind.Text)
                     clip.Style = null;
                 else

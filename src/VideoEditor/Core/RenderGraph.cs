@@ -104,23 +104,48 @@ namespace VideoEditor.Core
                     continue;
                 }
                 var clips = track.Clips.Where(c => c.IsVisual).OrderBy(c => c.Start).ToList();
+                // xfade로 잇는 클립 묶음(디졸브가 아닌 전환): 묶음 흐름의 라벨과 그 흐름이 시작하는 타임라인 프레임
+                string group = null;
+                long groupStart = 0;
+                void CloseGroup()
+                {
+                    // 묶음은 캔버스 크기라 제자리(0, 0)에 얹는다. 알파를 곱한 색으로 섞었으니 얹기 전에 되돌린다
+                    // 시작 시각은 프레임 단위로 반올림한다(초를 TB로 나눈 값이 0.99999처럼 되면 잘려 한 프레임 일찍 나온다)
+                    filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}]unpremultiply=inplace=1,format=rgba,setpts=PTS-STARTPTS+round({1}/TB)[c{2}]",
+                        group, N(rate.ToSeconds(groupStart - options.From)), n));
+                    filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}][c{1}]overlay=x=0:y=0:eof_action=pass[o{1}]", layer, n));
+                    layer = "o" + n;
+                    n++;
+                    group = null;
+                }
                 for (var i = 0; i < clips.Count; i++)
                 {
                     var clip = clips[i];
                     var next = i + 1 < clips.Count ? clips[i + 1] : null;
-                    // 뒤 클립이 크로스페이드로 들어오면 그동안 이 클립이 밑에 계속 보여야 한다
+                    // 뒤 클립이 전환으로 들어오면 그동안 이 클립이 밑에 계속 보여야 한다(타임라인 위치는 그대로)
                     var tail = next != null && next.Start == clip.End ? Math.Min(next.TransitionIn, next.Duration) : 0;
                     var transition = Math.Min(clip.TransitionIn, clip.Duration);
+                    // 디졸브가 아닌 전환은 앞 클립과 xfade로 잇는다 — 전환 구간이 그리는 구간에 걸칠 때만
+                    var xfadeIn = Transitions.UsesXfade(clip.Transition) && Overlaps(clip.Start, transition, options);
+                    var xfadeOut = tail > 0 && Transitions.UsesXfade(next.Transition) && Overlaps(next.Start, tail, options);
                     var segStart = Math.Max(clip.Start, options.From);
                     var segEnd = Math.Min(clip.End + tail, options.To);
-                    if (segEnd <= segStart)
-                        continue;
-                    // 크로스페이드 도중부터 그리면 fade 시간이 맞도록 클립 처음부터 디코드한다(앞부분은 바탕 시작 전이라 버려짐)
+                    // 전환 도중부터 그리면 전환 시간이 맞도록 클립 처음부터 디코드한다(앞부분은 바탕 시작 전이라 버려짐)
                     if (transition > 0 && segStart > clip.Start && segStart < clip.Start + transition)
                         segStart = clip.Start;
-                    var source = VisualSource(project, options, plan, clip, segStart, segEnd);
+                    if (xfadeOut)
+                    {
+                        // xfade의 앞 흐름은 전환이 시작할 때부터 끝날 때까지 있어야 한다
+                        segStart = Math.Min(segStart, next.Start);
+                        segEnd = clip.End + tail;
+                    }
+                    var source = segEnd > segStart ? VisualSource(project, options, plan, clip, segStart, segEnd) : null;
                     if (source == null)
+                    {
+                        if (group != null)
+                            CloseGroup();
                         continue;
+                    }
                     var chain = new StringBuilder(source);
                     // 화면에 맞춤(비율 유지) × 크기 배율
                     var scale = Math.Max(0.01, clip.Scale);
@@ -134,19 +159,65 @@ namespace VideoEditor.Core
                     }
                     if (clip.Opacity < 0.999)
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",colorchannelmixer=aa={0}", N(Math.Max(0, clip.Opacity)));
-                    if (transition > 0 && segStart == clip.Start)
+                    // 디졸브: 앞 클립(밑에 더 그려짐) 위로 이 클립이 서서히 나타난다
+                    if (transition > 0 && segStart == clip.Start && !Transitions.UsesXfade(clip.Transition))
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",fade=t=in:st=0:d={0}:alpha=1", N(rate.ToSeconds(transition)));
-                    chain.AppendFormat(CultureInfo.InvariantCulture, ",setpts=PTS-STARTPTS+{0}/TB[c{1}]", N(rate.ToSeconds(segStart - options.From)), n);
+                    if (!xfadeIn && !xfadeOut)
+                    {
+                        chain.AppendFormat(CultureInfo.InvariantCulture, ",setpts=PTS-STARTPTS+round({0}/TB)[c{1}]", N(rate.ToSeconds(segStart - options.From)), n);
+                        filters.Add(chain.ToString());
+                        filters.Add(string.Format(CultureInfo.InvariantCulture,
+                            "[{0}][c{1}]overlay=x='(main_w-overlay_w)/2+{2}':y='(main_h-overlay_h)/2+{3}':eof_action=pass[o{1}]",
+                            layer, n, N(clip.X * k), N(clip.Y * k)));
+                        layer = "o" + n;
+                        n++;
+                        continue;
+                    }
+                    // 전환으로 이어지는 클립: 캔버스 크기 투명 바탕에 제자리로 얹어 두고(xfade는 같은 크기·형식의 흐름끼리 잇는다) 묶음에 붙인다
+                    // xfade는 알파를 곱한 색으로 섞는다 — 그대로 섞으면 투명한 쪽과 섞이는 자리가 어둡게 된다
+                    chain.AppendFormat(CultureInfo.InvariantCulture, ",setpts=PTS-STARTPTS[s{0}]", n);
                     filters.Add(chain.ToString());
+                    filters.Add(string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba[g{4}]",
+                        options.Width, options.Height, fps, N(rate.ToSeconds(segEnd - segStart)), n));
                     filters.Add(string.Format(CultureInfo.InvariantCulture,
-                        "[{0}][c{1}]overlay=x='(main_w-overlay_w)/2+{2}':y='(main_h-overlay_h)/2+{3}':eof_action=pass[o{1}]",
-                        layer, n, N(clip.X * k), N(clip.Y * k)));
-                    layer = "o" + n;
+                        "[g{0}][s{0}]overlay=x='(main_w-overlay_w)/2+{1}':y='(main_h-overlay_h)/2+{2}':eof_action=pass,format=gbrap,premultiply=inplace=1[k{0}]",
+                        n, N(clip.X * k), N(clip.Y * k)));
+                    var piece = "k" + n;
+                    if (xfadeIn)
+                    {
+                        if (group == null)
+                        {
+                            // 앞에 붙은 클립이 없으면 투명 화면에서 바뀐다(아래 트랙·바탕이 비친다)
+                            filters.Add(string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=gbrap[t{4}]",
+                                options.Width, options.Height, fps, N(rate.ToSeconds(transition)), n));
+                            group = "t" + n;
+                            groupStart = clip.Start;
+                        }
+                        // offset: 묶음 흐름에서 이 클립(=전환)이 시작하는 초
+                        filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}][{1}]xfade=transition={2}:duration={3}:offset={4}[x{5}]",
+                            group, piece, Transitions.FilterName(clip.Transition), N(rate.ToSeconds(transition)), N(rate.ToSeconds(clip.Start - groupStart)), n));
+                        group = "x" + n;
+                    }
+                    else
+                    {
+                        group = piece;
+                        groupStart = segStart;
+                    }
                     n++;
+                    if (!xfadeOut)
+                        CloseGroup();
                 }
+                if (group != null)
+                    CloseGroup();
             }
             filters.Add("[" + layer + "]format=" + (options.Preview ? "bgra" : "yuv420p") + "[vout]");
             plan.HasVideo = true;
+        }
+
+        /// <summary>[start, start + length) 프레임이 그리는 구간에 걸치는지.</summary>
+        private static bool Overlaps(long start, long length, RenderOptions options)
+        {
+            return length > 0 && options.From < start + length && options.To > start;
         }
 
         /// <summary>클립의 화면 원본(입력 + 시간 맞춤)을 필터 체인 앞부분으로. segEnd가 원본 끝을 넘으면 마지막 화면을 멈춰 채운다.</summary>

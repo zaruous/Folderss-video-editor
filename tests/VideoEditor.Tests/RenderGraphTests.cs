@@ -34,7 +34,7 @@ namespace VideoEditor.Tests
             Assert.Equal(4, plan.Inputs.Count);
             Assert.Equal(new[] { "-ss", "0.5", "-t", "1", "-i", "a.mp4" }, plan.Inputs[0]);
             Assert.Contains("color=c=black:s=640x360:r=30/1:d=3[base]", plan.Filter);
-            Assert.Contains("setpts=PTS-STARTPTS+1/TB[c1]", plan.Filter);
+            Assert.Contains("setpts=PTS-STARTPTS+round(1/TB)[c1]", plan.Filter);
             Assert.Contains("[o0][c1]overlay=", plan.Filter);
             Assert.Contains("[o1]format=yuv420p[vout]", plan.Filter);
             Assert.Contains("amix=inputs=3:duration=first:normalize=0", plan.Filter);
@@ -137,7 +137,7 @@ namespace VideoEditor.Tests
             // 크로스페이드 도중에서 시작하면 b를 처음부터 디코드한다
             var mid = RenderGraph.Build(project, new RenderOptions { From = 65, To = 66, Width = 64, Height = 36, Audio = false });
             Assert.Contains(mid.Inputs, i => i.Last() == "b.mp4" && i[1] == "0");
-            Assert.Contains("setpts=PTS-STARTPTS+-0.166667/TB", mid.Filter);
+            Assert.Contains("setpts=PTS-STARTPTS+round(-0.166667/TB)", mid.Filter);
         }
 
         [Fact]
