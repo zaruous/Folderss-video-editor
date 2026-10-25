@@ -2398,6 +2398,97 @@ namespace VideoEditor.UiTests
             }
         }
 
+        [EditorFact]
+        public async Task TextTab_StyleGallery_AddsWithChosenStyle_DoubleClickAddsAtOnce()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            // 내 스타일 하나를 넣어 두면 [글자] 탭 아래에도 보인다
+            plugin.Manager.SetSetting("textStyles", JsonSerializer.Serialize(new[] { new { Name = "내 하늘", Style = new { Fill = new { Kind = "Solid", Colors = new[] { "#38BDF8" } } } } }));
+            Window window = null;
+            try
+            {
+                window = await Open(ui, plugin);
+                ui.Run(() => Ui.ById<TabControl>(window, "MediaTabs").SelectedIndex = 2);
+                await ui.WaitFor(() => Ui.ById<Button>(window, "NewTextStyle1"), Wait, "글자 탭 스타일");
+                // 썸네일이 그려지고, 처음엔 꾸미지 않음
+                await ui.WaitUntil(() => Enumerable.Range(0, 16).All(i => Ui.ById<Image>(window, "NewTextStyle" + i + "Image") != null), Wait, "스타일 썸네일");
+                await ui.WaitFor(() => Ui.ById<Button>(window, "NewTextMine0"), Wait, "내 스타일 단추");
+                var presets = Presets();
+                ui.Run(() =>
+                {
+                    Assert.Equal("스타일: 꾸미지 않음", Ui.ById<TextBlock>(window, "NewTextStyleNote").Text);
+                    Assert.Equal(presets[1].Name, System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "NewTextStyle1")));
+                    Ui.Snap(window, plugin.ShotFolder, "text-tab-styles");
+                });
+                object ClipOf(string text) => ProjectClips(window).FirstOrDefault(c => (string)Get(c, "Text") == text);
+
+                // 노란 자막을 고르고 [글자 추가] → 그 스타일의 사본, 글자 색 = 채우기 색 1
+                // 자동화 클릭은 디스패처에 맡겨지므로 누른 뒤 결과를 기다린다
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "NewTextStyle1")));
+                await ui.WaitUntil(() => Ui.ById<TextBlock>(window, "NewTextStyleNote").Text == "스타일: " + presets[1].Name, Wait, "노란 자막 고름");
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(window, "NewTextBox").Text = "노란 글자";
+                    Ui.Click(Ui.ById<Button>(window, "AddTextButton"));
+                });
+                await ui.WaitUntil(() => ClipOf("노란 글자") != null, Wait, "노란 글자 클립");
+                ui.Run(() =>
+                {
+                    var clip = ClipOf("노란 글자");
+                    Assert.Equal(StyleJson(presets[1].Style), StyleJson(Get(clip, "Style")));
+                    Assert.NotSame(presets[1].Style, Get(clip, "Style"));
+                    Assert.Equal((string)((System.Collections.IList)Get(Get(Get(clip, "Style"), "Fill"), "Colors"))[0], (string)Get(clip, "TextColor"));
+                });
+
+                // 고른 단추를 다시 누르면 풀린다 → 꾸미지 않은 글자
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "NewTextStyle1")));
+                await ui.WaitUntil(() => Ui.ById<TextBlock>(window, "NewTextStyleNote").Text == "스타일: 꾸미지 않음", Wait, "고르기 풀림");
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(window, "NewTextBox").Text = "보통 글자";
+                    Ui.Click(Ui.ById<Button>(window, "AddTextButton"));
+                });
+                await ui.WaitUntil(() => ClipOf("보통 글자") != null, Wait, "보통 글자 클립");
+                Assert.Null(ui.Run(() => Get(ClipOf("보통 글자"), "Style")));
+
+                // 두 번 누르면 그 스타일로 바로 넣는다 — 실행 취소 한 번에 그 글자만 사라진다
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(window, "NewTextBox").Text = "바로 넣기";
+                    var tile = Ui.ById<Button>(window, "NewTextStyle2");
+                    tile.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Control.MouseDoubleClickEvent });
+                });
+                await ui.WaitUntil(() => ClipOf("바로 넣기") != null, Wait, "두 번 눌러 넣기");
+                Assert.Equal(ui.Run(() => StyleJson(presets[2].Style)), ui.Run(() => StyleJson(Get(ClipOf("바로 넣기"), "Style"))));
+                ui.Run(() =>
+                {
+                    Ui.Focus(Canvas(window));
+                    Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control);
+                });
+                await ui.WaitUntil(() => ClipOf("바로 넣기") == null, Wait, "실행 취소");
+                Assert.NotNull(ui.Run(() => ClipOf("보통 글자")));
+
+                // 내 스타일도 같은 방식
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "NewTextMine0")));
+                await ui.WaitUntil(() => Ui.ById<TextBlock>(window, "NewTextStyleNote").Text == "스타일: 내 하늘", Wait, "내 스타일 고름");
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(window, "NewTextBox").Text = "내 스타일 글자";
+                    Ui.Click(Ui.ById<Button>(window, "AddTextButton"));
+                });
+                await ui.WaitUntil(() => ClipOf("내 스타일 글자") != null, Wait, "내 스타일 글자");
+                Assert.Equal("#38BDF8", ui.Run(() => (string)Get(ClipOf("내 스타일 글자"), "TextColor")));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                plugin.Manager.SetSetting("textStyles", null);
+                if (window != null)
+                    await CloseEditor(ui, window);
+            }
+        }
+
         // ---------- 내 스타일(이슈 #22) ----------
 
         // 플러그인 설정 키(EditorServices.TextStylesKey). 시험용 설정은 프로세스 안에서 남으므로 시험 앞뒤로 비운다(다른 시험으로 새지 않게)

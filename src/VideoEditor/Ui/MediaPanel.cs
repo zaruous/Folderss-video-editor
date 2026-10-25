@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -291,6 +292,10 @@ namespace VideoEditor.Ui
 
         // ---------- 글자 ----------
 
+        /// <summary>
+        /// [글자] 글을 쓰고 [글자 추가] — 아래 스타일(스타일 모음 + 내 스타일)을 고르면 그 모양으로 넣는다(고른 단추를 다시 누르면 풀려 꾸미지 않은 글자).
+        /// 스타일 단추를 두 번 누르면 바로 넣는다. 썸네일은 이 탭이 처음 보일 때 그리고, 내 스타일은 탭이 보일 때마다 설정을 다시 읽는다.
+        /// </summary>
         private UIElement TextTab()
         {
             var panel = new StackPanel { Margin = new Thickness(8) };
@@ -298,8 +303,96 @@ namespace VideoEditor.Ui
             var box = new TextBox { Text = "제목", AcceptsReturn = true, MinHeight = 60, Margin = new Thickness(0, 8, 0, 8), TextWrapping = TextWrapping.Wrap };
             AutomationProperties.SetAutomationId(box, "NewTextBox");
             panel.Children.Add(box);
-            panel.Children.Add(UiKit.TextButton("글자 추가", "AddTextButton", () => _commands.AddText(box.Text)));
-            return panel;
+            TextStyle chosen = null;
+            Button chosenTile = null;
+            var styleNote = UiKit.Label("스타일: 꾸미지 않음", true);
+            AutomationProperties.SetAutomationId(styleNote, "NewTextStyleNote");
+            styleNote.Margin = new Thickness(0, 0, 0, 4);
+            panel.Children.Add(styleNote);
+            panel.Children.Add(UiKit.TextButton("글자 추가", "AddTextButton", () => _commands.AddText(box.Text, chosen)));
+
+            // 고른 단추는 강조 테두리로, 다시 누르면 풀린다
+            void Choose(Button tile, string name, TextStyle style)
+            {
+                if (chosenTile != null)
+                    chosenTile.ClearValue(Control.BorderBrushProperty);
+                if (tile == chosenTile)
+                {
+                    chosenTile = null;
+                    chosen = null;
+                    styleNote.Text = "스타일: 꾸미지 않음";
+                    return;
+                }
+                chosenTile = tile;
+                chosen = style;
+                tile.SetResourceReference(Control.BorderBrushProperty, "AccentBrush");
+                styleNote.Text = "스타일: " + name;
+            }
+            var tiles = new List<(Border Frame, TextStyle Style, string ImageId)>();
+            Button Tile(string name, TextStyle style, string automationId)
+            {
+                var (button, frame) = StyleTiles.Tile(name, automationId);
+                button.BorderThickness = new Thickness(2);
+                button.Click += (s, e) => Choose(button, name, style);
+                // 두 번 누르면 그 스타일로 바로 넣는다(첫 누름에 골라졌다가 둘째 누름에 풀리지 않게 고른 채로 둔다)
+                button.MouseDoubleClick += (s, e) =>
+                {
+                    if (chosenTile != button)
+                        Choose(button, name, style);
+                    _commands.AddText(box.Text, style);
+                    e.Handled = true;
+                };
+                tiles.Add((frame, style, automationId + "Image"));
+                return button;
+            }
+
+            var presetsTitle = UiKit.Label("스타일 모음", false);
+            presetsTitle.Margin = new Thickness(0, 10, 0, 4);
+            panel.Children.Add(presetsTitle);
+            var presets = new WrapPanel();
+            AutomationProperties.SetAutomationId(presets, "NewTextStyles");
+            var all = TextStylePresets.All;
+            for (var i = 0; i < all.Count; i++)
+                presets.Children.Add(Tile(all[i].Name, all[i].Style, "NewTextStyle" + i));
+            panel.Children.Add(presets);
+
+            var mineTitle = UiKit.Label("내 스타일", false);
+            mineTitle.Margin = new Thickness(0, 8, 0, 4);
+            panel.Children.Add(mineTitle);
+            var mine = new WrapPanel();
+            AutomationProperties.SetAutomationId(mine, "NewTextMine");
+            panel.Children.Add(mine);
+            var shown = false;
+            void Refill()
+            {
+                // 고른 것이 내 스타일이면 다시 읽을 때 푼다(다른 곳에서 지웠을 수 있다)
+                if (chosenTile != null && mine.Children.Contains(chosenTile))
+                    Choose(chosenTile, null, null);
+                mine.Children.Clear();
+                tiles.RemoveAll(t => t.ImageId.StartsWith("NewTextMine", StringComparison.Ordinal));
+                var styles = _services?.TextStyles() ?? new List<(string Name, TextStyle Style)>();
+                for (var i = 0; i < styles.Count; i++)
+                {
+                    mine.Children.Add(Tile(styles[i].Name, styles[i].Style, "NewTextMine" + i));
+                    if (shown)
+                        StyleTiles.ShowThumbnail(_services, tiles[tiles.Count - 1].Frame, styles[i].Style, "NewTextMine" + i + "Image");
+                }
+                mineTitle.Visibility = mine.Visibility = styles.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            }
+            Refill();
+            panel.IsVisibleChanged += (s, e) =>
+            {
+                if (!panel.IsVisible)
+                    return;
+                if (!shown)
+                {
+                    shown = true;
+                    foreach (var tile in tiles)
+                        StyleTiles.ShowThumbnail(_services, tile.Frame, tile.Style, tile.ImageId);
+                }
+                Refill();
+            };
+            return new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         }
 
         // ---------- 효과 ----------

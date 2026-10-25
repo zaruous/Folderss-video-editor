@@ -201,7 +201,14 @@ namespace VideoEditor.Core
                     var boxWidth = Math.Max(2, (int)Math.Round(options.Width * scale / shrink));
                     var boxHeight = Math.Max(2, (int)Math.Round(options.Height * scale / shrink));
                     var fit = clip.Kind == ClipKind.Media ? clip.Fit : ClipFit.Fit;
-                    if (fit == ClipFit.Blur)
+                    if (UsesRasterizer(clip, options))
+                    {
+                        // 꾸민 글자 PNG는 가운데 = 글자 상자 가운데이고 크기는 그림 따라 다르다(화면보다 클 수도) — 화면 크기로 맞추지 않고
+                        // 크기 배율로 한 번만 줄여 가운데에 얹는다(그리개 화소 배율·재생 축소도 같은 scale에 접는다 — scale을 잇지 않게)
+                        var factor = scale / (shrink * StyledCanvas(options).Shrink);
+                        chain.AppendFormat(CultureInfo.InvariantCulture, ",scale=w='max(1,iw*{0})':h='max(1,ih*{0})',format=rgba", N(factor));
+                    }
+                    else if (fit == ClipFit.Blur)
                     {
                         // 흐린 배경: 같은 그림을 둘로 나눠 하나는 틀을 채우게 키워 작게 줄였다 흐리고 늘인 뒤 조금 어둡게, 하나는 맞춤으로 그 가운데에
                         var smallWidth = Math.Max(4, boxWidth / 8);
@@ -309,7 +316,7 @@ namespace VideoEditor.Core
             {
                 // 꾸민 글자, 또는 글자 상자를 정한 글자(줄 나눔·상자는 그리개만 할 수 있다 — 스타일이 없으면 처음 꾸밀 때와 같은 스타일로).
                 // 긴 글(drawtext 대체 경로)은 상자를 무시한다
-                if ((clip.Style != null || ClipLayout.HasTextBox(clip)) && options.TextRasterizer != null && (clip.Text ?? "").Length <= MaxStyledTextLength)
+                if (UsesRasterizer(clip, options))
                     return StyledText(project, options, plan, clip, segFrames);
                 // 파일 이름에 클립 Id(프로젝트 파일 값)를 쓰지 않는다 — 조작된 Id로 다른 폴더의 파일을 덮어쓰지 못하게
                 var textFile = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "fv-text-" + Guid.NewGuid().ToString("N") + ".txt");
@@ -356,10 +363,7 @@ namespace VideoEditor.Core
         {
             var rate = project.Rate;
             var k = (double)options.Width / project.Width;
-            // 캔버스가 화소 상한보다 크면(8K 등) 줄여서 그리게 하고 아래에서 키운다 — 그리개가 수백 MB짜리 비트맵을 만들지 않게
-            var shrink = Math.Min(1, Math.Sqrt(StyledTextLayout.MaxPixels / ((double)options.Width * options.Height)));
-            var canvasWidth = shrink < 1 ? Math.Max(2, (int)Math.Floor(options.Width * shrink)) : options.Width;
-            var canvasHeight = shrink < 1 ? Math.Max(2, (int)Math.Floor(options.Height * shrink)) : options.Height;
+            var (canvasWidth, canvasHeight, shrink) = StyledCanvas(options);
             var style = (clip.Style ?? TextStyle.FromLegacy(clip)).Clone();
             style.Normalize();
             var boxWidth = ClipLayout.TextBoxLength(clip.TextBoxWidth);
@@ -383,14 +387,31 @@ namespace VideoEditor.Core
             plan.TextRasterizer = options.TextRasterizer;
             // image2 + pattern_type none: 임시 폴더 경로에 %d 같은 글이 있어도 파일 이름 패턴으로 읽지 않게(png_pipe는 이 옵션이 없다)
             var index = AddInput(plan, "-loop", "1", "-framerate", rate.Rational, "-t", N(rate.ToSeconds(segFrames)), "-f", "image2", "-pattern_type", "none", "-i", path);
-            // 비율은 분수식으로(소수로 반올림하면 1px 모자랄 수 있다)
-            var grow = shrink < 1
-                ? string.Format(CultureInfo.InvariantCulture, ",scale=w='iw*{0}/{1}':h='ih*{2}/{3}'", options.Width, canvasWidth, options.Height, canvasHeight)
-                : "";
-            // 그리개가 캔버스보다 큰 PNG를 주어도 pad가 실패하지 않게 먼저 가운데를 잘라 낸다
-            return string.Format(CultureInfo.InvariantCulture,
-                "[{0}:v]setpts=PTS-STARTPTS,format=rgba{3},crop=w='min(iw,{1})':h='min(ih,{2})',pad=w={1}:h={2}:x=(ow-iw)/2:y=(oh-ih)/2:color=black@0.0",
-                index, options.Width, options.Height, grow);
+            // 크기는 그대로 둔다 — 공통 체인이 크기 배율(× 1/화소 배율)로 한 번 줄여 가운데 + X/Y에 얹는다
+            return string.Format(CultureInfo.InvariantCulture, "[{0}:v]setpts=PTS-STARTPTS,format=rgba", index);
+        }
+
+        /// <summary>글자를 그리개로 그리는지: 꾸민 글자이거나 글자 상자를 정했고, 그리개가 있고, 긴 글(drawtext 대체 경로)이 아닐 때.</summary>
+        private static bool UsesRasterizer(Clip clip, RenderOptions options)
+        {
+            return clip.Kind == ClipKind.Text && (clip.Style != null || ClipLayout.HasTextBox(clip)) && options.TextRasterizer != null
+                && (clip.Text ?? "").Length <= MaxStyledTextLength;
+        }
+
+        /// <summary>
+        /// 꾸민 글자 그림의 최대 크기(그리개 픽셀)와 화소 배율(그리개 픽셀 / 출력 픽셀).
+        /// 화면보다 큰 글(큰 상자를 줄여 쓰거나 옮긴 글)도 크기를 바꾸기 전에 잘리지 않게 화면의 몇 배까지 둔다 — 화소 상한 안에서 2의 거듭제곱 배(최대 4배,
+        /// 1080p는 2배, 4K는 1배). 클립의 위치·크기·회전과 상관없는 값이라 옮기거나 줄여도 다시 그리지 않는다. 그림은 글만큼만 크다(빈 범위는 쓰지 않음).
+        /// 화면이 화소 상한보다 크면(8K 등) 줄여서 그리게 하고(화소 배율 &lt; 1) 공통 체인이 크기 배율과 함께 다시 키운다.
+        /// </summary>
+        private static (int Width, int Height, double Shrink) StyledCanvas(RenderOptions options)
+        {
+            double width = options.Width, height = options.Height;
+            var shrink = Math.Min(1, Math.Sqrt(StyledTextLayout.MaxPixels / (width * height)));
+            var times = 1;
+            while (times < 4 && width * height * shrink * shrink * (times * 2) * (times * 2) <= StyledTextLayout.MaxPixels)
+                times *= 2;
+            return (Math.Max(2, (int)Math.Floor(width * times * shrink)), Math.Max(2, (int)Math.Floor(height * times * shrink)), shrink);
         }
 
         // ---------- 오디오 ----------

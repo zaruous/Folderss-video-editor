@@ -203,6 +203,37 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void BoxLargerThanTheScreen_IsNotCutBeforeScaling()
+        {
+            // 화면(640×360)보다 큰 상자(높이 1200)를 줄여 써도 그리개 범위(화면의 4배)가 상자를 다 담는다 — 크기를 바꾸기 전에 화면 크기로 잘리지 않게
+            var (project, clip) = TextProject();
+            clip.TextBoxHeight = 1200;
+            clip.Scale = 0.25;
+            var plan = RenderGraph.Build(project, Options(new FakeTextRasterizer(), 640, 360));
+            var request = Assert.Single(plan.TextImages).Value;
+            Assert.Equal((2560, 1440), (request.CanvasWidth, request.CanvasHeight));
+            Assert.True(request.BoxHeight <= request.CanvasHeight);
+            // 그림은 그대로 읽어 크기 배율로 한 번 줄인다(화면 크기로 자르거나 채우지 않음)
+            Assert.Contains("format=rgba,scale=w='max(1,iw*0.25)':h='max(1,ih*0.25)',format=rgba", plan.Filter);
+            Assert.DoesNotContain("pad=", plan.Filter);
+            Assert.DoesNotContain("crop=", plan.Filter);
+
+            // 위치·크기·회전은 그래프에서만 바뀐다 — 요청(캐시 키)이 같아 다시 그리지 않는다
+            var key = request.Key(1);
+            clip.X = 500;
+            clip.Y = -300;
+            clip.Scale = 1.5;
+            clip.Rotation = 30;
+            Assert.Equal(key, Assert.Single(RenderGraph.Build(project, Options(new FakeTextRasterizer(), 640, 360)).TextImages).Value.Key(1));
+
+            // 화소 상한 안에서만: 1080p는 2배, 4K는 그대로
+            var hd = Assert.Single(RenderGraph.Build(project, Options(new FakeTextRasterizer(), 1920, 1080)).TextImages).Value;
+            Assert.Equal((3840, 2160), (hd.CanvasWidth, hd.CanvasHeight));
+            var uhd = Assert.Single(RenderGraph.Build(project, Options(new FakeTextRasterizer(), 3840, 2160)).TextImages).Value;
+            Assert.Equal((3840, 2160), (uhd.CanvasWidth, uhd.CanvasHeight));
+        }
+
+        [Fact]
         public void Key_DiffersByWrapWidthBoxHeightAndAlign()
         {
             TextImageRequest Request()

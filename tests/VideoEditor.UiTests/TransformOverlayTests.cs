@@ -103,6 +103,31 @@ namespace VideoEditor.UiTests
                 });
                 await ui.WaitUntil(() => (double)Get(ProjectClips(window)[0], "Scale") == 1, Wait, "실행 취소");
                 Assert.Equal(Math.Round(60 / zoom), ui.Run(() => (double)Get(ProjectClips(window)[0], "X")));
+
+                // 화면 전체 사진을 고른 채로, 그 위에 있는 글자를 누르면 사진을 끌지 않고 글자를 고른다
+                const string title = "위 글자";
+                ui.Run(() => Ui.ById<TabControl>(window, "MediaTabs").SelectedIndex = 2);
+                await ui.WaitFor(() => Ui.ById<TextBox>(window, "NewTextBox"), Wait, "글자 탭");
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(window, "NewTextBox").Text = title;
+                    Ui.Click(Ui.ById<Button>(window, "AddTextButton"));
+                });
+                await ui.WaitUntil(() => Clips(window).Any(n => n.Contains(title)), Wait, "글자 클립");
+                ui.Run(() => SelectClip(window, n => n.Contains("red.png")));
+                await ui.WaitUntil(() => (string)Get(Get(Session(window), "PrimaryClip"), "Path") is string path && path.EndsWith("red.png"), Wait, "사진 고름");
+                var photoX = ui.Run(() => (double)Get(ProjectClips(window).First(c => (string)Get(c, "Path") is string path && path.EndsWith("red.png")), "X"));
+                ui.Run(() =>
+                {
+                    var titleCenter = (Point)Invoke(overlay, "ToScreen", width / 2.0, height / 2.0);
+                    Assert.True((bool)Invoke(overlay, "PointerDown", titleCenter));
+                    Invoke(overlay, "PointerMove", new Point(titleCenter.X + 20, titleCenter.Y));
+                    Assert.True((bool)Invoke(overlay, "PointerUp"));
+                });
+                await ui.WaitUntil(() => (string)Get(Get(Session(window), "PrimaryClip"), "Text") == title, Wait, "위 글자를 고름");
+                // 끈 것은 글자다(사진은 제자리)
+                await ui.WaitUntil(() => (double)Get(ProjectClips(window).First(c => (string)Get(c, "Text") == title), "X") != 0, Wait, "글자를 옮김");
+                Assert.Equal(photoX, ui.Run(() => (double)Get(ProjectClips(window).First(c => (string)Get(c, "Path") is string path && path.EndsWith("red.png")), "X")));
                 Assert.Empty(ui.TakeErrors());
             }
             finally
@@ -206,7 +231,10 @@ namespace VideoEditor.UiTests
                 });
                 await ui.WaitUntil(() => !(bool)Get(overlay, "HasFrame"), Wait, "고르기 풀림");
                 var center = ui.Run(() => (Point)Invoke(overlay, "ToScreen", width / 2.0, height / 2.0));
-                var canUndo = ui.Run(() => (bool)Get(Session(window), "CanUndo"));
+                // 누르기만 해서는 편집이 없다 — CanUndo는 글자를 넣을 때부터 참이라 프로젝트 스냅숏으로 비교한다
+                var projectFile = plugin.Assembly.GetType("VideoEditor.Core.ProjectFile", true);
+                string Snapshot() => (string)projectFile.GetMethod("Snapshot").Invoke(null, new[] { Project(window) });
+                var untouched = ui.Run(Snapshot);
                 ui.Run(() =>
                 {
                     // 빈 곳(화면 모서리)을 누르면 아무것도 고르지 않는다
@@ -218,7 +246,7 @@ namespace VideoEditor.UiTests
                 ui.Run(() =>
                 {
                     Assert.Equal(id, Get(Get(Session(window), "PrimaryClip"), "Id"));
-                    Assert.Equal(canUndo, (bool)Get(Session(window), "CanUndo"));
+                    Assert.Equal(untouched, Snapshot());
                     Assert.Equal(0.0, Value("X"));
                 });
                 await ui.WaitUntil(() => !InkBounds(window, width).IsEmpty, Wait, "글자 픽셀");
