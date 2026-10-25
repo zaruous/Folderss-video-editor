@@ -1,10 +1,11 @@
 using System.Linq;
+using System.Text.RegularExpressions;
 using VideoEditor.Core;
 using Xunit;
 
 namespace VideoEditor.Tests
 {
-    /// <summary>꾸민 글자 효과 계산: 그라데이션 끝점(각도)과 정지점(이슈 #14), 윤곽선 여백과 drawtext 테두리(이슈 #15), 그림자 거리·흐림과 drawtext 그림자(이슈 #16).</summary>
+    /// <summary>꾸민 글자 효과 계산: 그라데이션 끝점(각도)과 정지점(이슈 #14), 윤곽선 여백과 drawtext 테두리(이슈 #15), 그림자 거리·흐림과 drawtext 그림자(이슈 #16), 광선 펜·흐림·여백(이슈 #18), 반사 사각형과 여백(이슈 #19).</summary>
     public class TextEffectsTests
     {
         private static (double, double, double, double) Rounded((double StartX, double StartY, double EndX, double EndY) p)
@@ -182,12 +183,167 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void GlowPen_WidensFromTheOutlineEdge_BlurIsHalfTheSize()
+        {
+            // 펜 두께 = (윤곽선 두께 + 크기) × 효과 배율 × 2 — 바깥쪽 절반이 윤곽선 바깥 가장자리에서 크기만큼 더 나간다
+            Assert.Equal(40, TextEffects.GlowPenThickness(0, 20, 1), 6);
+            Assert.Equal(56, TextEffects.GlowPenThickness(8, 20, 1), 6);
+            Assert.Equal(112, TextEffects.GlowPenThickness(8, 20, 2), 6);
+            // 크기 0·잘못된 크기·효과 배율이면 광선을 그리지 않음(0), 잘못된 윤곽선 두께는 0으로
+            Assert.Equal(0, TextEffects.GlowPenThickness(8, 0, 1));
+            Assert.Equal(0, TextEffects.GlowPenThickness(8, double.NaN, 1));
+            Assert.Equal(0, TextEffects.GlowPenThickness(8, 20, double.PositiveInfinity));
+            Assert.Equal(0, TextEffects.GlowPenThickness(8, 20, -1));
+            Assert.Equal(0, TextEffects.GlowPenThickness(8, double.MaxValue, double.MaxValue));
+            Assert.Equal(40, TextEffects.GlowPenThickness(double.NaN, 20, 1), 6);
+            Assert.Equal(40, TextEffects.GlowPenThickness(-5, 20, 1), 6);
+
+            // 흐림 반지름 = 크기 / 2 × 효과 배율, 상한 100
+            Assert.Equal(10, TextEffects.GlowBlurRadius(20, 1), 6);
+            Assert.Equal(20, TextEffects.GlowBlurRadius(20, 2), 6);
+            Assert.Equal(TextEffects.MaxBlurRadius, TextEffects.GlowBlurRadius(100, 4), 6);
+            Assert.Equal(0, TextEffects.GlowBlurRadius(double.NaN, 1));
+
+            // 번지는 거리 = 크기 × 효과 배율 + 흐림 반지름
+            Assert.Equal(30, TextEffects.GlowExtent(20, 1), 6);
+            Assert.Equal(150, TextEffects.GlowExtent(100, 1), 6);
+            Assert.Equal(400 + TextEffects.MaxBlurRadius, TextEffects.GlowExtent(100, 4), 6);
+            Assert.Equal(0, TextEffects.GlowExtent(0, 1));
+            Assert.Equal(0, TextEffects.GlowExtent(-3, 1));
+        }
+
+        [Fact]
+        public void GlowMiterLimit_KeepsCornersAtOutlineTipPlusSize()
+        {
+            // 펜 반 두께(윤곽선 + 크기) × 한도 = 윤곽선 모서리 끝(두께 × 2) + 크기
+            Assert.Equal(1.5, TextEffects.GlowMiterLimit(10, 10), 6);
+            Assert.Equal((2 * 8 + 20) / 28.0, TextEffects.GlowMiterLimit(8, 20), 6);
+            Assert.Equal(StyledTextLayout.MiterLimit, TextEffects.GlowMiterLimit(8, 0), 6);
+            Assert.Equal(1, TextEffects.GlowMiterLimit(0, 20), 6);
+            Assert.Equal(StyledTextLayout.MiterLimit, TextEffects.GlowMiterLimit(double.NaN, double.NaN), 6);
+            Assert.Equal(StyledTextLayout.MiterLimit, TextEffects.GlowMiterLimit(0, 0), 6);
+        }
+
+        [Fact]
+        public void MaxGlow_LeavesRoomForOutlineSizeAndBlur()
+        {
+            // 광선만(20): 크기 20 + 흐림 10, 윤곽선(둥글게 10)과 함께면 그 바깥에서
+            var style = new TextStyle();
+            style.Glow.Enabled = true;
+            style.Glow.Size = 20;
+            Assert.Equal(30, StyledTextLayout.Spread(style, 1, 80).Horizontal, 6);
+            Assert.Equal(30, StyledTextLayout.Spread(style, 1, 80).Vertical, 6);
+            style.Outline.Enabled = true;
+            style.Outline.Width = 10;
+            Assert.Equal(40, StyledTextLayout.Spread(style, 1, 80).Horizontal, 6);
+            // 가장 굵은 윤곽선(각지게 50 → 100px) + 가장 큰 광선(100): 100 + 100 + 50
+            style.Outline.Width = 50;
+            style.Outline.Join = LineJoinKind.Miter;
+            style.Glow.Size = 100;
+            var spread = StyledTextLayout.Spread(style, 1, 80);
+            Assert.Equal(250, spread.Horizontal, 6);
+            Assert.Equal(250, spread.Vertical, 6);
+            // 효과 배율 2: 윤곽선·크기는 두 배, 흐림은 상한 100(그리개와 같은 반지름)
+            Assert.Equal(200 + 200 + 100, StyledTextLayout.Spread(style, 2, 160).Horizontal, 6);
+            var layout = StyledTextLayout.Fit(300, 80, style, 1, 4000, 4000);
+            Assert.True(layout.OriginX >= 250 && layout.OriginY >= 250, "여백 " + layout.OriginX + "×" + layout.OriginY);
+            // 그림자와 함께면 더 먼 쪽에 맞춘다
+            style.Shadow.Enabled = true;
+            style.Shadow.Distance = 200;
+            style.Shadow.Angle = 0;
+            style.Shadow.Blur = 100;
+            Assert.Equal(100 + 200 + 100, StyledTextLayout.Spread(style, 1, 80).Horizontal, 6);
+            Assert.Equal(250, StyledTextLayout.Spread(style, 1, 80).Vertical, 6);
+            // 끄면 광선 여백이 없다
+            style.Shadow.Enabled = false;
+            style.Glow.Enabled = false;
+            Assert.Equal(100, StyledTextLayout.Spread(style, 1, 80).Horizontal, 6);
+        }
+
+        [Fact]
+        public void Glow_WithoutRasterizer_IsNotDrawn()
+        {
+            // drawtext는 광선을 그릴 수 없다 — 그리개가 없거나 긴 글이면 광선은 빠지고 나머지는 그대로
+            var project = TestProjects.Empty();
+            var text = TimelineEdits.CreateText("가나다", 0, 30);
+            text.Style = new TextStyle();
+            text.Style.Outline.Enabled = true;
+            TimelineEdits.Place(project, project.MainTrack, text, 0);
+            var options = new RenderOptions { From = 0, To = 30, Width = 640, Height = 360, Audio = false };
+            var plain = RenderGraph.Build(project, options).Filter;
+            text.Style.Glow.Enabled = true;
+            text.Style.Glow.Size = 40;
+            text.Style.Glow.Color = "#FF0000";
+            var glowing = RenderGraph.Build(project, options).Filter;
+            // 글 파일 이름(임시 파일)만 다르다
+            Assert.Equal(Regex.Replace(plain, "fv-text-[0-9a-f]{32}", "fv-text"), Regex.Replace(glowing, "fv-text-[0-9a-f]{32}", "fv-text"));
+            Assert.Contains("drawtext", glowing);
+        }
+
+        [Fact]
         public void GradientStops_SpreadEvenly()
         {
             Assert.Equal(new[] { 0.0 }, TextEffects.GradientStops(1));
             Assert.Equal(new[] { 0.0 }, TextEffects.GradientStops(0));
             Assert.Equal(new[] { 0.0, 1.0 }, TextEffects.GradientStops(2));
             Assert.Equal(new[] { 0.0, 0.333333, 0.666667, 1.0 }, TextEffects.GradientStops(4).Select(v => System.Math.Round(v, 6)));
+        }
+
+        [Fact]
+        public void ReflectionRect_IsBelowTheGlyph_SizePercentOfItsHeight()
+        {
+            // 글자 (10, 20) 100×80, 크기 50%·간격 10: 글자 아래(20 + 80) + 10에서 높이 40, 가로는 글자와 같다
+            Assert.Equal((10.0, 110.0, 100.0, 40.0), TextEffects.ReflectionRect((10, 20, 100, 80), 50, 10));
+            Assert.Equal((10.0, 100.0, 100.0, 80.0), TextEffects.ReflectionRect((10, 20, 100, 80), 100, 0));
+            // 크기는 0~100%로 자르고, 잘못된 크기·간격·높이는 0
+            Assert.Equal(80.0, TextEffects.ReflectionRect((10, 20, 100, 80), 150, 0).Height);
+            Assert.Equal(0.0, TextEffects.ReflectionRect((10, 20, 100, 80), -5, 0).Height);
+            Assert.Equal(0.0, TextEffects.ReflectionRect((10, 20, 100, 80), double.NaN, 0).Height);
+            Assert.Equal(100.0, TextEffects.ReflectionRect((10, 20, 100, 80), 50, double.NaN).Top);
+            Assert.Equal(100.0, TextEffects.ReflectionRect((10, 20, 100, 80), 50, -10).Top);
+            Assert.Equal((10.0, 30.0, 100.0, 0.0), TextEffects.ReflectionRect((10, 20, 100, -80), 50, 10));
+            Assert.Equal((0.0, 10.0, 0.0, 0.0), TextEffects.ReflectionRect((double.NaN, double.PositiveInfinity, double.NaN, double.NaN), 50, 10));
+            // 스타일 값: 간격 × 효과 배율(크기는 글자 높이의 비율이라 배율과 상관없다), 반사가 없으면 높이 0
+            var reflection = new TextReflection { Enabled = true, Size = 50, Gap = 10 };
+            Assert.Equal((10.0, 120.0, 100.0, 40.0), StyledTextLayout.ReflectionRect(reflection, 2, (10, 20, 100, 80)));
+            Assert.Equal(100.0, StyledTextLayout.ReflectionRect(reflection, double.NaN, (10, 20, 100, 80)).Top);
+            Assert.Equal(0.0, StyledTextLayout.ReflectionRect(null, 1, (10, 20, 100, 80)).Height);
+        }
+
+        [Fact]
+        public void ReflectionMargin_CoversTheLowestGlyphWithOutline()
+        {
+            // 윤곽선 10 + 반사(50%, 간격 4), 상자 높이 40: 가장 크고 낮은 글자 = 상자를 위아래로 10씩 넓힌 것(높이 60, 아래 끝은 상자 아래 + 10)
+            // → 아래 여백 = 10 + 4 + 60 × 50% = 44, 위아래 대칭이라 세로 여백이 44
+            var style = new TextStyle();
+            style.Outline.Enabled = true;
+            style.Outline.Width = 10;
+            style.Reflection.Enabled = true;
+            style.Reflection.Size = 50;
+            style.Reflection.Gap = 4;
+            Assert.Equal(44, StyledTextLayout.Spread(style, 1, 40).Vertical, 6);
+            Assert.Equal(10, StyledTextLayout.Spread(style, 1, 40).Horizontal, 6);
+            // 효과 배율 2(상자도 두 배): 윤곽선·간격·높이가 모두 두 배
+            Assert.Equal(88, StyledTextLayout.Spread(style, 2, 80).Vertical, 6);
+            // 상자 안 어디에 있든 글자(윤곽선 포함)의 반사 사각형은 여백 안에 든다
+            var spread = StyledTextLayout.Spread(style, 1, 40).Vertical;
+            foreach (var (top, height) in new[] { (0.0, 40.0), (-10.0, 60.0), (20.0, 30.0), (5.0, 10.0) })
+            {
+                var rect = StyledTextLayout.ReflectionRect(style.Reflection, 1, (0, top, 100, height));
+                Assert.True(rect.Top + rect.Height - 40 <= spread + 1e-9, "글자 " + top + "+" + height + " → 반사 아래 끝 " + (rect.Top + rect.Height));
+            }
+            // 가장 큰 반사(100%, 간격 100) + 가장 굵은 윤곽선(각지게 50 → 100px): 100 + 100 + (상자 + 200)
+            style.Outline.Width = 50;
+            style.Outline.Join = LineJoinKind.Miter;
+            style.Reflection.Size = 100;
+            style.Reflection.Gap = 100;
+            Assert.Equal(100 + 100 + 80 + 200, StyledTextLayout.Spread(style, 1, 80).Vertical, 6);
+            var layout = StyledTextLayout.Fit(300, 80, style, 1, 4000, 4000);
+            Assert.True(layout.OriginY >= 480 + StyledTextLayout.EdgeMargin, "위 여백 " + layout.OriginY);
+            Assert.Equal(layout.Height / 2.0, layout.OriginY + 40, 6);
+            // 꺼지면 반사 여백이 없다
+            style.Reflection.Enabled = false;
+            Assert.Equal(100, StyledTextLayout.Spread(style, 1, 80).Vertical, 6);
         }
     }
 }

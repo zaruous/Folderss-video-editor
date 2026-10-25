@@ -441,7 +441,7 @@ namespace VideoEditor.Ui
         /// <summary>
         /// [꾸미기] 꾸민 글자 스타일 — 맨 위 스타일 모음(미리 만든 스타일 단추), 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬),
         /// 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도), 윤곽선 묶음(켜기·색·두께·이음), 그림자 묶음(켜기·색·거리·방향·흐림·불투명도),
-        /// 맨 끝에 휘기 묶음(종류·정도).
+        /// 광선 묶음(켜기·색·크기·불투명도), 반사 묶음(켜기·크기·간격·불투명도), 맨 끝에 휘기 묶음(종류·정도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
         /// </summary>
         private UIElement StyleTab(string id)
@@ -698,6 +698,84 @@ namespace VideoEditor.Ui
                 }
             });
 
+            // 광선: 켜기 · 색 · 크기(0~100px) · 불투명도(0~100%) — 켰을 때만 고친다
+            panel.Children.Add(Section("광선"));
+            var glowOn = new CheckBox { Content = "광선 그리기", VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetAutomationId(glowOn, "StyleGlowOn");
+            glowOn.Click += (s, e) => Edit(id, c => GlowOf(c).Enabled = glowOn.IsChecked == true, null);
+            panel.Children.Add(Row("광선", glowOn));
+            var glowColor = UiKit.ColorRow("색", "StyleGlowColor",
+                () => _session.Project.FindClip(id)?.Style?.Glow?.Color ?? "#FFD54F",
+                hex => Edit(id, c => GlowOf(c).Color = hex, null));
+            panel.Children.Add(glowColor);
+            var glowRows = new[]
+            {
+                NumberRow("크기", "StyleGlowSize", 0, 100, "px", id,
+                    c => c.Style?.Glow?.Size ?? 12, (c, v) => GlowOf(c).Size = Math.Max(0, Math.Min(100, v))),
+                NumberRow("불투명도", "StyleGlowOpacity", 0, 100, "%", id,
+                    c => (c.Style?.Glow?.Opacity ?? 0.8) * 100, (c, v) => GlowOf(c).Opacity = Math.Max(0, Math.Min(1, v / 100)))
+            };
+            foreach (var row in glowRows)
+                panel.Children.Add(row);
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var on = c.Style?.Glow?.Enabled == true;
+                    glowOn.IsChecked = on;
+                    glowColor.Refresh();
+                    glowColor.IsEnabled = on;
+                    foreach (var row in glowRows)
+                        row.IsEnabled = on;
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
+
+            // 반사: 켜기 · 크기(글자 높이의 10~100%) · 간격(0~100px) · 불투명도(0~100%) — 켰을 때만 고친다
+            panel.Children.Add(Section("반사"));
+            var reflectionOn = new CheckBox { Content = "반사 그리기", VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetAutomationId(reflectionOn, "StyleReflectionOn");
+            reflectionOn.Click += (s, e) => Edit(id, c => ReflectionOf(c).Enabled = reflectionOn.IsChecked == true, null);
+            panel.Children.Add(Row("반사", reflectionOn));
+            var reflectionRows = new[]
+            {
+                NumberRow("크기", "StyleReflectionSize", 10, 100, "%", id,
+                    c => c.Style?.Reflection?.Size ?? 50, (c, v) => ReflectionOf(c).Size = Math.Max(10, Math.Min(100, v))),
+                NumberRow("간격", "StyleReflectionGap", 0, 100, "px", id,
+                    c => c.Style?.Reflection?.Gap ?? 4, (c, v) => ReflectionOf(c).Gap = Math.Max(0, Math.Min(100, v))),
+                NumberRow("불투명도", "StyleReflectionOpacity", 0, 100, "%", id,
+                    c => (c.Style?.Reflection?.Opacity ?? 0.4) * 100, (c, v) => ReflectionOf(c).Opacity = Math.Max(0, Math.Min(1, v / 100)))
+            };
+            foreach (var row in reflectionRows)
+                panel.Children.Add(row);
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var on = c.Style?.Reflection?.Enabled == true;
+                    reflectionOn.IsChecked = on;
+                    foreach (var row in reflectionRows)
+                        row.IsEnabled = on;
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
+
             _refreshers.Add(() =>
             {
                 var c = _session.Project.FindClip(id);
@@ -885,6 +963,18 @@ namespace VideoEditor.Ui
         private static TextShadow ShadowOf(Clip clip)
         {
             return StyleOf(clip).Shadow ??= new TextShadow();
+        }
+
+        /// <summary>고칠 클립의 광선(스타일·광선이 없으면 만든다).</summary>
+        private static TextGlow GlowOf(Clip clip)
+        {
+            return StyleOf(clip).Glow ??= new TextGlow();
+        }
+
+        /// <summary>고칠 클립의 반사(스타일·반사가 없으면 만든다).</summary>
+        private static TextReflection ReflectionOf(Clip clip)
+        {
+            return StyleOf(clip).Reflection ??= new TextReflection();
         }
 
         /// <summary>밝은 색인지(사람 눈 밝기 0.6 넘음) — 그라데이션 둘째 색을 대비되게 고를 때.</summary>
