@@ -352,7 +352,7 @@ namespace VideoEditor.Ui
                 Item("재생 헤드까지 앞 다듬기", "Alt+[", () => _commands.TrimToPlayhead(true)),
                 Item("재생 헤드까지 뒤 다듬기", "Alt+]", () => _commands.TrimToPlayhead(false)),
                 Item("속도·길이…", "Ctrl+R", _commands.ChangeSpeed),
-                Item("오디오 분리", "Ctrl+Alt+D", _commands.DetachAudio),
+                Item("사운드 분리", "Ctrl+Alt+D", _commands.DetachAudio),
                 Item("클립 소리 끄기/켜기", "Ctrl+Shift+M", _commands.ToggleClipMute),
                 Item("시계 방향 90° 회전", "Ctrl+Alt+→", () => _commands.Rotate(90)),
                 Item("반시계 방향 90° 회전", "Ctrl+Alt+←", () => _commands.Rotate(-90))));
@@ -410,6 +410,12 @@ namespace VideoEditor.Ui
 
         private void OpenClipMenu(Clip clip, Track track, long frame)
         {
+            ClipMenu(clip, track, frame).IsOpen = true;
+        }
+
+        /// <summary>타임라인 오른쪽 메뉴를 만든다(클립 위면 클립 명령, 빈 곳이면 붙여넣기·트랙). 화면 시험도 이것으로 항목을 읽고 누른다.</summary>
+        internal ContextMenu ClipMenu(Clip clip, Track track, long frame)
+        {
             var menu = new ContextMenu { PlacementTarget = _timeline.Canvas };
             if (clip != null)
             {
@@ -420,8 +426,7 @@ namespace VideoEditor.Ui
                 menu.Items.Add(Item("리플 삭제", "Shift+Delete", () => _commands.Delete(true)));
                 menu.Items.Add(new Separator());
                 menu.Items.Add(Item("속도·길이…", "Ctrl+R", _commands.ChangeSpeed));
-                if (clip.Kind == ClipKind.Media && clip.HasVideo && clip.HasAudio && !clip.AudioDetached)
-                    menu.Items.Add(Item("오디오 분리", "Ctrl+Alt+D", _commands.DetachAudio));
+                AddSoundItems(menu, clip);
                 if (clip.Kind == ClipKind.Media && clip.IsVisual)
                 {
                     // 화면 맞춤 방식(고른 클립 모두에) — 지금 방식에 표시
@@ -450,7 +455,27 @@ namespace VideoEditor.Ui
                 menu.Items.Add(Item("오디오 트랙 추가", "", () => _commands.AddTrack(TrackKind.Audio)));
                 menu.Items.Add(Item("자막 트랙 추가", "", _commands.AddSubtitleTrack));
             }
-            menu.IsOpen = true;
+            return menu;
+        }
+
+        /// <summary>사운드 분리 항목: 분리 · 합치기 · 링크 해제/다시 링크 · 싱크 맞추기 · 사운드를 파일로 저장.</summary>
+        private void AddSoundItems(ContextMenu menu, Clip clip)
+        {
+            var project = _session.Project;
+            if (clip.Kind != ClipKind.Media || !clip.HasAudio)
+                return;
+            if (clip.HasVideo && !clip.AudioDetached && !clip.AudioOnly)
+                menu.Items.Add(Item("사운드 분리", "Ctrl+Alt+D", _commands.DetachAudio));
+            if (ClipLinks.RejoinPairs(_session.SelectedClips).Count > 0)
+                menu.Items.Add(Item("사운드 합치기", "", _commands.RejoinSound));
+            var partner = ClipLinks.Partner(project, clip);
+            if (partner != null)
+            {
+                menu.Items.Add(clip.Unlinked ? Item("다시 링크", "", _commands.RelinkSound) : Item("링크 해제", "", _commands.UnlinkSound));
+                if (ClipLinks.Offset(clip, partner) != 0)
+                    menu.Items.Add(Item("싱크 맞추기 (" + ClipLinks.FormatOffset(ClipLinks.Offset(clip, partner), project.Rate) + ")", "", () => _commands.SyncSound(clip.Id)));
+            }
+            menu.Items.Add(Item("사운드를 파일로 저장…", "", () => _ = _commands.SaveClipSound(clip.Id)));
         }
 
         private void ShowShortcuts()
@@ -459,11 +484,12 @@ namespace VideoEditor.Ui
                 "재생/일시 정지 Space · 정지 Ctrl+/ · 프레임 ←/→ · 1초 Shift+←/→ · 편집점 ↑/↓ · 처음/끝 Home/End\n"
                 + "분할 Ctrl+B · 삭제 Delete · 리플 삭제 Shift+Delete · 빈틈 닫기 Alt+Delete · 앞/뒤 다듬기 Alt+[ / Alt+]\n"
                 + "실행 취소 Ctrl+Z · 다시 실행 Ctrl+Y · 잘라내기/복사/붙여넣기 Ctrl+X/C/V · 모두 선택 Ctrl+A\n"
-                + "속도 Ctrl+R · 오디오 분리 Ctrl+Alt+D · 클립 소리 Ctrl+Shift+M · 회전 Ctrl+Alt+←/→\n"
+                + "속도 Ctrl+R · 사운드 분리 Ctrl+Alt+D · 클립 소리 Ctrl+Shift+M · 회전 Ctrl+Alt+←/→\n"
                 + "마커 M · 마커 편집 Shift+M · 이전/다음 마커 Shift+↑/↓ · In I · Out O\n"
                 + "확대 Ctrl+= · 축소 Ctrl+- · 맞춤 Shift+Z\n"
                 + "새로 Ctrl+N · 열기 Ctrl+O · 저장 Ctrl+S · 다른 이름 Ctrl+Shift+S · 가져오기 Ctrl+I · 내보내기 Ctrl+E\n\n"
-                + "타임라인: 휠 = 가로 이동, Ctrl+휠 = 확대/축소, Shift+휠 = 세로 이동, 끄는 동안 Alt = 붙기 잠시 끔");
+                + "타임라인: 휠 = 가로 이동, Ctrl+휠 = 확대/축소, Shift+휠 = 세로 이동, 끄는 동안 Alt = 붙기 잠시 끔\n"
+                + "링크된 영상·사운드: Alt를 누른 채 끌기 시작하면 그 한 번만 그 클립만 옮기거나 다듬습니다");
         }
 
         // ---------- 단축키 ----------

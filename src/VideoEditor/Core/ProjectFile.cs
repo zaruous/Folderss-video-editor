@@ -147,6 +147,8 @@ namespace VideoEditor.Core
                     clip.Style?.Normalize();
                 clip.Words = CleanWords(clip);
             }
+            // 사운드 분리 링크: 같은 원본의 영상·사운드 짝만(예전 프로젝트는 링크 없음)
+            ClipLinks.Normalize(project);
             foreach (var track in project.AllTracks)
                 track.Sort();
             project.RenameTracks();

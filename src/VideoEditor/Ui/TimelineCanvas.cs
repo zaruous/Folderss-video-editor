@@ -28,6 +28,7 @@ namespace VideoEditor.Ui
     /// 타임라인 그리기·조작(눈금자 + 트랙 줄 + 클립 + 재생 헤드). 위(번호 큰) 동영상 트랙이 위에, 오디오 트랙은 아래에 그린다.
     /// 마우스: 눈금자 끌기 = 재생 헤드 이동, 클립 끌기 = 옮기기(다른 트랙으로도), 가장자리 끌기 = 다듬기(붙기 켜면 편집점·재생 헤드·마커에 붙음),
     /// 휠 = 가로 이동, Ctrl+휠 = 확대/축소, Shift+휠 = 세로 이동. 파일·미디어를 끌어 놓으면 MediaDropped.
+    /// 링크된 영상·사운드(사운드 분리)는 함께 옮기고 다듬는다 — 끌기 시작할 때 Alt면 그 한 번만 그 클립만.
     /// 조작은 Pointer* 메서드로 모여 있어 화면 시험이 마우스 없이 부를 수 있다.
     /// </summary>
     internal sealed class TimelineCanvas : FrameworkElement
@@ -80,6 +81,8 @@ namespace VideoEditor.Ui
         private static readonly Pen TransitionBadgePen = FrozenPen(new SolidColorBrush(Color.FromArgb(0xB0, 0, 0, 0)), 1);
         private const double BadgeWidth = 26;
         private const double BadgeHeight = 18;
+        // 사운드 분리: 짝과 시간이 어긋나면 클립 오른쪽 위에 빨간 배지("+3f")
+        private static readonly Brush OffsetBadgeBrush = Frozen(Color.FromRgb(0xDC, 0x26, 0x26));
 
         private static Brush Frozen(Color color)
         {
@@ -114,6 +117,10 @@ namespace VideoEditor.Ui
         private long _ghostStart;
         private long _ghostEnd;
         private long _snapLine = -1;
+        // 링크된 짝(사운드 분리): 함께 움직일 짝, 끌기 시작할 때 Alt면 그 한 번만 따로
+        private string _dragPartnerId;
+        private bool _dragIndependent;
+        private Dictionary<string, Clip> _partners = new Dictionary<string, Clip>();
         // 끌어 놓기 표시
         private Track _dropTrack;
         private long _dropFrame = -1;
@@ -456,11 +463,15 @@ namespace VideoEditor.Ui
                 _session.ToggleSelect(clip);
             else if (!_session.IsSelected(clip))
                 _session.Select(new[] { clip });
+            else
+                _session.SetPrimary(clip);
             if (row.Track.Locked)
             {
                 StatusMessage?.Invoke("'" + row.Track.Name + "' 트랙이 잠겨 있습니다.");
                 return;
             }
+            _dragIndependent = (modifiers & ModifierKeys.Alt) != 0;
+            _dragPartnerId = ClipLinks.LinkedPartner(_session.Project, clip)?.Id;
             _dragClipId = clip.Id;
             _dragOriginStart = clip.Start;
             _dragDuration = clip.Duration;
@@ -494,7 +505,9 @@ namespace VideoEditor.Ui
             }
             var snap = Snapping && (modifiers & ModifierKeys.Alt) == 0;
             var threshold = (long)Math.Ceiling(SnapPixels / _pixelsPerFrame);
-            var targets = snap ? TimelineEdits.SnapTargets(project, _session.Playhead, new[] { clip }) : new List<long>();
+            // 함께 움직일 짝의 지금 자리에는 붙지 않는다
+            var partner = _dragIndependent || _dragPartnerId == null ? null : project.FindClip(_dragPartnerId);
+            var targets = snap ? TimelineEdits.SnapTargets(project, _session.Playhead, partner == null ? new[] { clip } : new[] { clip, partner }) : new List<long>();
             _snapLine = -1;
             var delta = XToFrame(point.X) - XToFrame(_downPoint.X);
             if (_drag == DragKind.Move)
@@ -544,18 +557,22 @@ namespace VideoEditor.Ui
             var track = _ghostTrack;
             var start = _ghostStart;
             var end = _ghostEnd;
+            var independent = _dragIndependent;
+            var linked = _dragPartnerId != null;
             CancelDrag();
             if (drag == DragKind.None || drag == DragKind.Scrub || !started)
                 return;
             bool ok;
             if (drag == DragKind.Move)
-                ok = _session.Execute(p => TimelineEdits.Move(p, p.FindClip(clipId), p.FindTrack(track.Id), start));
+                ok = _session.Execute(p => TimelineEdits.Move(p, p.FindClip(clipId), p.FindTrack(track.Id), start, independent));
             else if (drag == DragKind.TrimStart)
-                ok = _session.Execute(p => TimelineEdits.TrimStart(p, p.FindClip(clipId), start));
+                ok = _session.Execute(p => TimelineEdits.TrimStart(p, p.FindClip(clipId), start, independent));
             else
-                ok = _session.Execute(p => TimelineEdits.TrimEnd(p, p.FindClip(clipId), end));
+                ok = _session.Execute(p => TimelineEdits.TrimEnd(p, p.FindClip(clipId), end, independent));
             if (!ok && _session.LastError != null)
                 StatusMessage?.Invoke(_session.LastError);
+            else if (ok && linked && independent)
+                StatusMessage?.Invoke("Alt: 링크된 짝은 그대로 두고 이 클립만 " + (drag == DragKind.Move ? "옮겼습니다. 짝과 어긋난 만큼이 클립에 보입니다." : "다듬었습니다."));
         }
 
         private void CancelDrag()
@@ -564,6 +581,8 @@ namespace VideoEditor.Ui
             _dragStarted = false;
             _snapLine = -1;
             _ghostTrack = null;
+            _dragPartnerId = null;
+            _dragIndependent = false;
             InvalidateVisual();
         }
 
@@ -668,6 +687,7 @@ namespace VideoEditor.Ui
             var text = (Brush)GetValue(TextBrushProperty);
             var subText = (Brush)GetValue(SubTextBrushProperty);
             dc.DrawRectangle(panel, null, new Rect(0, 0, width, height));
+            _partners = ClipLinks.Partners(project);
 
             // 트랙 줄
             var rows = Rows();
@@ -715,6 +735,7 @@ namespace VideoEditor.Ui
                 var row = rows.FirstOrDefault(r => r.Track == _ghostTrack);
                 if (row != null)
                     dc.DrawRoundedRectangle(GhostBrush, SelectedPen, ClipRect(row, _ghostStart, _ghostEnd), 3, 3);
+                DrawPartnerGhost(dc, rows, project);
             }
             // 끌어 놓을 자리
             if (_dropFrame >= 0)
@@ -792,6 +813,31 @@ namespace VideoEditor.Ui
             }
         }
 
+        /// <summary>끄는 클립의 링크된 짝이 함께 갈 자리(Alt로 시작했으면 없음).</summary>
+        private void DrawPartnerGhost(DrawingContext dc, List<TimelineRow> rows, Project project)
+        {
+            var clip = project.FindClip(_dragClipId);
+            var partner = _dragIndependent || _dragPartnerId == null ? null : project.FindClip(_dragPartnerId);
+            var row = partner == null || clip == null ? null : rows.FirstOrDefault(r => r.Track.Clips.Contains(partner));
+            if (row == null)
+                return;
+            long start = partner.Start, end = partner.End;
+            if (_drag == DragKind.Move)
+            {
+                start += _ghostStart - clip.Start;
+                end += _ghostStart - clip.Start;
+            }
+            else if (_drag == DragKind.TrimStart)
+            {
+                start = Math.Min(end - 1, start + _ghostStart - clip.Start);
+            }
+            else
+            {
+                end = Math.Max(start + 1, end + _ghostEnd - clip.End);
+            }
+            dc.DrawRoundedRectangle(GhostBrush, SelectedPen, ClipRect(row, start, end), 3, 3);
+        }
+
         private void DrawClip(DrawingContext dc, TimelineRow row, Clip clip, Rect rect, FrameRate rate)
         {
             var fill = row.Track.Subtitles ? SubtitleClipBrush
@@ -823,11 +869,25 @@ namespace VideoEditor.Ui
             var label = clip.Name;
             if (Math.Abs(clip.Speed - 1) > 1e-9)
                 label += "  ×" + UiKit.Number(clip.Speed);
+            // 사운드 분리: 영상에 "(사운드 분리)", 링크된 짝에 "링크"
+            _partners.TryGetValue(clip.Id, out var partner);
+            var linked = partner != null && !clip.Unlinked;
             if (clip.Kind == ClipKind.Media && clip.HasAudio && clip.AudioDetached)
-                label += "  (소리 분리)";
+                label += linked ? "  (사운드 분리 · 링크)" : "  (사운드 분리)";
+            else if (linked)
+                label += "  (링크)";
             dc.DrawText(Text(label, 11, Brushes.White, true), new Point(textLeft, rect.Top + 2));
             if (rect.Height > 30)
                 dc.DrawText(Text(rate.Timecode(clip.Duration), 10, WaveBrush), new Point(textLeft, rect.Top + 16));
+            // 어긋남: 짝보다 늦으면 +, 이르면 −(링크를 풀고 옮겼거나 잠긴 짝이 따라오지 못함)
+            var offset = partner == null ? 0 : ClipLinks.Offset(clip, partner);
+            if (offset != 0)
+            {
+                var badge = Text(ClipLinks.FormatOffset(offset, rate), 10, Brushes.White, true);
+                var box = new Rect(Math.Max(rect.Left + 2, rect.Right - badge.Width - 10), rect.Top + 2, badge.Width + 6, badge.Height + 2);
+                dc.DrawRoundedRectangle(OffsetBadgeBrush, null, box, 3, 3);
+                dc.DrawText(badge, new Point(box.Left + 3, box.Top + 1));
+            }
             dc.Pop();
             // 페이드
             if (clip.FadeIn > 0)
@@ -1058,6 +1118,15 @@ namespace VideoEditor.Ui
                 // 화면 읽기 프로그램·시험에도 전환이 들어 있다는 것을 알린다
                 if (_clip.TransitionIn > 0 && _clip.IsVisual && !_track.Subtitles)
                     name += " · 전환 " + Transitions.Name(_clip) + " " + UiKit.Number(rate.ToSeconds(_clip.TransitionIn)) + "초";
+                // 사운드 분리: 링크 상태와 어긋남
+                var partner = ClipLinks.Partner(_canvas.Session.Project, _clip);
+                if (partner != null)
+                {
+                    name += _clip.Unlinked ? " · 링크 해제" : " · 링크";
+                    var offset = ClipLinks.Offset(_clip, partner);
+                    if (offset != 0)
+                        name += " · 어긋남 " + ClipLinks.FormatOffset(offset, rate);
+                }
                 return name;
             }
 

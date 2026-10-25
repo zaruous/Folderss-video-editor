@@ -41,7 +41,7 @@ namespace VideoEditor.Ui
             toolbar.Children.Add(UiKit.IconButton(UiKit.GlyphSplit, "분할 (Ctrl+B)", "SplitButton", commands.Split));
             toolbar.Children.Add(UiKit.IconButton(UiKit.GlyphDelete, "삭제 (Delete) — Shift+Delete는 리플 삭제", "DeleteButton", () => commands.Delete(false)));
             toolbar.Children.Add(UiKit.IconButton(UiKit.GlyphSpeed, "속도·길이 (Ctrl+R)", "SpeedButton", commands.ChangeSpeed));
-            toolbar.Children.Add(UiKit.IconButton(UiKit.GlyphAudio, "오디오 분리 (Ctrl+Alt+D)", "DetachAudioButton", commands.DetachAudio));
+            toolbar.Children.Add(UiKit.IconButton(UiKit.GlyphAudio, "사운드 분리 (Ctrl+Alt+D)", "DetachAudioButton", commands.DetachAudio));
             toolbar.Children.Add(UiKit.IconButton(UiKit.GlyphMarker, "마커 추가 (M)", "AddMarkerButton", commands.AddMarker));
             toolbar.Children.Add(UiKit.ToolbarSeparator());
             _magnetic = UiKit.IconToggle(UiKit.GlyphMagnet, "마그네틱 주 트랙 — 동영상 1에 빈틈 없이 붙임", "MagneticToggle", commands.SetMagnetic);
