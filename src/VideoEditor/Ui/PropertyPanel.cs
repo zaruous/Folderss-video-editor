@@ -1235,9 +1235,25 @@ namespace VideoEditor.Ui
                         // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
                         c.TextColor = c.Style.Fill.Colors[0];
                     }, null);
+                    var index = i;
+                    var rename = new MenuItem { Header = new TextBlock { Text = "이름 바꾸기…" } };
+                    rename.Click += (s, e) =>
+                    {
+                        var newName = Dialogs.Input(this, "내 스타일 이름 바꾸기", "스타일 이름(1~40자)", name);
+                        if (newName != null)
+                            ChangeMine(list => TextStyleLibrary.Rename(list, name, newName), "내 스타일 이름을 바꿨습니다: " + name + " → " + newName.Trim(), Rebuild);
+                    };
+                    var earlier = new MenuItem { Header = new TextBlock { Text = "앞으로" }, IsEnabled = index > 0 };
+                    earlier.Click += (s, e) => ChangeMine(list => TextStyleLibrary.Move(list, TextStyleLibrary.IndexOf(list, name), index - 1) ? null : "", null, Rebuild);
+                    var later = new MenuItem { Header = new TextBlock { Text = "뒤로" }, IsEnabled = index < styles.Count - 1 };
+                    later.Click += (s, e) => ChangeMine(list => TextStyleLibrary.Move(list, TextStyleLibrary.IndexOf(list, name), index + 1) ? null : "", null, Rebuild);
                     var remove = new MenuItem { Header = new TextBlock { Text = "지우기" } };
                     remove.Click += (s, e) => RemoveMine(name, Rebuild);
                     button.ContextMenu = new ContextMenu();
+                    button.ContextMenu.Items.Add(rename);
+                    button.ContextMenu.Items.Add(earlier);
+                    button.ContextMenu.Items.Add(later);
+                    button.ContextMenu.Items.Add(new Separator());
                     button.ContextMenu.Items.Add(remove);
                     row.Children.Add(button);
                     if (shown)
@@ -1253,11 +1269,96 @@ namespace VideoEditor.Ui
             };
             Rebuild();
             var save = UiKit.TextButton("내 스타일로 저장", "StyleSaveMine", () => SaveMine(id, Rebuild));
-            save.HorizontalAlignment = HorizontalAlignment.Left;
             save.Margin = new Thickness(0, 0, 0, 6);
-            box.Children.Add(save);
+            // 다른 PC로 옮기기: 설정과 같은 JSON 파일
+            var import = UiKit.TextButton("가져오기…", "StyleImportMine", () => ImportMine(Rebuild));
+            var export = UiKit.TextButton("내보내기…", "StyleExportMine", ExportMine);
+            foreach (var button in new[] { import, export })
+            {
+                button.MinWidth = 0;
+                button.Margin = new Thickness(4, 0, 0, 6);
+            }
+            var buttons = new WrapPanel();
+            buttons.Children.Add(save);
+            buttons.Children.Add(import);
+            buttons.Children.Add(export);
+            box.Children.Add(buttons);
             return box;
         }
+
+        /// <summary>내 스타일을 다시 읽어 고치고(change가 알릴 글을 돌려주면 그대로 두고 알림 — 빈 글이면 알리지 않음) 설정에 쓴다. 설정이라 실행 취소에 남지 않는다.</summary>
+        private void ChangeMine(Func<List<(string Name, TextStyle Style)>, string> change, string done, Action changed)
+        {
+            var styles = _services.TextStyles();
+            var error = change(styles);
+            if (error != null)
+            {
+                if (error.Length > 0)
+                    UiKit.Inform(this, "내 스타일", error);
+                changed();
+                return;
+            }
+            if (!_services.SaveTextStyles(styles))
+            {
+                _commands.Status("내 스타일을 설정에 저장하지 못했습니다.");
+                return;
+            }
+            if (done != null)
+                _commands.Status(done);
+            changed();
+        }
+
+        /// <summary>[가져오기…]: 내보낸 파일의 스타일 가운데 같은 이름이 없는 것만 더한다(<see cref="TextStyleLibrary.Import"/>).</summary>
+        private void ImportMine(Action imported)
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = "내 스타일 가져오기", Filter = StyleFileFilter };
+            if (dialog.ShowDialog(UiKit.OwnerOf(this)) != true)
+                return;
+            string json;
+            try
+            {
+                // UTF-8은 한 글자가 4바이트까지 — 그보다 큰 파일은 읽지 않는다(읽기 규칙의 글 길이 상한)
+                json = new System.IO.FileInfo(dialog.FileName).Length > TextStyleLibrary.MaxJsonLength * 4L ? null : System.IO.File.ReadAllText(dialog.FileName);
+            }
+            catch (Exception ex) when (ex is System.IO.IOException || ex is UnauthorizedAccessException)
+            {
+                UiKit.Inform(this, "내 스타일", "파일을 읽지 못했습니다: " + ex.Message);
+                return;
+            }
+            TextStyleLibrary.ImportResult result = null;
+            ChangeMine(list =>
+            {
+                result = TextStyleLibrary.Import(list, json);
+                return result.Added > 0 ? null : result.Message;
+            }, null, imported);
+            if (result != null && result.Added > 0)
+                UiKit.Inform(this, "내 스타일", result.Message);
+        }
+
+        /// <summary>[내보내기…]: 내 스타일을 설정과 같은 JSON 파일로 쓴다.</summary>
+        private void ExportMine()
+        {
+            var styles = _services.TextStyles();
+            if (styles.Count == 0)
+            {
+                UiKit.Inform(this, "내 스타일", "내보낼 내 스타일이 없습니다.");
+                return;
+            }
+            var dialog = new Microsoft.Win32.SaveFileDialog { Title = "내 스타일 내보내기", Filter = StyleFileFilter, DefaultExt = ".json", FileName = "내 스타일.json" };
+            if (dialog.ShowDialog(UiKit.OwnerOf(this)) != true)
+                return;
+            try
+            {
+                System.IO.File.WriteAllText(dialog.FileName, TextStyleLibrary.Write(styles));
+                _commands.Status("내 스타일 " + styles.Count + "개를 내보냈습니다: " + dialog.FileName);
+            }
+            catch (Exception ex) when (ex is System.IO.IOException || ex is UnauthorizedAccessException)
+            {
+                UiKit.Inform(this, "내 스타일", "파일에 쓰지 못했습니다: " + ex.Message);
+            }
+        }
+
+        private const string StyleFileFilter = "내 스타일 (*.json)|*.json|모든 파일 (*.*)|*.*";
 
         /// <summary>
         /// [내 스타일로 저장]: 이름을 묻고(같은 이름이면 덮어쓸지 묻는다) 누른 때의 스타일 사본을 설정에 넣는다 — 스타일이 없는 글자는 지금 색을 이어받은 스타일로.

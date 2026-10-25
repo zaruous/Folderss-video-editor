@@ -168,6 +168,83 @@ namespace VideoEditor.Core
             return true;
         }
 
+        /// <summary>
+        /// 이름을 바꾼다(스타일·자리는 그대로). 바꿨으면 null, 아니면 알릴 글: 없는 스타일, 규칙에 맞지 않는 이름(<see cref="NameRule"/>),
+        /// 다른 스타일이 쓰는 이름(대소문자 무시 — 같은 스타일의 대소문자만 바꾸기는 됨).
+        /// </summary>
+        public static string Rename(List<(string Name, TextStyle Style)> styles, string name, string newName)
+        {
+            var index = IndexOf(styles, name);
+            if (index < 0)
+                return "내 스타일에 없습니다(이미 지웠습니다): " + name;
+            var clean = CleanName(newName);
+            if (clean == null)
+                return NameRule;
+            var other = IndexOf(styles, clean);
+            if (other >= 0 && other != index)
+                return "'" + styles[other].Name + "' 스타일이 이미 있습니다. 다른 이름을 적으세요.";
+            styles[index] = (clean, styles[index].Style);
+            return null;
+        }
+
+        /// <summary>from번째 스타일을 to번째 자리로 옮긴다. 옮겼으면 true, 번호가 틀리거나 같으면 그대로 false.</summary>
+        public static bool Move(List<(string Name, TextStyle Style)> styles, int from, int to)
+        {
+            if (styles == null || from == to || from < 0 || to < 0 || from >= styles.Count || to >= styles.Count)
+                return false;
+            var item = styles[from];
+            styles.RemoveAt(from);
+            styles.Insert(to, item);
+            return true;
+        }
+
+        /// <summary>가져오기 결과: 더한 수, 같은 이름이 있어 건너뛴 수, 50개가 차서 넣지 못한 수와 알릴 글.</summary>
+        public sealed class ImportResult
+        {
+            public int Added { get; init; }
+            public int Skipped { get; init; }
+            public int Full { get; init; }
+
+            public string Message
+            {
+                get
+                {
+                    if (Added + Skipped + Full == 0)
+                        return "가져올 스타일이 없습니다(내 스타일 파일이 아니거나 비었습니다).";
+                    var text = "내 스타일 " + Added + "개를 더했습니다.";
+                    if (Skipped > 0)
+                        text += " 같은 이름이 있어 " + Skipped + "개는 건너뛰었습니다.";
+                    if (Full > 0)
+                        text += " " + MaxCount + "개가 차서 " + Full + "개는 넣지 못했습니다.";
+                    return text;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 내보낸 파일(<see cref="Write"/>와 같은 글 — 다른 PC의 설정)을 가져온다: 읽기 규칙(<see cref="Read"/> — 50개·이름·정규화)으로 받은 것 가운데
+        /// 같은 이름(대소문자 무시)이 없는 것만 끝에 더한다(내 것은 덮지 않음 — 같은 파일을 또 가져와도 쌓이지 않는다). 50개가 차면 남은 것은 넣지 않는다.
+        /// </summary>
+        public static ImportResult Import(List<(string Name, TextStyle Style)> styles, string json)
+        {
+            if (styles == null)
+                throw new ArgumentNullException(nameof(styles));
+            int added = 0, skipped = 0, full = 0;
+            foreach (var (name, style) in Read(json))
+            {
+                if (IndexOf(styles, name) >= 0)
+                    skipped++;
+                else if (styles.Count >= MaxCount)
+                    full++;
+                else
+                {
+                    styles.Add((name, style));
+                    added++;
+                }
+            }
+            return new ImportResult { Added = added, Skipped = skipped, Full = full };
+        }
+
         /// <summary>이름(<see cref="CleanName"/>으로 다듬어 대소문자 무시로 견줌)의 자리. 없거나 규칙에 맞지 않는 이름이면 -1.</summary>
         public static int IndexOf(IReadOnlyList<(string Name, TextStyle Style)> styles, string name)
         {
