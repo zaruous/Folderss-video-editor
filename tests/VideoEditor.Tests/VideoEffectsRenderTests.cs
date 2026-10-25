@@ -542,8 +542,7 @@ namespace VideoEditor.Tests
             var smooth = Measure();
             _out.WriteLine("1080p 장당: 효과 없이 " + plain.ToString("0.0") + "ms · 스캔 라인 " + full.ToString("0.0") + "ms(+" + (full - plain).ToString("0.0")
                 + ") · 떨림 없이 " + smooth.ToString("0.0") + "ms(+" + (smooth - plain).ToString("0.0") + ")");
-            // 목표는 +25ms 안팎 — 시험 기계의 속도와 부하를 생각해 넉넉하게
-            Assert.True(full - plain < FfmpegMedia.CostBudget(plain),"스캔 라인이 장당 " + (full - plain).ToString("0.0") + "ms 더 걸립니다");
+            Assert.True(full - plain < FfmpegMedia.CostBudget, "스캔 라인이 장당 " + (full - plain).ToString("0.0") + "ms 더 걸립니다");
         }
     }
 }

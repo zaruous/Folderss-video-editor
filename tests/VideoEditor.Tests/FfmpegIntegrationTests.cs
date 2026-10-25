@@ -61,12 +61,12 @@ namespace VideoEditor.Tests
         }
 
         /// <summary>
-        /// 1080p 효과 하나가 장당 더 써도 되는 시간(ms). 효과 없이 장당 6ms 안팎인 PC에서는 60ms,
-        /// 그보다 몇 배 느린 시험 기계(CI)에서는 효과 없는 시간의 4배까지 — 효과 비용도 기계 속도만큼 늘기 때문.
+        /// 1080p 효과 하나가 장당 더 써도 되는 시간(ms). 목표는 +25ms 안팎 — 개발 PC에서는 부하를 생각해 60ms.
+        /// 공용 CI 기계는 몇 배 느린 데다 같이 도는 시험과 CPU를 나눠 써 잴 때마다 두세 배씩 흔들리므로 큰 퇴보만 잡는 150ms.
         /// </summary>
-        public static double CostBudget(double plain)
+        public static double CostBudget
         {
-            return Math.Max(60, plain * 4);
+            get { return Environment.GetEnvironmentVariable("CI") == "true" ? 150 : 60; }
         }
     }
 
