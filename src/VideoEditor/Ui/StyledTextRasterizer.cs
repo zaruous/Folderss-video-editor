@@ -29,7 +29,7 @@ namespace VideoEditor.Ui
         private bool _disposed;
 
         /// <summary>그리는 방식을 바꾸면 올린다(캐시 키에 들어가 예전 PNG를 쓰지 않게).</summary>
-        public int Version { get { return 1; } }
+        public int Version { get { return 2; } }
 
         /// <summary>어느 스레드에서 불러도 된다. 배경 그리기 스레드에 맡기고 끝날 때까지(최대 30초) 기다린다.</summary>
         public void Render(TextImageRequest request, string pngPath, CancellationToken cancellation)
@@ -199,9 +199,10 @@ namespace VideoEditor.Ui
             using (var context = visual.RenderOpen())
             {
                 context.PushTransform(new TranslateTransform(layout.OriginX + halfWidth - centerX, layout.OriginY + halfHeight - centerY));
-                // 이번 단계는 단색(첫 색). 그라데이션·윤곽선·그림자는 다음 작업에서 더한다
-                if (style.Fill.Kind != FillKind.None)
-                    context.DrawGeometry(SolidBrush(style.Fill.Colors[0]), null, geometry);
+                // 채우기(단색·선형·원형, 없음이면 칠하지 않음). 윤곽선·그림자는 다음 작업에서 더한다
+                var fill = FillBrush(style.Fill);
+                if (fill != null)
+                    context.DrawGeometry(fill, null, geometry);
                 context.Pop();
             }
             var bitmap = new RenderTargetBitmap(layout.Width, layout.Height, 96, 96, PixelFormats.Pbgra32);
@@ -264,6 +265,35 @@ namespace VideoEditor.Ui
         private static FormattedText Format(string text, Typeface typeface, double size)
         {
             return new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, typeface, size, Brushes.Black, 1.0);
+        }
+
+        /// <summary>
+        /// 채우기 붓: 단색은 첫 색, 선형·원형 그라데이션은 색을 고르게 놓은 정지점(색이 하나뿐이면 단색), 없음은 null.
+        /// 그라데이션은 글자 모양의 경계 상자 기준(선형 끝점은 <see cref="TextEffects.GradientPoints"/>, 원형은 가운데·반지름 0.5).
+        /// </summary>
+        private static Brush FillBrush(TextFill fill)
+        {
+            if (fill.Kind == FillKind.None)
+                return null;
+            if (fill.Kind == FillKind.Solid || fill.Colors.Count < 2)
+                return SolidBrush(fill.Colors[0]);
+            var stops = new GradientStopCollection();
+            var positions = TextEffects.GradientStops(fill.Colors.Count);
+            for (var i = 0; i < fill.Colors.Count; i++)
+                stops.Add(new GradientStop(UiKit.ParseColor(fill.Colors[i], Colors.White), positions[i]));
+            GradientBrush brush;
+            if (fill.Kind == FillKind.Linear)
+            {
+                var (startX, startY, endX, endY) = TextEffects.GradientPoints(fill.Angle);
+                brush = new LinearGradientBrush(stops, new Point(startX, startY), new Point(endX, endY));
+            }
+            else
+            {
+                brush = new RadialGradientBrush(stops) { Center = new Point(0.5, 0.5), GradientOrigin = new Point(0.5, 0.5), RadiusX = 0.5, RadiusY = 0.5 };
+            }
+            brush.MappingMode = BrushMappingMode.RelativeToBoundingBox;
+            brush.Freeze();
+            return brush;
         }
 
         private static Brush SolidBrush(string color)

@@ -136,6 +136,72 @@ namespace VideoEditor.UiTests
             });
         }
 
+        /// <summary>(x, y) 줄에서 x에 가장 가까운 칠한 픽셀의 색(R, G, B) — 글자 사이 빈틈을 피한다.</summary>
+        private static (int R, int G, int B) ColorNear(Png png, int x, int y)
+        {
+            for (var d = 0; d < png.Width; d++)
+            {
+                foreach (var probe in new[] { x - d, x + d })
+                {
+                    if (probe >= 0 && probe < png.Width && png.Painted(probe, y))
+                    {
+                        var i = (y * png.Width + probe) * 4;
+                        return (png.Bgra[i + 2], png.Bgra[i + 1], png.Bgra[i]);
+                    }
+                }
+            }
+            return (-1, -1, -1);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_LinearGradient_RedLeftBlueRight_FourColorsInOrder()
+        {
+            // 0° 선형(빨강 → 파랑): 글자 모양의 왼쪽 끝은 빨강 쪽, 오른쪽 끝은 파랑 쪽
+            var rasterizer = NewRasterizer();
+            var two = await Render(rasterizer, Request(rasterizer, "■■■■", fontSize: 120,
+                style: "\"Bold\":true,\"Fill\":{\"Kind\":\"Linear\",\"Colors\":[\"#FF0000\",\"#0000FF\"],\"Angle\":0}"), "fill-linear");
+            var middle = two.Height / 2;
+            var (left, right) = two.Extent(middle, middle + 1);
+            var start = ColorNear(two, left + 2, middle);
+            var end = ColorNear(two, right - 2, middle);
+            _out.WriteLine("왼쪽 " + start + " 오른쪽 " + end);
+            Assert.True(start.R > 200 && start.B < 60, "왼쪽 " + start);
+            Assert.True(end.B > 200 && end.R < 60, "오른쪽 " + end);
+
+            // 4색(빨강·노랑·초록·파랑)이 순서대로 — 정지점 0·⅓·⅔·1 사이를 1/8·3/8·5/8·7/8에서 본다
+            var four = await Render(rasterizer, Request(rasterizer, "■■■■", fontSize: 120,
+                style: "\"Bold\":true,\"Fill\":{\"Kind\":\"Linear\",\"Colors\":[\"#FF0000\",\"#FFFF00\",\"#00FF00\",\"#0000FF\"],\"Angle\":0}"), "fill-linear-4");
+            (left, right) = four.Extent(middle, middle + 1);
+            var samples = new[] { 1, 3, 5, 7 }.Select(k => ColorNear(four, left + (right - left) * k / 8, middle)).ToArray();
+            _out.WriteLine("4색: " + string.Join(" ", samples));
+            Assert.True(samples[0].R > 200 && samples[0].R > samples[0].G && samples[0].B < 60, "1/8 빨강~주황 " + samples[0]);
+            Assert.True(samples[1].R > 150 && samples[1].G > 150 && samples[1].B < 60, "3/8 노랑 " + samples[1]);
+            Assert.True(samples[2].G > 200 && samples[2].R < 100 && samples[2].B < 60, "5/8 초록 " + samples[2]);
+            Assert.True(samples[3].B > samples[3].G && samples[3].R < 60, "7/8 파랑 쪽 " + samples[3]);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_RadialGradient_CenterIsFirstColor_NoneFillPaintsNothing()
+        {
+            var rasterizer = NewRasterizer();
+            var radial = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200,
+                style: "\"Fill\":{\"Kind\":\"Radial\",\"Colors\":[\"#FFFF00\",\"#0000FF\"]}"), "fill-radial");
+            // 원형의 가운데는 글자 모양(칠한 곳)의 가운데 — PNG 가운데와 다를 수 있다
+            var (left, right) = radial.Extent(0, radial.Height);
+            var column = (left + right) / 2;
+            var rows = Enumerable.Range(0, radial.Height).Where(y => radial.Painted(column, y)).ToList();
+            var middle = (rows.First() + rows.Last()) / 2;
+            var center = ColorNear(radial, column, middle);
+            var edge = ColorNear(radial, left + 1, middle);
+            _out.WriteLine("가운데 " + center + " 가장자리 " + edge);
+            Assert.True(center.R > 200 && center.G > 200 && center.B < 60, "가운데는 색1(노랑) " + center);
+            Assert.True(edge.B > center.B + 100, "가장자리는 색2(파랑) 쪽 " + edge);
+
+            // 채우기 없음(윤곽선도 없음): 칠한 픽셀이 없다
+            var none = await Render(rasterizer, Request(rasterizer, "가나다 ABC", style: "\"Fill\":{\"Kind\":\"None\",\"Colors\":[\"#FFFFFF\"]}"), "fill-none");
+            Assert.Equal(0, none.PaintedCount());
+        }
+
         [UiFact]
         public async Task Rasterizer_FromWorkerThread_TransparentCorners_FillColorInMiddle()
         {
@@ -327,6 +393,90 @@ namespace VideoEditor.UiTests
                 });
                 await ui.WaitUntil(() => (string)Get(StyleOf(window, id), "FontFamily") == "Malgun Gothic", Wait, "실행 취소가 글꼴 변경을 되돌림");
                 Assert.True(ui.Run(() => (bool)Get(StyleOf(window, id), "Bold")));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        [EditorFact]
+        public async Task StyleTab_FillKind_ChangesPreview_ColorsAndAngle_UndoInOneStep()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                var id = await AddStyledText(ui, window, "채우기 ABC");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                await ui.WaitFor(() => Ui.ById<ComboBox>(window, "StyleFillKind"), Wait, "채우기 칸");
+                var before = ui.Run(() =>
+                {
+                    // 스타일이 없을 때: 단색, 색 1만 보이고(글자 색) 그라데이션 칸은 숨김·각도는 꺼짐
+                    Assert.Equal("단색", Ui.ById<ComboBox>(window, "StyleFillKind").SelectedItem);
+                    Assert.True(Ui.ById<TextBox>(window, "StyleFillColor1").IsVisible);
+                    Assert.Equal("#FFFFFF", Ui.ById<TextBox>(window, "StyleFillColor1").Text);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleFillColor2").IsVisible);
+                    Assert.False(Ui.ById<Button>(window, "StyleFillAdd").IsVisible);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleFillAngle").IsEnabled);
+                    return PreviewPixels(window);
+                });
+
+                // 선형 그라데이션 → 둘째 색(흰색과 대비되는 파랑)이 더해지고 미리 보기가 바뀐다
+                ui.Run(() => Ui.ById<ComboBox>(window, "StyleFillKind").SelectedIndex = 1);
+                await ui.WaitUntil(() => StyleOf(window, id) is object style && Get(Get(style, "Fill"), "Kind").ToString() == "Linear", Wait, "선형");
+                await ui.WaitUntil(() => Differs(before, PreviewPixels(window)), Wait, "그라데이션 미리 보기");
+                ui.Run(() =>
+                {
+                    var colors = ((System.Collections.IList)Get(Get(StyleOf(window, id), "Fill"), "Colors")).Cast<string>().ToList();
+                    Assert.Equal(new[] { "#FFFFFF", "#3B82F6" }, colors);
+                    Assert.True(Ui.ById<TextBox>(window, "StyleFillColor2").IsVisible);
+                    Assert.True(Ui.ById<TextBox>(window, "StyleFillAngle").IsEnabled);
+                    Assert.False(Ui.ById<Button>(window, "StyleFillRemove").IsEnabled);
+                    Ui.Snap(window, plugin.ShotFolder, "style-tab-fill-linear");
+                });
+
+                // 색 추가 → 3색, 16진 칸에 색을 적으면 그 색, 잘못 적으면 되돌린다
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StyleFillAdd")));
+                await ui.WaitUntil(() => ((System.Collections.IList)Get(Get(StyleOf(window, id), "Fill"), "Colors")).Count == 3, Wait, "색 추가");
+                ui.Run(() =>
+                {
+                    var hex = Ui.ById<TextBox>(window, "StyleFillColor3");
+                    Ui.Focus(hex);
+                    hex.Text = "22c55e";
+                    Ui.Press(hex, System.Windows.Input.Key.Enter);
+                });
+                await ui.WaitUntil(() => (string)((System.Collections.IList)Get(Get(StyleOf(window, id), "Fill"), "Colors"))[2] == "#22C55E", Wait, "색3 초록");
+                ui.Run(() =>
+                {
+                    // 적용하면 포커스가 남아 있어도 정리한 값으로 보이고, 팔레트는 그 색(이름으로 읽힘)
+                    var hex = Ui.ById<TextBox>(window, "StyleFillColor3");
+                    Assert.Equal("#22C55E", hex.Text);
+                    Assert.Equal("초록", Ui.ById<ComboBox>(window, "StyleFillColor3Palette").SelectedItem.ToString());
+                    hex.Text = "초록";
+                    Ui.Press(hex, System.Windows.Input.Key.Enter);
+                    Assert.Equal("#22C55E", hex.Text);
+                });
+
+                // 칸에 포커스를 둔 채 메뉴로 실행 취소 → 칸에 되돌린 값이 보이고, 칸을 떠나도 옛 값(초록)을 다시 적용하지 않는다
+                ui.Run(() => Ui.Menu(window, "편집", "실행 취소"));
+                await ui.WaitUntil(() => (string)((System.Collections.IList)Get(Get(StyleOf(window, id), "Fill"), "Colors"))[2] == "#3B82F6", Wait, "색3 실행 취소");
+                ui.Run(() =>
+                {
+                    Assert.Equal("#3B82F6", Ui.ById<TextBox>(window, "StyleFillColor3").Text);
+                    Ui.Focus(Canvas(window));
+                });
+                await Task.Delay(300);
+                Assert.Equal("#3B82F6", ui.Run(() => (string)((System.Collections.IList)Get(Get(StyleOf(window, id), "Fill"), "Colors"))[2]));
+                Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
+
+                // 실행 취소: 색 추가 → 선형(스타일 없던 처음으로) — 접히는 색3 칸이 포커스를 잃어도 색을 다시 만들지 않는다
+                foreach (var step in new[] { "색 추가", "선형" })
+                    ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
+                await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
                 Assert.Empty(ui.TakeErrors());
             }
             finally

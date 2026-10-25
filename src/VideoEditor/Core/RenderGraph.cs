@@ -317,7 +317,7 @@ namespace VideoEditor.Core
                 return string.Format(CultureInfo.InvariantCulture,
                     "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba,drawtext={4}textfile={5}:expansion=none:fontsize={6}:fontcolor={7}:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing={8}",
                     options.Width, options.Height, fps, N(rate.ToSeconds(segFrames)), font, FilterValue(textFile),
-                    N(size), FilterValue(TextColor(clip.Style?.Fill?.Colors?.FirstOrDefault() ?? clip.TextColor)), N(size * 0.2));
+                    N(size), FilterValue(clip.Style?.Fill?.Kind == FillKind.None ? "black@0.0" : TextColor(clip.Style?.Fill?.Colors?.FirstOrDefault() ?? clip.TextColor)), N(size * 0.2));
             }
             if (clip.MediaKind == MediaKind.Image)
             {

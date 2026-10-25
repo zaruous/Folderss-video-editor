@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Windows;
@@ -253,6 +254,167 @@ namespace VideoEditor.Ui
             catch (Exception)
             {
                 return fallback;
+            }
+        }
+
+        /// <summary>
+        /// 색 칸 한 줄: 이름 · 팔레트(색 견본) · 16진 칸(#RRGGBB). get으로 보이고 set으로 바꾼다.
+        /// 값이 바뀌었을 때 <see cref="ColorRow.Refresh"/>를 불러 다시 보인다(보이는 것만으로는 set을 부르지 않음).
+        /// </summary>
+        public static ColorRow ColorRow(string label, string automationId, Func<string> get, Action<string> set)
+        {
+            return new ColorRow(label, automationId, get, set);
+        }
+    }
+
+    /// <summary>
+    /// 색 칸: 팔레트(흰·검정·빨강·주황·노랑·초록·하늘·파랑·보라·금색·회색)에서 고르거나 16진(#RRGGBB, # 없어도 됨)으로 적는다.
+    /// 잘못 적은 값은 지금 색으로 되돌린다. 칸은 마지막으로 보인 값을 기억해, 적은 글이 그 값과 다를 때만 바꾼다 —
+    /// 칸에 포커스를 둔 채 메뉴로 실행 취소한 뒤 칸을 떠나도 옛 값을 다시 적용하지 않게.
+    /// </summary>
+    internal sealed class ColorRow : DockPanel
+    {
+        private static readonly IReadOnlyList<PaletteColor> Palette = new[]
+        {
+            new PaletteColor("흰색", "#FFFFFF"), new PaletteColor("검정", "#000000"), new PaletteColor("빨강", "#EF4444"), new PaletteColor("주황", "#F97316"),
+            new PaletteColor("노랑", "#FACC15"), new PaletteColor("초록", "#22C55E"), new PaletteColor("하늘", "#38BDF8"), new PaletteColor("파랑", "#3B82F6"),
+            new PaletteColor("보라", "#8B5CF6"), new PaletteColor("금색", "#D4AF37"), new PaletteColor("회색", "#9CA3AF")
+        };
+
+        private readonly Func<string> _get;
+        private readonly Action<string> _set;
+        private readonly ComboBox _palette = new ComboBox { VerticalAlignment = VerticalAlignment.Center };
+        private readonly TextBox _hex = new TextBox { Width = 66, VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) };
+        // 지금 색 견본 — 팔레트에 없는 색(16진으로 적은 색)도, 좁은 패널에서 팔레트가 눌려도 보인다
+        private readonly Border _swatch = new Border { Width = 18, Height = 18, Margin = new Thickness(0, 0, 4, 0), BorderThickness = new Thickness(1), BorderBrush = Brushes.Gray, VerticalAlignment = VerticalAlignment.Center };
+        private bool _showing;
+        // 칸에 마지막으로 보인 값(#RRGGBB)
+        private string _shown;
+
+        public ColorRow(string label, string automationId, Func<string> get, Action<string> set)
+        {
+            _get = get;
+            _set = set;
+            Margin = new Thickness(0, 3, 0, 3);
+            var name = UiKit.Label(label);
+            name.Width = 84;
+            SetDock(name, Dock.Left);
+            Children.Add(name);
+            SetDock(_swatch, Dock.Left);
+            Children.Add(_swatch);
+            AutomationProperties.SetAutomationId(_hex, automationId);
+            AutomationProperties.SetName(_hex, label + " (16진)");
+            SetDock(_hex, Dock.Right);
+            Children.Add(_hex);
+            AutomationProperties.SetAutomationId(_palette, automationId + "Palette");
+            AutomationProperties.SetName(_palette, label);
+            // 데이터 항목 + 틀: 고른 칸에도 견본·이름이 보이고(요소를 항목으로 두면 목록을 열기 전까지 빈칸), 글자로 찾기·화면 낭독은 이름으로
+            var swatch = new FrameworkElementFactory(typeof(Border));
+            swatch.SetValue(WidthProperty, 14.0);
+            swatch.SetValue(HeightProperty, 14.0);
+            swatch.SetValue(MarginProperty, new Thickness(0, 0, 6, 0));
+            swatch.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            swatch.SetValue(Border.BorderBrushProperty, Brushes.Gray);
+            swatch.SetBinding(Border.BackgroundProperty, new System.Windows.Data.Binding(nameof(PaletteColor.Brush)));
+            var text = new FrameworkElementFactory(typeof(TextBlock));
+            text.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
+            text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(PaletteColor.Name)));
+            var item = new FrameworkElementFactory(typeof(StackPanel));
+            item.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
+            item.AppendChild(swatch);
+            item.AppendChild(text);
+            _palette.ItemTemplate = new DataTemplate { VisualTree = item };
+            TextSearch.SetTextPath(_palette, nameof(PaletteColor.Name));
+            _palette.ItemsSource = Palette;
+            Children.Add(_palette);
+            _palette.SelectionChanged += (s, e) =>
+            {
+                if (!_showing && _palette.SelectedItem is PaletteColor chosen)
+                    Apply(chosen.Hex);
+            };
+            _hex.KeyDown += (s, e) =>
+            {
+                if (e.Key == System.Windows.Input.Key.Enter)
+                {
+                    Commit();
+                    e.Handled = true;
+                }
+            };
+            _hex.LostFocus += (s, e) => Commit();
+            Refresh();
+        }
+
+        /// <summary>지금 색을 다시 보인다(팔레트에 있으면 그 색, 없으면 비움). 칸에 사용자가 적던 글이 있으면 그 글은 그대로 둔다.</summary>
+        public void Refresh()
+        {
+            var hex = Current();
+            _showing = true;
+            try
+            {
+                _palette.SelectedItem = Palette.FirstOrDefault(p => string.Equals(p.Hex, hex, StringComparison.OrdinalIgnoreCase));
+                _swatch.Background = new SolidColorBrush(UiKit.ParseColor(hex, Colors.White));
+                // 포커스가 있어도 사용자가 고치지 않은 글(마지막으로 보인 값)이면 새 값으로 — 실행 취소가 칸에 보이게
+                if (!_hex.IsKeyboardFocusWithin || _hex.Text == _shown)
+                    _hex.Text = hex;
+                _shown = hex;
+            }
+            finally
+            {
+                _showing = false;
+            }
+        }
+
+        private string Current()
+        {
+            return Core.TextStyle.NormalizeColor(_get(), "#FFFFFF");
+        }
+
+        private void Commit()
+        {
+            // 숨은 칸(접힌 색 칸)과 고치지 않은 글은 적용하지 않는다
+            var text = (_hex.Text ?? "").Trim();
+            if (!IsVisible || text == _shown)
+                return;
+            if (text.Length == 6 || text.Length == 8)
+                text = "#" + text;
+            var hex = Core.TextStyle.NormalizeColor(text, null);
+            if (hex == null || string.Equals(hex, Current(), StringComparison.OrdinalIgnoreCase))
+            {
+                // 잘못 적었거나 지금 색 그대로면 되돌린다(편집하지 않음)
+                _hex.Text = Current();
+                Refresh();
+                return;
+            }
+            Apply(hex);
+        }
+
+        private void Apply(string hex)
+        {
+            _set(hex);
+            // 적용한 글은 정리한 값으로 보인다(포커스가 남아 있어도)
+            _hex.Text = Current();
+            Refresh();
+        }
+
+        /// <summary>팔레트 색 하나(이름이 화면 낭독·글자로 찾기에 쓰인다).</summary>
+        private sealed class PaletteColor
+        {
+            public PaletteColor(string name, string hex)
+            {
+                Name = name;
+                Hex = hex;
+                var brush = new SolidColorBrush(UiKit.ParseColor(hex, Colors.White));
+                brush.Freeze();
+                Brush = brush;
+            }
+
+            public string Name { get; }
+            public string Hex { get; }
+            public Brush Brush { get; }
+
+            public override string ToString()
+            {
+                return Name;
             }
         }
     }
