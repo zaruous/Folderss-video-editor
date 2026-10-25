@@ -389,7 +389,7 @@ namespace VideoEditor.Tests
         /// 사람처럼 생긴 그림(머리·머리카락·목·어깨·몸통, 밝은 벽 앞)을 FFmpeg로 그린다. 가운데 x = centerX, 머리 가운데 y = 128, 몸통은 y 205부터 아래로.
         /// 시험용 사진이 없어 그리는 것 — 모델은 이것도 사람으로 따낸다.
         /// </summary>
-        private string Person(string name, int width, int centerX)
+        internal static string Person(string folder, string name, int width, int centerX)
         {
             var x = "(X-" + centerX + ")";
             var head = "lte(pow(" + x + "/46,2)+pow((Y-128)/58,2),1)";
@@ -400,7 +400,7 @@ namespace VideoEditor.Tests
             {
                 return "if(" + hair + "," + hairValue + ",if(" + head + "," + skin + ",if(" + neck + "," + neckValue + ",if(" + body + "," + shirt + "," + wall + "))))";
             }
-            var path = Path.Combine(_folder, name);
+            var path = Path.Combine(folder, name);
             Ffmpeg("-f", "lavfi", "-i", "color=c=black:s=" + width + "x360,format=rgb24",
                 "-vf", "geq=r='" + Channel(45, 225, 215, 40, "200-Y/8") + "':g='" + Channel(32, 175, 165, 72, "190-Y/8") + "':b='" + Channel(25, 145, 135, 140, "170-Y/10") + "'",
                 "-frames:v", "1", path);
@@ -470,7 +470,7 @@ namespace VideoEditor.Tests
         public async Task Image_MaskIsGrayPng_WhiteOverThePerson_RebuiltWhenSourceChanges()
         {
             var service = new PersonMaskService(Path.Combine(_folder, "person-mask"));
-            var photo = Person("사람 사진.png", 640, 320);
+            var photo = Person(_folder, "사람 사진.png", 640, 320);
             var media = await MediaProbe.Probe(FfmpegMedia.Tool, photo, CancellationToken.None);
             Assert.Equal(MediaKind.Image, media.Kind);
             var watch = Stopwatch.StartNew();
@@ -501,7 +501,7 @@ namespace VideoEditor.Tests
         {
             var service = new PersonMaskService(Path.Combine(_folder, "person-mask"));
             // 960×360 그림에서 640×360 창을 초당 60픽셀씩 옮긴다 — 사람(가운데 x 480)이 화면에서 왼쪽으로 움직인다
-            var still = Person("still.png", 960, 480);
+            var still = Person(_folder, "still.png", 960, 480);
             var video = Path.Combine(_folder, "moving.mp4");
             Ffmpeg("-loop", "1", "-framerate", "25", "-t", "2", "-i", still, "-vf", "crop=w=640:h=360:x='60*t':y=0", "-c:v", "mpeg4", "-q:v", "2", video);
             var media = await MediaProbe.Probe(FfmpegMedia.Tool, video, CancellationToken.None);

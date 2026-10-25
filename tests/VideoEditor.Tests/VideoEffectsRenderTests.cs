@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using VideoEditor.Core;
 using VideoEditor.Media;
 using Xunit;
@@ -212,6 +213,48 @@ namespace VideoEditor.Tests
             // 마스크가 없으면(아직 만들지 않음) 클립 전체에
             var whole = Render(project, 30, 31, new Masks("other.png", MaskImage));
             Assert.True(Enumerable.Range(right - 3, 7).Max(y => Sum(Pixel(whole, 280, y))) > 600);
+        }
+
+        [PersonMaskFact]
+        public async Task PersonOnly_WithARealPersonMask_LineOnlyOverThePerson()
+        {
+            // 처음부터 끝까지: 인물 분리 모델로 마스크를 만들고(실제 제공자), 사람에게만 켠 스캔 라인이 사람 위에만 그려진다
+            var folder = Path.Combine(Folder, "person-e2e-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try
+            {
+                var photo = PersonMaskIntegrationTests.Person(folder, "사람.png", 640, 320);
+                var service = new PersonMaskService(Path.Combine(folder, "person-mask"));
+                var media = await MediaProbe.Probe(FfmpegMedia.Tool, photo, CancellationToken.None);
+                var mask = await service.Build(FfmpegMedia.Tool, media, null, CancellationToken.None);
+                Assert.Equal(mask, service.Find(photo));
+
+                // 640×360 그림을 320×240 화면에 늘여 놓는다 — 사람 가운데 x 160, 몸통은 화면 y 약 187~233, 벽은 x 30
+                var project = NewProject();
+                var clip = Add(project, project.MainTrack, photo, 0);
+                clip.Fit = ClipFit.Stretch;
+                var effect = AddLine(clip, personOnly: true);
+                var frame = Enumerable.Range(0, 90).First(f =>
+                {
+                    var y = ScanLine.LineY(effect, f / 30.0, Width, Height, 1, 160);
+                    return y > 195 && y < 225;
+                });
+                var time = frame / 30.0;
+                var lit = Render(project, frame, frame + 1, service);
+                clip.Effects = null;
+                var plain = Render(project, frame, frame + 1, service);
+                int Change(int x, double lineY) => Enumerable.Range((int)Math.Round(lineY) - 3, 7)
+                    .Max(y => Math.Abs(Sum(Pixel(lit, x, y)) - Sum(Pixel(plain, x, y))));
+                var body = Change(160, ScanLine.LineY(effect, time, Width, Height, 1, 160));
+                var wall = Change(30, ScanLine.LineY(effect, time, Width, Height, 1, 30));
+                _out.WriteLine("프레임 " + frame + " · 몸통 위 변화 " + body + " · 벽 위 변화 " + wall);
+                Assert.True(body > 150, "사람(몸통) 위에는 선이 보여야 합니다: " + body);
+                Assert.True(wall <= 15, "벽 위에는 선이 없어야 합니다: " + wall);
+            }
+            finally
+            {
+                Directory.Delete(folder, true);
+            }
         }
 
         [FfmpegFact]
