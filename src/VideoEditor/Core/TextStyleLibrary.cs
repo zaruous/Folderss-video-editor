@@ -27,7 +27,7 @@ namespace VideoEditor.Core
         // 실제 깊이는 5(목록 → 항목 → 스타일 → 채우기 → 색 목록)
         private const int MaxDepth = 16;
 
-        public const string NameRule = "이름은 1~40자로 적으세요. 줄 바꿈·제어 문자·보이지 않는 서식 문자(글 방향 바꾸기·폭 없는 공백 등)는 쓸 수 없습니다.";
+        public const string NameRule = "이름은 1~40자로 적으세요. 줄 바꿈·제어 문자·보이지 않는 글자(글 방향 바꾸기·폭 없는 공백·한글 채움 문자 등)는 쓸 수 없습니다.";
         public const string FullMessage = "내 스타일은 50개까지 저장할 수 있습니다. 쓰지 않는 스타일을 오른쪽 클릭 [지우기]로 지운 뒤 다시 저장하세요.";
 
         private static readonly JsonSerializerOptions Options = CreateOptions();
@@ -195,7 +195,7 @@ namespace VideoEditor.Core
         /// 규칙에 맞는 이름(앞뒤 공백을 다듬고 NFC로 모은 것), 맞지 않으면 null. 길이는 UTF-16 단위(string.Length)로 1~40 —
         /// 한글 완성형 한 글자가 1이라 "40자"와 맞고 저장 크기도 정확히 묶인다(이모지 하나는 2 이상).
         /// 제어 문자(줄 바꿈·탭·C1), 서식 문자(글 방향 바꾸기 U+202A~202E·U+2066~2069·U+200E/200F, 폭 없는 공백·이음 U+200B~200D, BOM, 태그 문자 등),
-        /// 줄·문단 구분자, 짝 없는 서로게이트, 비문자(U+FFFE 등)가 있으면 받지 않는다 — 메뉴·툴팁에서 글 순서를 뒤집거나 같아 보이는 다른 이름을 만들 수 있고,
+        /// 줄·문단 구분자, 보이지 않는 글자(<see cref="IsInvisible"/>), 짝 없는 서로게이트, 비문자(U+FFFE 등)가 있으면 받지 않는다 — 메뉴·툴팁에서 글 순서를 뒤집거나 같아 보이는 다른 이름을 만들 수 있고,
         /// 서로게이트 짝이 깨진 글은 JSON에 그대로 쓸 수 없다. 그 문자만 빼서 받지 않고 이름째 거절한다: 몰래 빼면 적은 것과 다른 이름이 되거나
         /// 다른 이름과 겹치기 때문이다(그래서 이모지를 ZWJ로 이은 묶음도 쓸 수 없다). NFC로 모아 조합형 한글처럼 같아 보이는 이름이 따로 남지 않게 한다.
         /// </summary>
@@ -221,6 +221,9 @@ namespace VideoEditor.Core
                 // 비문자(평면마다 끝 둘, U+FDD0~FDEF) — NFC가 PC에 따라 예외를 내거나 그냥 두므로 먼저 거른다
                 if ((code & 0xFFFE) == 0xFFFE || (code >= 0xFDD0 && code <= 0xFDEF))
                     return null;
+                // 서식 문자가 아니어도 보이지 않는 글자 — 빈 단추·툴팁이 되거나 같아 보이는 두 이름이 따로 남는다
+                if (IsInvisible(code))
+                    return null;
             }
             string normalized;
             try
@@ -232,6 +235,18 @@ namespace VideoEditor.Core
                 return null;
             }
             return normalized.Length <= MaxNameLength ? normalized : null;
+        }
+
+        /// <summary>
+        /// 보이지 않는 글자: 유니코드 기본 무시 문자 가운데 서식(Cf)이 아닌 것(조합 자소 이음 U+034F, 몽골 자형 선택 U+180B~180F, 크메르 U+17B4·17B5,
+        /// 미할당 U+2065·U+FFF0~FFF8·U+E0000 평면 등)과 한글 채움 문자(U+115F·1160·3164·FFA0), 점자 빈칸 U+2800.
+        /// 변이 선택자 U+FE00~FE0F는 이모지(❤️ 등)에 쓰이므로 받는다.
+        /// </summary>
+        private static bool IsInvisible(int code)
+        {
+            return code == 0x034F || code == 0x115F || code == 0x1160 || code == 0x17B4 || code == 0x17B5
+                || (code >= 0x180B && code <= 0x180F) || (code >= 0x2060 && code <= 0x206F) || code == 0x2800 || code == 0x3164
+                || code == 0xFFA0 || (code >= 0xFFF0 && code <= 0xFFF8) || (code >= 0xE0000 && code <= 0xE0FFF);
         }
 
         private static bool SameName(string a, string b)

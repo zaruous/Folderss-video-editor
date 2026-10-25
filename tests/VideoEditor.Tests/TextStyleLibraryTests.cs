@@ -174,7 +174,14 @@ namespace VideoEditor.Tests
         [InlineData("줄\u2028구분")]
         [InlineData("문단\u2029구분")]
         [InlineData("태그\U000E0041")]
-        public void CleanName_RejectsEmptyControlAndFormatCharacters(string name)
+        [InlineData("\u3164")]
+        [InlineData("네온\u3164")]
+        [InlineData("\u2800")]
+        [InlineData("조합\u034F이음")]
+        [InlineData("채움\u115F자모")]
+        [InlineData("반각\uFFA0채움")]
+        [InlineData("몽골\u180B선택")]
+        public void CleanName_RejectsEmptyControlFormatAndInvisibleCharacters(string name)
         {
             Assert.Null(TextStyleLibrary.CleanName(name));
         }

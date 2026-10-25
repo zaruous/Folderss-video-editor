@@ -2354,8 +2354,9 @@ namespace VideoEditor.UiTests
                 new { Name = "굵게 자리에 글", Style = new { Bold = "yes" } },
                 "쓰레기"
             };
+            // 채움 스타일은 모두 달라야 썸네일도 따로 그린다(같으면 캐시 키 하나 — 많은 썸네일이 스레드 풀을 막던 문제를 못 잡는다)
             for (var i = 1; i <= 49; i++)
-                entries.Add(new { Name = "채움 " + i, Style = new { } });
+                entries.Add(new { Name = "채움 " + i, Style = new { Outline = new { Enabled = true, Color = "#EF4444", Width = (double)i } } });
             entries.Add(new { Name = "넘침", Style = new { } });
             var seeded = JsonSerializer.Serialize(entries);
             plugin.Manager.SetSetting(MyStylesKey, seeded);
@@ -2372,6 +2373,19 @@ namespace VideoEditor.UiTests
                     Assert.Equal("채움 1", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine1")));
                     Assert.Equal("채움 49", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine49")));
                 });
+                // 썸네일 66개(스타일 모음 16 + 내 스타일 50)가 시간 안에 모두 뜨고, 그동안 스레드 풀이 막히지 않는다
+                var thumbnails = Stopwatch.StartNew();
+                long slowest = 0;
+                await ui.WaitUntil(() =>
+                {
+                    var probe = Stopwatch.StartNew();
+                    Task.Run(() => 0).Wait();
+                    slowest = Math.Max(slowest, probe.ElapsedMilliseconds);
+                    return Enumerable.Range(0, 50).All(i => Ui.ById<Image>(window, "StyleMine" + i + "Image") != null)
+                        && Enumerable.Range(0, 16).All(i => Ui.ById<Image>(window, "StylePreset" + i + "Image") != null);
+                }, TimeSpan.FromSeconds(20), "썸네일 66개");
+                _out.WriteLine("썸네일 66개 " + thumbnails.ElapsedMilliseconds + "ms · 스레드 풀 응답 최대 " + slowest + "ms");
+                Assert.True(slowest < 1000, "스레드 풀 응답 " + slowest + "ms");
                 await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
                 Assert.Null(ui.Run(() => StyleOf(window, id)));
                 var fontSize = ui.Run(() => (double)Get(ProjectClips(window).First(c => Equals(Get(c, "Id"), id)), "FontSize"));

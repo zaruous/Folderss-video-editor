@@ -927,7 +927,16 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>썸네일에서 알파가 <see cref="ThumbnailInkAlpha"/>를 넘는 픽셀의 경계(픽셀 단위). 그런 픽셀이 없으면 그림 전체.</summary>
+        // 썸네일마다 칠한 곳은 한 번만 잰다(탭을 볼 때마다 UI 스레드에서 다시 재지 않게) — 썸네일 그림이 캐시에서 빠지면 함께 사라진다
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<System.Windows.Media.Imaging.BitmapSource, object> InkCache =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<System.Windows.Media.Imaging.BitmapSource, object>();
+
         private static Rect InkBounds(System.Windows.Media.Imaging.BitmapSource picture)
+        {
+            return (Rect)InkCache.GetValue(picture, p => MeasureInk(p));
+        }
+
+        private static Rect MeasureInk(System.Windows.Media.Imaging.BitmapSource picture)
         {
             var bgra = new System.Windows.Media.Imaging.FormatConvertedBitmap(picture, System.Windows.Media.PixelFormats.Bgra32, null, 0);
             int width = bgra.PixelWidth, height = bgra.PixelHeight;
@@ -1077,7 +1086,14 @@ namespace VideoEditor.Ui
         private void RemoveMine(string name, Action removed)
         {
             var styles = _services.TextStyles();
-            if (TextStyleLibrary.Remove(styles, name) && !_services.SaveTextStyles(styles))
+            if (!TextStyleLibrary.Remove(styles, name))
+            {
+                // 다른 편집 창에서 이미 지웠다 — 줄만 다시 그린다
+                _commands.Status("내 스타일에 없습니다(이미 지웠습니다): " + name);
+                removed();
+                return;
+            }
+            if (!_services.SaveTextStyles(styles))
             {
                 _commands.Status("내 스타일을 설정에서 지우지 못했습니다.");
                 return;
