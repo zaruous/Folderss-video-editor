@@ -438,6 +438,8 @@ namespace VideoEditor.Ui
                         fit.Items.Add(option);
                     }
                     menu.Items.Add(fit);
+                    // "사람에게만" 효과가 쓰는 마스크(원본 파일마다 한 번)
+                    menu.Items.Add(Item("인물 마스크 만들기", "", () => _ = _commands.BuildPersonMask(clip.Id)));
                 }
                 if (clip.Kind == ClipKind.Media && clip.HasAudio)
                     menu.Items.Add(Item("이 클립 소리로 자막 만들기…", "", () => _ = _commands.SpeechToText(clip.Id)));

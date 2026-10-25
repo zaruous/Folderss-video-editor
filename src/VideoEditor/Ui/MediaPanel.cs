@@ -180,6 +180,9 @@ namespace VideoEditor.Ui
                 menu.Items.Add(Item("사운드 분리해서 배치", () => _commands.PlaceSoundSplit(selected)));
             if (selected.Length == 1 && ClipLinks.CanSplit(selected[0]))
                 menu.Items.Add(Item("사운드를 파일로 저장…", () => _ = _commands.SaveSound(selected[0])));
+            // 인물 마스크: 동영상·사진 하나
+            if (selected.Length == 1 && (selected[0].Kind == MediaKind.Video || selected[0].Kind == MediaKind.Image))
+                menu.Items.Add(Item("인물 마스크 만들기", () => _ = _commands.BuildPersonMaskFor(selected[0])));
             menu.Items.Add(Item("탐색기에서 보기", () => _commands.Reveal(selected[0].Path)));
             menu.Items.Add(new Separator());
             menu.Items.Add(Item("미디어에서 빼기", () => _commands.RemoveMedia(selected.Select(m => m.Path).ToArray())));
