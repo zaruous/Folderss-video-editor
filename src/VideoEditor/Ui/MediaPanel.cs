@@ -15,7 +15,7 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// 미디어 패널(왼쪽 위): [미디어] 가져온 파일 목록(썸네일·종류·길이 — 두 번 누르면 타임라인 끝에 추가, 끌어서 원하는 자리에),
-    /// [폴더] Folderss 폴더 패널에서 골라 가져오기, [글자] 글자 클립 만들기, [효과] 전환 효과(썸네일). 도구 막대에 [URL에서 가져오기](직접 링크·유튜브).
+    /// [폴더] Folderss 폴더 패널에서 골라 가져오기, [글자] 글자 클립 만들기, [효과] 동영상 효과·전환 효과(썸네일). 도구 막대에 [URL에서 가져오기](직접 링크·유튜브).
     /// </summary>
     internal sealed class MediaPanel : DockPanel
     {
@@ -181,6 +181,9 @@ namespace VideoEditor.Ui
                 menu.Items.Add(Item("사운드 분리해서 배치", () => _commands.PlaceSoundSplit(selected)));
             if (selected.Length == 1 && ClipLinks.CanSplit(selected[0]))
                 menu.Items.Add(Item("사운드를 파일로 저장…", () => _ = _commands.SaveSound(selected[0])));
+            // 인물 마스크: 동영상·사진 하나
+            if (selected.Length == 1 && (selected[0].Kind == MediaKind.Video || selected[0].Kind == MediaKind.Image))
+                menu.Items.Add(Item("인물 마스크 만들기", () => _ = _commands.BuildPersonMaskFor(selected[0])));
             menu.Items.Add(Item("탐색기에서 보기", () => _commands.Reveal(selected[0].Path)));
             menu.Items.Add(new Separator());
             menu.Items.Add(Item("미디어에서 빼기", () => _commands.RemoveMedia(selected.Select(m => m.Path).ToArray())));
@@ -405,7 +408,12 @@ namespace VideoEditor.Ui
         private UIElement EffectsTab()
         {
             var panel = new DockPanel { Margin = new Thickness(8) };
+            // 맨 위: 동영상 효과(클립 그림 위에 그리는 효과), 그 아래: 전환 효과
+            var videoEffects = VideoEffectsBlock();
+            DockPanel.SetDock(videoEffects, Dock.Top);
+            panel.Children.Add(videoEffects);
             var top = new StackPanel();
+            top.Children.Add(SectionTitle("전환 효과"));
             // 설명은 한 줄(전체는 툴팁) — 좁은 패널에서도 썸네일이 많이 보이게
             var hint = UiKit.Label("클립 앞에 넣습니다(타임라인 위치는 그대로) · 타임라인의 클립으로 끌어 놓아도 됩니다", true);
             hint.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -546,43 +554,119 @@ namespace VideoEditor.Ui
             return panel;
         }
 
-        // 효과 썸네일: 정지 화면은 전환이 절반쯤 진행된 칸, 마우스를 올리면 띠의 칸을 차례로 보인다(한 번에 하나만)
+        private static TextBlock SectionTitle(string text)
+        {
+            return new TextBlock { Text = text, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 2) };
+        }
+
+        /// <summary>
+        /// [효과] 동영상 효과: 클립 그림 위에 그리는 효과(스캔 라인 등 — <see cref="VideoEffects"/>). 썸네일에서 골라 [고른 클립에 넣기]·두 번 누르기, 또는 타임라인의 클립으로 끌어 놓는다.
+        /// 동영상·사진 클립에만 들어가고, 값은 속성 패널의 [효과] 탭에서 바꾼다. 썸네일은 그 효과를 합성 그림에 실제로 그린 띠다(마우스를 올리면 움직임).
+        /// </summary>
+        private UIElement VideoEffectsBlock()
+        {
+            var block = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+            block.Children.Add(SectionTitle("동영상 효과"));
+            var hint = UiKit.Label("고른 동영상·사진 클립 위에 그립니다 · 클립으로 끌어 놓아도 됩니다", true);
+            hint.TextTrimming = TextTrimming.CharacterEllipsis;
+            hint.ToolTip = "동영상 효과는 클립 그림 위에 그려져 클립과 함께 옮기고 돌고 사라집니다(글자 클립에는 넣지 않습니다).\n"
+                + "효과를 타임라인의 클립으로 끌어 놓거나, 두 번 눌러 고른 클립에 넣습니다. 값은 속성 패널의 [효과] 탭에서 바꿉니다.";
+            block.Children.Add(hint);
+            var list = new ListBox { BorderThickness = new Thickness(0), Margin = new Thickness(0, 4, 0, 4) };
+            AutomationProperties.SetAutomationId(list, "VideoEffectList");
+            AutomationProperties.SetName(list, "동영상 효과");
+            list.SetResourceReference(BackgroundProperty, "PanelBackground");
+            list.ItemsPanel = new ItemsPanelTemplate(new FrameworkElementFactory(typeof(WrapPanel)));
+            ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
+            foreach (var def in VideoEffects.All)
+                list.Items.Add(VideoEffectTile(def));
+            list.SelectedIndex = 0;
+            block.Children.Add(list);
+            VideoEffectDef Chosen() => list.SelectedItem is ListBoxItem chosen ? (VideoEffectDef)chosen.Tag : VideoEffects.All[0];
+            var apply = UiKit.TextButton("고른 클립에 넣기", "VideoEffectApplyButton", () => _commands.AddVideoEffect(Chosen().Id));
+            apply.HorizontalAlignment = HorizontalAlignment.Left;
+            apply.Margin = new Thickness(0);
+            block.Children.Add(apply);
+
+            // 두 번 누르면 고른 클립에, 끌어서 타임라인의 클립에 놓으면 그 클립에
+            list.MouseDoubleClick += (s, e) =>
+            {
+                if (OnItem(list, e))
+                    _commands.AddVideoEffect(Chosen().Id);
+            };
+            var dragStart = new Point();
+            var fromItem = false;
+            list.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                dragStart = e.GetPosition(list);
+                fromItem = OnItem(list, e);
+            };
+            list.PreviewMouseMove += (s, e) =>
+            {
+                if (e.LeftButton != MouseButtonState.Pressed || !fromItem || list.SelectedItem == null)
+                    return;
+                var point = e.GetPosition(list);
+                if (Math.Abs(point.X - dragStart.X) < 6 && Math.Abs(point.Y - dragStart.Y) < 6)
+                    return;
+                StopPreview();
+                var data = new DataObject();
+                data.SetData(TimelineCanvas.VideoEffectDataFormat, Chosen().Id);
+                DragDrop.DoDragDrop(list, data, DragDropEffects.Copy);
+            };
+            return block;
+        }
+
+        // 효과 썸네일: 정지 화면은 효과가 한창인 칸, 마우스를 올리면 띠의 칸을 차례로 보인다(한 번에 하나만)
         private const int TileWidth = 96;
         private const int TileHeight = 54;
         private readonly System.Windows.Threading.DispatcherTimer _previewTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(90) };
         private Image _previewImage;
         private BitmapSource[] _previewFrames;
+        private int _previewStill;
         private int _previewTick;
         private bool _fillingEffects;
         private Action _refillEffects;
 
         private ListBoxItem TransitionTile(TransitionDef def)
         {
-            var image = new Image { Width = TileWidth, Height = TileHeight, Stretch = Stretch.UniformToFill };
-            var frame = new Border { Width = TileWidth, Height = TileHeight, Child = image, CornerRadius = new CornerRadius(3), ClipToBounds = true };
-            frame.SetResourceReference(Border.BackgroundProperty, "ControlBackground");
-            var name = new TextBlock { Text = def.Name, Width = TileWidth, TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 11, Margin = new Thickness(0, 3, 0, 0) };
-            var content = new StackPanel { Margin = new Thickness(1) };
-            content.Children.Add(frame);
-            content.Children.Add(name);
             var tip = def.Name + (def.Group != null ? " · " + def.Group : "");
             if (def.IsExpression)
                 tip += "\n수식으로 그리는 효과 — 내장 효과보다 그리기가 느립니다.";
             if (!def.BuiltIn)
                 tip += "\n사용자 효과(효과 폴더)";
-            var item = new ListBoxItem { Content = content, Tag = def, ToolTip = tip, Padding = new Thickness(3) };
-            AutomationProperties.SetAutomationId(item, "Transition_" + def.Id);
-            AutomationProperties.SetName(item, def.Name);
+            return Tile(def, def.Name, tip, "Transition_" + def.Id, _services.TransitionPreview(def),
+                Transitions.PreviewWidth, Transitions.PreviewHeight, Transitions.PreviewFrames, Transitions.PreviewStill);
+        }
+
+        private ListBoxItem VideoEffectTile(VideoEffectDef def)
+        {
+            return Tile(def, def.Name, def.Name + (def.Group != null ? " · " + def.Group : "") + "\n" + def.Description, "VideoEffect_" + def.Id, _services.EffectPreview(def),
+                VideoEffects.PreviewWidth, VideoEffects.PreviewHeight, VideoEffects.PreviewFrames, VideoEffects.PreviewStill);
+        }
+
+        /// <summary>효과 썸네일 단추 하나(전환·동영상 효과 공용): 미리 보기 띠가 그려지면 정지 칸을 보이고, 마우스를 올리면 칸을 차례로 보인다.</summary>
+        private ListBoxItem Tile(object tag, string title, string tip, string automationId, System.Threading.Tasks.Task<BitmapSource> preview, int width, int height, int count, int still)
+        {
+            var image = new Image { Width = TileWidth, Height = TileHeight, Stretch = Stretch.UniformToFill };
+            var frame = new Border { Width = TileWidth, Height = TileHeight, Child = image, CornerRadius = new CornerRadius(3), ClipToBounds = true };
+            frame.SetResourceReference(Border.BackgroundProperty, "ControlBackground");
+            var name = new TextBlock { Text = title, Width = TileWidth, TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 11, Margin = new Thickness(0, 3, 0, 0) };
+            var content = new StackPanel { Margin = new Thickness(1) };
+            content.Children.Add(frame);
+            content.Children.Add(name);
+            var item = new ListBoxItem { Content = content, Tag = tag, ToolTip = tip, Padding = new Thickness(3) };
+            AutomationProperties.SetAutomationId(item, automationId);
+            AutomationProperties.SetName(item, title);
             BitmapSource[] frames = null;
-            _services.TransitionPreview(def).ContinueWith(t =>
+            preview.ContinueWith(t =>
             {
                 if (t.Status != System.Threading.Tasks.TaskStatus.RanToCompletion || t.Result == null)
                     return;
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    frames = Frames(t.Result);
+                    frames = Frames(t.Result, width, height, count);
                     if (frames != null && _previewImage != image)
-                        image.Source = frames[Transitions.PreviewStill];
+                        image.Source = frames[still];
                 }));
             });
             item.MouseEnter += (s, e) =>
@@ -592,6 +676,7 @@ namespace VideoEditor.Ui
                 StopPreview();
                 _previewImage = image;
                 _previewFrames = frames;
+                _previewStill = still;
                 _previewTick = 0;
                 image.Source = frames[0];
                 _previewTimer.Start();
@@ -605,14 +690,14 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>미리 보기 띠를 칸마다 자른다(띠 크기가 맞지 않으면 null).</summary>
-        private static BitmapSource[] Frames(BitmapSource strip)
+        private static BitmapSource[] Frames(BitmapSource strip, int width, int height, int count)
         {
-            if (strip.PixelWidth != Transitions.PreviewWidth * Transitions.PreviewFrames || strip.PixelHeight != Transitions.PreviewHeight)
+            if (strip.PixelWidth != width * count || strip.PixelHeight != height)
                 return null;
-            var frames = new BitmapSource[Transitions.PreviewFrames];
+            var frames = new BitmapSource[count];
             for (var i = 0; i < frames.Length; i++)
             {
-                var crop = new CroppedBitmap(strip, new Int32Rect(i * Transitions.PreviewWidth, 0, Transitions.PreviewWidth, Transitions.PreviewHeight));
+                var crop = new CroppedBitmap(strip, new Int32Rect(i * width, 0, width, height));
                 crop.Freeze();
                 frames[i] = crop;
             }
@@ -626,16 +711,16 @@ namespace VideoEditor.Ui
                 _previewTimer.Stop();
                 return;
             }
-            // 칸을 차례로 보이고 마지막(새 화면)에서 잠깐 멈췄다가 처음부터
-            _previewTick = (_previewTick + 1) % (Transitions.PreviewFrames + 6);
-            _previewImage.Source = _previewFrames[Math.Min(_previewTick, Transitions.PreviewFrames - 1)];
+            // 칸을 차례로 보이고 마지막 칸에서 잠깐 멈췄다가 처음부터
+            _previewTick = (_previewTick + 1) % (_previewFrames.Length + 6);
+            _previewImage.Source = _previewFrames[Math.Min(_previewTick, _previewFrames.Length - 1)];
         }
 
         private void StopPreview()
         {
             _previewTimer.Stop();
             if (_previewImage != null && _previewFrames != null)
-                _previewImage.Source = _previewFrames[Transitions.PreviewStill];
+                _previewImage.Source = _previewFrames[_previewStill];
             _previewImage = null;
             _previewFrames = null;
         }

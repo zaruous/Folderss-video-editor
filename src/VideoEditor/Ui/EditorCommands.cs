@@ -578,6 +578,45 @@ namespace VideoEditor.Ui
             }, "전환을 뺐습니다.");
         }
 
+        // ---------- 동영상 효과 ----------
+
+        /// <summary>동영상 효과를 넣었다 — 넣은 클립 Id(속성 패널이 [효과] 탭을 연다).</summary>
+        public event Action<IReadOnlyList<string>> VideoEffectsApplied;
+
+        /// <summary>[효과] 동영상 효과를 고른 동영상·사진 클립마다 더한다(클립 위에 그린다 — 위치·길이는 그대로).</summary>
+        public void AddVideoEffect(string effectId)
+        {
+            var ids = _session.SelectedClips.Where(VideoEffects.CanHave).Select(c => c.Id).ToList();
+            if (ids.Count == 0)
+            {
+                Status("동영상 효과를 넣을 동영상·사진 클립을 타임라인에서 고르세요(글자 클립에는 넣지 않습니다).");
+                return;
+            }
+            AddVideoEffect(effectId, ids);
+        }
+
+        /// <summary>효과 탭에서 끈 동영상 효과를 클립에 놓음 — 데이터는 효과 id.</summary>
+        public void DropVideoEffect(string effectId, string clipId)
+        {
+            AddVideoEffect(effectId, new[] { clipId });
+        }
+
+        private void AddVideoEffect(string effectId, IReadOnlyList<string> ids)
+        {
+            var def = VideoEffects.Find(effectId);
+            if (def == null)
+                return;
+            if (Run(p =>
+                {
+                    foreach (var id in ids)
+                        VideoEffects.Add(p, p.FindClip(id), def);
+                }, "'" + def.Name + "' 효과를 " + (ids.Count == 1 ? "클립" : ids.Count + "개 클립") + "에 넣었습니다(속성 패널 [효과] 탭에서 조절)."))
+            {
+                _session.Select(ids.Select(Project.FindClip).Where(c => c != null));
+                VideoEffectsApplied?.Invoke(ids);
+            }
+        }
+
         /// <summary>[효과 폴더 열기] 사용자 전환 효과 폴더를 만들고(처음이면 쓰는 법 README.txt도) 탐색기로 연다.</summary>
         public void OpenTransitionFolder()
         {
@@ -721,6 +760,96 @@ namespace VideoEditor.Ui
             var targetId = target != null && target.Subtitles ? target.Id : null;
             return Run(p => TimelineEdits.ImportSubtitles(p, cues, targetId != null ? p.FindTrack(targetId) : null),
                 "자막 " + cues.Count + "개를 가져왔습니다(" + Path.GetFileName(path) + ").") ? cues.Count : 0;
+        }
+
+        /// <summary>
+        /// 클립 원본의 인물 마스크(사람만 따낸 흑백 동영상)를 만든다 — "사람에게만" 효과가 쓴다. 만들고 나면 미리 보기를 다시 그린다.
+        /// 동영상·사진 클립만. 마스크는 원본 파일마다 하나라 같은 원본의 다른 클립도 함께 쓴다.
+        /// </summary>
+        public Task BuildPersonMask(string clipId)
+        {
+            var clip = clipId == null ? null : Project.FindClip(clipId);
+            if (clip == null || clip.Kind != ClipKind.Media || !clip.IsVisual || clip.MediaKind == MediaKind.Audio)
+            {
+                Status("인물 마스크는 동영상·사진 클립에만 만들 수 있습니다.");
+                return Task.CompletedTask;
+            }
+            return BuildPersonMaskFor(clip.Path);
+        }
+
+        /// <summary>[미디어 > 인물 마스크 만들기]: 미디어(동영상·사진)의 인물 마스크.</summary>
+        public Task BuildPersonMaskFor(MediaInfo media)
+        {
+            if (media == null || (media.Kind != MediaKind.Video && media.Kind != MediaKind.Image))
+            {
+                Status("인물 마스크는 동영상·사진에만 만들 수 있습니다.");
+                return Task.CompletedTask;
+            }
+            return BuildPersonMaskFor(media.Path);
+        }
+
+        /// <summary>
+        /// 원본 파일의 인물 마스크: 이미 있으면 그대로 쓰고(다시 만들지 않음), 없으면 모델을 확인해(처음이면 내려받기 창) 진행 창에서 만든다.
+        /// 원본 정보는 미디어 목록 것을 쓰되 파일을 바꿔 넣었으면 다시 읽는다.
+        /// </summary>
+        private async Task BuildPersonMaskFor(string path)
+        {
+            _player.Stop();
+            var tool = await NeedTool();
+            if (tool == null)
+                return;
+            var masks = _services.PersonMasks;
+            var name = Path.GetFileName(path);
+            if (masks.Find(path) != null)
+            {
+                RefreshPreview();
+                Status("인물 마스크를 이미 만들어 두었습니다(" + name + ") — 사람에게만 효과가 사람 위에만 그려집니다.");
+                return;
+            }
+            MediaInfo media = Project.FindMedia(path);
+            if (media == null || MediaProbe.IsStale(media))
+            {
+                try
+                {
+                    media = await MediaProbe.Probe(tool, path, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    Status("원본을 읽지 못했습니다: " + ex.Message);
+                    return;
+                }
+            }
+            if (media.Kind != MediaKind.Video && media.Kind != MediaKind.Image)
+            {
+                Status("인물 마스크는 동영상·사진에만 만들 수 있습니다: " + name);
+                return;
+            }
+            PersonMaskDialog dialog;
+            try
+            {
+                if (PersonMaskSetupDialog.Ensure(_services, _owner) == null)
+                {
+                    Status("인물 마스크를 만들지 않았습니다 — 처음 한 번 인물 분리 모델을 내려받아야 합니다.");
+                    return;
+                }
+                dialog = new PersonMaskDialog(media, (progress, cancellation) => masks.Build(tool, media, progress, cancellation));
+                var owner = UiKit.OwnerOf(_owner);
+                if (owner != null && owner.IsLoaded)
+                    dialog.Owner = owner;
+            }
+            catch (Exception ex)
+            {
+                Status("인물 마스크 창을 열지 못했습니다: " + ex.Message);
+                return;
+            }
+            if (dialog.ShowDialog() != true || dialog.Result == null)
+            {
+                Status(dialog.Error ?? "인물 마스크 만들기를 취소했습니다.");
+                return;
+            }
+            RefreshPreview();
+            var seconds = (int)Math.Round(dialog.Elapsed.TotalSeconds);
+            Status("인물 마스크를 만들었습니다 — 사람에게만 효과가 사람 위에만 그려집니다(" + name + ", " + (seconds >= 60 ? seconds / 60 + "분 " : "") + seconds % 60 + "초).");
         }
 
         /// <summary>

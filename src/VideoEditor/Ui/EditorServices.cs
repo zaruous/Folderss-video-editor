@@ -34,6 +34,7 @@ namespace VideoEditor.Ui
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _transitionPreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, Task<BitmapSource>> _effectPreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _stylePreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
         private Task<FfmpegTool> _locating;
         private Task<YtDlpTool> _locatingYtDlp;
@@ -50,12 +51,16 @@ namespace VideoEditor.Ui
         {
             Manager = manager;
             LoadTransitions();
-            // 앞서 끝난 실행이 남긴 꾸민 글자 PNG 캐시를 치운다(살아 있는 실행의 폴더는 건드리지 않음).
+            // 미리 보기·재생·내보내기가 "사람에게만" 효과의 마스크를 여기서 찾는다
+            PersonMasks = new PersonMaskService(PersonMaskFolder);
+            RenderEnvironment.PersonMasks = PersonMasks;
+            // 앞서 끝난 실행이 남긴 꾸민 글자 PNG 캐시와 끊긴 인물 마스크(.part)를 치운다(살아 있는 실행의 폴더는 건드리지 않음).
             // 시스템 글꼴 목록도 미리 읽어 둔다 — 처음 글자 클립을 고를 때 UI 스레드가 멈추지 않게
             Task.Run(() =>
             {
                 TextImageCache.Cleanup(RenderEnvironment.TempRoot());
                 _ = StyledTextRasterizer.Fonts;
+                PersonMasks.Cleanup(TimeSpan.FromHours(1));
             });
         }
 
@@ -90,6 +95,12 @@ namespace VideoEditor.Ui
             get { return _whisper != null && File.Exists(_whisper.CliPath) ? _whisper : (_whisper = WhisperTool.Locate(WhisperFolder)); }
             set { _whisper = value; }
         }
+
+        /// <summary>인물 분리 모델과 만든 인물 마스크를 두는 곳(데이터 폴더\person-mask — 모델은 models, 마스크는 masks).</summary>
+        public string PersonMaskFolder { get { return Path.Combine(Manager.DataDirectory, "person-mask"); } }
+
+        /// <summary>인물 마스크 만들기·찾기(<see cref="RenderEnvironment.PersonMasks"/>로도 쓰인다).</summary>
+        public PersonMaskService PersonMasks { get; }
 
         /// <summary>유튜브 약관·권리 안내를 확인했는지(한 번 확인하면 설정에 기억).</summary>
         public bool YtDlpNoticeAccepted
@@ -356,12 +367,26 @@ namespace VideoEditor.Ui
         /// </summary>
         public Task<BitmapSource> TransitionPreview(TransitionDef def)
         {
-            var key = Transitions.PreviewKey(def);
-            var file = Path.Combine(Manager.DataDirectory, "cache", "transitions", key + ".png");
+            return CachedStrip(_transitionPreviews, "transitions", Transitions.PreviewKey(def), tool => MediaPictures.TransitionStrip(tool, def, CancellationToken.None));
+        }
+
+        /// <summary>
+        /// 동영상 효과 미리 보기 띠(<see cref="VideoEffects.PreviewFrames"/>칸). 전환 띠와 같이 한 번만 그려 데이터 폴더\cache\video-effects에 둔다.
+        /// FFmpeg가 없거나 실패하면 null(다음에 다시 시도).
+        /// </summary>
+        public Task<BitmapSource> EffectPreview(VideoEffectDef def)
+        {
+            return CachedStrip(_effectPreviews, "video-effects", VideoEffects.PreviewKey(def), tool => MediaPictures.EffectStrip(tool, def, CancellationToken.None));
+        }
+
+        /// <summary>미리 보기 띠 캐시: 메모리(key) → 데이터 폴더\cache\folder\key.png → FFmpeg로 그리기(다 쓴 뒤 이름을 바꿔 넣음).</summary>
+        private Task<BitmapSource> CachedStrip(ConcurrentDictionary<string, Task<BitmapSource>> memory, string folder, string key, Func<FfmpegTool, Task<byte[]>> draw)
+        {
+            var file = Path.Combine(Manager.DataDirectory, "cache", folder, key + ".png");
             var tool = Tool;
             if (tool == null && !File.Exists(file))
                 return Task.FromResult<BitmapSource>(null);
-            return _transitionPreviews.GetOrAdd(key, k => Task.Run(async () =>
+            return memory.GetOrAdd(key, k => Task.Run(async () =>
             {
                 try
                 {
@@ -371,7 +396,7 @@ namespace VideoEditor.Ui
                     await PictureGate.WaitAsync().ConfigureAwait(false);
                     try
                     {
-                        png = await MediaPictures.TransitionStrip(tool, def, CancellationToken.None).ConfigureAwait(false);
+                        png = await draw(tool).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -397,7 +422,7 @@ namespace VideoEditor.Ui
                 }
                 catch (Exception)
                 {
-                    _transitionPreviews.TryRemove(k, out _);
+                    memory.TryRemove(k, out _);
                     return null;
                 }
             }));

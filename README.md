@@ -21,11 +21,12 @@
 | 미리 보기 | 재생 헤드 화면, 재생(소리 시계에 맞춤), 프레임·초 이동, 타임코드 입력, 품질(전체·1/2·1/4), 스냅샷(PNG로 저장해 미디어에 추가) |
 | 표시 | 마커(이름·색·메모), In/Out 점 |
 | 자막 | SRT·VTT 가져오기(파일 > 자막 가져오기…, Ctrl+I, 끌어 놓기 — UTF-8·UTF-16·CP949) → 맨 위 "자막" 트랙에 큐로, 미리 보기·내보내기 때 화면 아래에 입힘(흰 글자·검은 윤곽선, 자동 줄바꿈 — FFmpeg libass), 큐 옮기기·다듬기·분할·삭제와 글 고치기, 음성 인식으로 자막 만들기(파일 메뉴·클립 오른쪽 메뉴 — 이 PC의 whisper.cpp, 처음 한 번 실행 파일과 모델을 받음, 대본을 주면 글은 대본에서 시각은 소리에서, 말하는 단어 노란색 강조, [음성 인식 자막](docs/speech-to-text.md)) |
-| 효과 | 클립 사이 전환 60여 가지(디졸브·페이드·닦아내기·밀어내기·덮기·열고 닫기·조각·확대·모자이크·흐림, 하트·꽃·블라인드·바둑판 같은 모양) — [효과] 탭의 썸네일(마우스를 올리면 움직임)에서 골라 고른 클립에·모든 클립 사이에 넣거나 클립으로 끌어 놓기, 길이 조절, 타임라인 위치는 그대로(앞 클립이 그만큼 밑에 더 그려짐), 소리도 같은 크기감으로 겹쳐 바뀜, 미리 보기·내보내기 같음(FFmpeg xfade). 효과는 데이터(JSON)라 효과 폴더에 파일을 넣으면 늘어남([전환 효과 데이터](docs/transitions.md)) |
+| 효과 | 클립 사이 전환 60여 가지(디졸브·페이드·닦아내기·밀어내기·덮기·열고 닫기·조각·확대·모자이크·흐림, 하트·꽃·블라인드·바둑판 같은 모양) — [효과] 탭의 썸네일(마우스를 올리면 움직임)에서 골라 고른 클립에·모든 클립 사이에 넣거나 클립으로 끌어 놓기, 길이 조절, 타임라인 위치는 그대로(앞 클립이 그만큼 밑에 더 그려짐), 소리도 같은 크기감으로 겹쳐 바뀜, 미리 보기·내보내기 같음(FFmpeg xfade). 효과는 데이터(JSON)라 효과 폴더에 파일을 넣으면 늘어남([전환 효과 데이터](docs/transitions.md)). **동영상 효과**(클립 그림 위에 그림): 스캔 라인 — 흰 선과 색 빛의 띠가 위에서 아래로 훑음(아래로 휨·어두운 곳에서 떨림·빛 번짐·굵기·속도·색), 동영상·사진 클립에 넣고 속성 패널 [효과] 탭에서 조절, 인물 마스크가 있으면 사람에게만([동영상 효과](docs/video-effects.md)) |
 | 내보내기 | MP4(H.264 + AAC), 해상도·프레임 레이트·품질·인코더(x264 · NVIDIA · Intel · AMD · Windows), 전체 또는 In~Out, 진행률·취소 |
 | 프로젝트 | `.fvproj` 저장/열기(미디어 경로는 프로젝트 기준 상대 경로), 첫 동영상에 맞춘 해상도·프레임 레이트, 맨 왼쪽 프로젝트 트리(📁 화면·소리·타임라인·파일 — 세로 9:16·정사각형, 샘플 레이트, 마그네틱, 다운로드 폴더 등), 저장 안 한 편집 복구(2분마다·Folderss 종료 때 써 두고 다음에 열 때 물음) |
+| 인물 마스크 | 동영상·사진에서 사람만 따낸 흑백 마스크를 이 PC에서 만듦(클립·미디어 오른쪽 메뉴 [인물 마스크 만들기] — "사람에게만" 효과가 씀). AI 인물 분리 모델 MODNet(Apache-2.0, 처음 한 번 약 25MB를 받아 SHA-256 확인)과 ONNX Runtime(CPU), 진행률·취소, 원본 파일마다 한 번 만들어 두고 다시 씀. 동영상·사진은 인터넷으로 보내지 않음([인물 마스크](docs/person-mask.md)) |
 
-없는 것(이후 과제): AI 기능, 스톡 미디어·템플릿, 키프레임 애니메이션, 색보정·LUT, 복합 클립·듀얼 타임라인.
+없는 것(이후 과제): 인물 마스크 말고는 AI 기능, 스톡 미디어·템플릿, 키프레임 애니메이션, 색보정·LUT, 복합 클립·듀얼 타임라인.
 
 ## 설치
 
@@ -112,6 +113,7 @@ src/VideoEditor/
 dotnet build                                   # 플러그인 zip: src/VideoEditor/bin/Debug/net8.0-windows/VideoEditor.zip
 $env:FOLDERSS_VE_FFMPEG = "C:\ffmpeg\bin"       # 시험이 쓸 FFmpeg 폴더(없으면 PATH 등에서 찾음)
 dotnet test tests/VideoEditor.Tests            # 단위 + 실제 FFmpeg 통합 시험(픽셀 색·프레임 수·음량·크로스페이드·취소·내려받기)
+$env:FOLDERSS_VE_PERSONMASK = "C:\models\person-mask"  # (선택) 인물 분리 모델(modnet-fa2fa546.onnx)이 든 폴더 — 있으면 실제로 마스크를 만드는 시험도 돈다
 pwsh scripts/ui-test.ps1                       # 화면 시험(숨은 데스크톱): 가져오기→편집→내보내기, 재생, 끌기·다듬기, 속성, 글자·마커, 테마 7종
 scripts\run-host.bat                           # Folderss 없이 이 플러그인만 개발용 호스트(tools/DevHost)로 띄우기
 ```
@@ -121,8 +123,9 @@ scripts\run-host.bat                           # Folderss 없이 이 플러그�
 
 - `tests/VideoEditor.Tests`는 Core·Media를 net8.0으로 링크해 CI(Ubuntu, 배포판 FFmpeg)에서도 돕니다.
 - `tests/VideoEditor.UiTests`는 [플러그인 템플릿](https://github.com/zaruous/FolderssPLuginTemplate)의 헤드리스 시험 호스트입니다. 사용자 화면에 창을 띄우지 않고, 캡처는 실행 끝에 나오는 `shots` 폴더에 남습니다. Visual Studio 테스트 탐색기에서 `SmokeHeadlessTests.OpenView`를 **디버그**로 실행하면 편집 창이 화면에 떠서 중단점을 쓸 수 있습니다.
-- 계획 문서: [PRD](docs/PRD.md) · [구현 계획](docs/plan.md) · [꾸민 글자 구현 계획(#3)](docs/styled-text.md) · [전환 효과 데이터](docs/transitions.md) · [음성 인식 자막](docs/speech-to-text.md) · [사운드 분리](docs/sound-split.md)
+- 계획 문서: [PRD](docs/PRD.md) · [구현 계획](docs/plan.md) · [꾸민 글자 구현 계획(#3)](docs/styled-text.md) · [전환 효과 데이터](docs/transitions.md) · [음성 인식 자막](docs/speech-to-text.md) · [사운드 분리](docs/sound-split.md) · [인물 마스크](docs/person-mask.md)
 
 ## 라이선스
 
 [MIT](LICENSE). FFmpeg는 플러그인에 들어 있지 않으며, 내려받는 빌드는 FFmpeg 프로젝트의 GPL 라이선스를 따릅니다. 미리 보기 소리 재생에 [NAudio](https://github.com/naudio/NAudio)(MIT)를 씁니다.
+인물 마스크에 [ONNX Runtime](https://github.com/microsoft/onnxruntime)(MIT — zip의 `licenses\`에 라이선스·제3자 고지)을 넣어 쓰고, 모델 [MODNet](https://github.com/ZHKKKe/MODNet)(Zhanghan Ke 외, Apache-2.0)의 ONNX 변환 [Xenova/modnet](https://huggingface.co/Xenova/modnet)(Apache-2.0)은 처음 쓸 때 내려받습니다(플러그인에 들어 있지 않음).
