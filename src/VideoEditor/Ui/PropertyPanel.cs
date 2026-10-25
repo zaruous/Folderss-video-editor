@@ -436,7 +436,7 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// [꾸미기] 꾸민 글자 스타일 — 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬), 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도),
-        /// 윤곽선 묶음(켜기·색·두께·이음).
+        /// 윤곽선 묶음(켜기·색·두께·이음), 맨 끝에 휘기 묶음(종류·정도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
         /// </summary>
         private UIElement StyleTab(string id)
@@ -668,6 +668,45 @@ namespace VideoEditor.Ui
                     _updating = was;
                 }
             });
+
+            // 휘기(맨 끝 묶음): 종류 · 정도(-100~100%) — 정도는 휘기가 있을 때만 고친다
+            panel.Children.Add(Section("휘기"));
+            // 보이는 순서는 아래 배열(enum 순서에 기대지 않는다)
+            var warpKinds = new[] { WarpKind.None, WarpKind.ArchUp, WarpKind.ArchDown, WarpKind.Circle, WarpKind.Wave, WarpKind.Bulge, WarpKind.Pinch, WarpKind.Slant, WarpKind.Stairs };
+            var warpKind = new ComboBox();
+            AutomationProperties.SetAutomationId(warpKind, "StyleWarpKind");
+            AutomationProperties.SetName(warpKind, "휘기");
+            foreach (var name in new[] { "없음", "아치 위", "아치 아래", "원", "물결", "부풀리기", "오므리기", "기울이기", "계단" })
+                warpKind.Items.Add(name);
+            warpKind.SelectionChanged += (s, e) =>
+            {
+                if (_updating || warpKind.SelectedIndex < 0)
+                    return;
+                var kind = warpKinds[warpKind.SelectedIndex];
+                Edit(id, c => WarpOf(c).Kind = kind, null);
+            };
+            panel.Children.Add(Row("종류", warpKind));
+            var warpAmount = NumberRow("정도", "StyleWarpAmount", -100, 100, "%", id,
+                c => c.Style?.Warp?.Amount ?? 50, (c, v) => WarpOf(c).Amount = Math.Max(-100, Math.Min(100, v)));
+            panel.Children.Add(warpAmount);
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var kind = c.Style?.Warp?.Kind ?? WarpKind.None;
+                    warpKind.SelectedIndex = Math.Max(0, Array.IndexOf(warpKinds, kind));
+                    warpAmount.IsEnabled = kind != WarpKind.None;
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
             return panel;
         }
 
@@ -698,6 +737,12 @@ namespace VideoEditor.Ui
         {
             var color = UiKit.ParseColor(TextStyle.NormalizeColor(hex, "#FFFFFF"), System.Windows.Media.Colors.White);
             return (0.2126 * color.R + 0.7152 * color.G + 0.0722 * color.B) / 255 > 0.6;
+        }
+
+        /// <summary>고칠 클립의 휘기(스타일·휘기가 없으면 만든다).</summary>
+        private static TextWarpSetting WarpOf(Clip clip)
+        {
+            return StyleOf(clip).Warp ??= new TextWarpSetting();
         }
 
         // ---------- 공통 ----------
