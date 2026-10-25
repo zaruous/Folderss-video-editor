@@ -866,6 +866,42 @@ namespace VideoEditor.UiTests
         }
 
         [UiFact]
+        public async Task Rasterizer_GlowIsMirroredInTheReflection_ShadowIsNot()
+        {
+            // 반사는 앞쪽 층(광선·본문)을 비춘다: 글자 옆으로 번진 노란 광선이 반사 자리에도 보인다(광선·반사는 따로 만들어 병합 — 둘을 같이 켠 시험)
+            var rasterizer = NewRasterizer();
+            const int gap = 40;
+            var reference = await Render(rasterizer, Request(rasterizer, "■", 1920, 1080, 200, WhiteFill + "," + Glow(20)), "glow-only");
+            // PNG 가운데 = 배치 상자 가운데라 두 그림에서 글자 아래 끝은 가운데로부터 같은 거리
+            var lastWhite = Enumerable.Range(0, reference.Height).Last(y => Enumerable.Range(0, reference.Width).Any(x =>
+            {
+                var p = reference.Pixel(x, y);
+                return p.A == 255 && p.R > 230 && p.G > 230 && p.B > 230;
+            }));
+            var below = lastWhite - reference.Height / 2;
+            int YellowRows(Png png)
+            {
+                var top = png.Height / 2 + below + gap + 4;
+                var count = 0;
+                for (var y = top; y < Math.Min(png.Height, top + 60); y++)
+                {
+                    for (var x = 0; x < png.Width; x++)
+                        count += Yellowish(png.Pixel(x, y)) ? 1 : 0;
+                }
+                return count;
+            }
+            var both = await Render(rasterizer, Request(rasterizer, "■", 1920, 1080, 200, WhiteFill + "," + Glow(20) + "," + Reflection(100, gap)), "glow-reflection");
+            var plain = await Render(rasterizer, Request(rasterizer, "■", 1920, 1080, 200, WhiteFill + "," + Reflection(100, gap)), "reflection-only");
+            var shadowed = await Render(rasterizer, Request(rasterizer, "■", 1920, 1080, 200,
+                WhiteFill + ",\"Shadow\":{\"Enabled\":true,\"Color\":\"#FFFF00\",\"Distance\":0,\"Blur\":20,\"Opacity\":1}," + Reflection(100, gap)), "shadow-reflection");
+            _out.WriteLine("반사 자리 노랑 픽셀: 광선 " + YellowRows(both) + " · 광선 없음 " + YellowRows(plain) + " · 노란 그림자 " + YellowRows(shadowed));
+            Assert.True(YellowRows(both) > 200, "광선이 반사에 비친다");
+            Assert.Equal(0, YellowRows(plain));
+            Assert.Equal(0, YellowRows(shadowed));
+            Assert.Equal(0, both.BorderInk());
+        }
+
+        [UiFact]
         public async Task Rasterizer_FromWorkerThread_TransparentCorners_FillColorInMiddle()
         {
             var rasterizer = NewRasterizer();
