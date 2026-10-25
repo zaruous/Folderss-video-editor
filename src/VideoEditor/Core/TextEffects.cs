@@ -97,6 +97,22 @@ namespace VideoEditor.Core
             return double.IsFinite(value) && value > 0 ? value : 0;
         }
 
+        /// <summary>
+        /// 반사가 놓이는 사각형(픽셀): 글자 경계 상자 바로 아래에 간격 gap을 두고, 높이 = 글자 높이 × sizePercent%, 가로는 글자와 같다.
+        /// 글자 경계는 본문이 칠하는 모양(채우기 영역 + 켰으면 윤곽선 — 반사한 윤곽선이 잘리지 않게). 그리개는 글자 아래 + gap/2를 축으로 뒤집으므로
+        /// 반사 첫 줄 = 글자 마지막 줄이다. sizePercent는 0~100으로 자르고, 잘못된 값(음수·NaN·무한대)의 크기·간격·폭·높이는 0, 위치는 0.
+        /// </summary>
+        public static (double Left, double Top, double Width, double Height) ReflectionRect((double Left, double Top, double Width, double Height) glyph, double sizePercent, double gap)
+        {
+            var left = double.IsFinite(glyph.Left) ? glyph.Left : 0;
+            var top = double.IsFinite(glyph.Top) ? glyph.Top : 0;
+            var width = double.IsFinite(glyph.Width) && glyph.Width > 0 ? glyph.Width : 0;
+            var height = double.IsFinite(glyph.Height) && glyph.Height > 0 ? glyph.Height : 0;
+            var size = double.IsFinite(sizePercent) ? Math.Max(0, Math.Min(100, sizePercent)) / 100 : 0;
+            var space = double.IsFinite(gap) && gap > 0 ? gap : 0;
+            return (left, top + height + space, width, height * size);
+        }
+
         /// <summary>정지점 위치: 0~1을 고르게 나눈다(색이 1개면 [0]).</summary>
         public static double[] GradientStops(int count)
         {

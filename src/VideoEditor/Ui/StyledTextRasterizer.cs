@@ -30,7 +30,7 @@ namespace VideoEditor.Ui
         private bool _disposed;
 
         /// <summary>그리는 방식을 바꾸면 올린다(캐시 키에 들어가 예전 PNG를 쓰지 않게).</summary>
-        public int Version { get { return 6; } }
+        public int Version { get { return 7; } }
 
         /// <summary>어느 스레드에서 불러도 된다. 배경 그리기 스레드에 맡기고 끝날 때까지(최대 30초) 기다린다.</summary>
         public void Render(TextImageRequest request, string pngPath, CancellationToken cancellation)
@@ -202,8 +202,8 @@ namespace VideoEditor.Ui
             if ((double)layout.Width * layout.Height > StyledTextLayout.MaxPixels)
                 throw new InvalidOperationException("꾸민 글자 그림이 너무 큽니다: " + layout.Width + "×" + layout.Height);
 
-            // 층을 아래에서 위로 하나씩 그려 겹친다: (반사) → 그림자 → 앞쪽 층(광선 → 본문(윤곽선 → 채우기)). 괄호는 다음 작업에서 이 자리에 더한다.
-            // 반사는 앞쪽 층만 뒤집어 비춘다(그림자는 비추지 않음)
+            // 층을 아래에서 위로 하나씩 그려 겹친다: 반사 → 그림자 → 앞쪽 층(광선 → 본문(윤곽선 → 채우기)).
+            // 반사는 앞쪽 층만 뒤집어 비춘다(그림자는 비추지 않음) — 앞쪽 층을 다 모은 뒤 만들어 맨 아래에 넣는다
             var origin = new Vector(layout.OriginX + halfWidth - centerX, layout.OriginY + halfHeight - centerY);
             var front = new List<Visual>();
             var glow = GlowLayer(geometry, ink, style, request.EffectScale, origin);
@@ -222,6 +222,9 @@ namespace VideoEditor.Ui
             if (shadow != null)
                 layers.Add(shadow);
             layers.AddRange(front);
+            var reflection = ReflectionLayer(front, geometry, ink, style, request.EffectScale, origin, layout.Width, layout.Height, cancellation);
+            if (reflection != null)
+                layers.Insert(0, reflection);
             var bitmap = new RenderTargetBitmap(layout.Width, layout.Height, 96, 96, PixelFormats.Pbgra32);
             foreach (var layer in layers)
             {
@@ -402,6 +405,63 @@ namespace VideoEditor.Ui
                 var blur = new BlurEffect { Radius = radius, KernelType = KernelType.Gaussian };
                 blur.Freeze();
                 visual.Effect = blur;
+            }
+            return visual;
+        }
+
+        /// <summary>
+        /// 반사 층(맨 아래): 앞쪽 층(광선·본문 — 그림자는 비추지 않음)을 글자 아래로 뒤집어 비춘다.
+        /// 글자 = 본문이 칠하는 모양의 경계(채우기 영역 + 켰으면 윤곽선 펜이 칠하는 곳 — 반사한 윤곽선이 잘리지 않게).
+        /// 글자 아래 + 간격/2를 축으로 뒤집어 반사 첫 줄 = 글자 마지막 줄이고, <see cref="StyledTextLayout.ReflectionRect"/>(간격 × 효과 배율,
+        /// 높이 = 글자 높이 × 크기%)로 잘라 위 → 아래로 불투명도 → 0이 되게 흐린다. 가로는 자르지 않는다(글자 옆으로 번진 광선도 비치게).
+        /// 앞쪽 층은 Visual마다 효과(흐림)가 달려 있어 그림 묶음으로 다시 쓸 수 없으므로, 같은 크기의 중간 비트맵에 한 번 그려 그것을 뒤집는다.
+        /// 사각형은 여백 계산(<see cref="StyledTextLayout.Spread"/>)과 같은 함수라 그림 가장자리에서 잘리지 않는다. 꺼졌거나 보이지 않으면 null.
+        /// drawtext 대체 경로(그리개 없음·긴 글)는 반사를 그리지 못한다.
+        /// </summary>
+        private static Visual ReflectionLayer(IReadOnlyList<Visual> front, Geometry geometry, Rect ink, TextStyle style, double effectScale, Vector origin,
+            int width, int height, CancellationToken cancellation)
+        {
+            var reflection = style.Reflection;
+            if (!reflection.Enabled || !(reflection.Opacity > 0) || ink.IsEmpty)
+                return null;
+            var glyph = ink;
+            var outline = OutlinePen(style.Outline, effectScale, null);
+            if (outline != null)
+                glyph.Union(geometry.GetRenderBounds(outline));
+            glyph.Offset(origin);
+            var rect = StyledTextLayout.ReflectionRect(reflection, effectScale, (glyph.Left, glyph.Top, glyph.Width, glyph.Height));
+            if (!(rect.Height > 0))
+                return null;
+            var source = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+            foreach (var layer in front)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                source.Render(layer);
+            }
+            source.Freeze();
+            var clip = new RectangleGeometry(new Rect(0, rect.Top, width, rect.Height));
+            clip.Freeze();
+            // 알파만 쓰는 붓: 반사 위쪽 끝 1 → 아래쪽 끝 0(불투명도는 층 전체에 따로)
+            var fade = new LinearGradientBrush(Colors.Black, Color.FromArgb(0, 0, 0, 0), new Point(0, rect.Top), new Point(0, rect.Top + rect.Height))
+            {
+                MappingMode = BrushMappingMode.Absolute
+            };
+            fade.Freeze();
+            // y → (글자 아래 + 반사 위) − y: 글자 아래 줄이 반사 위 줄로
+            var flip = new ScaleTransform(1, -1, 0, (glyph.Bottom + rect.Top) / 2);
+            flip.Freeze();
+            var visual = new DrawingVisual();
+            using (var context = visual.RenderOpen())
+            {
+                context.PushClip(clip);
+                context.PushOpacity(reflection.Opacity);
+                context.PushOpacityMask(fade);
+                context.PushTransform(flip);
+                context.DrawImage(source, new Rect(0, 0, width, height));
+                context.Pop();
+                context.Pop();
+                context.Pop();
+                context.Pop();
             }
             return visual;
         }
