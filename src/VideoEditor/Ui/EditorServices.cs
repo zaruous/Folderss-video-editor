@@ -34,6 +34,7 @@ namespace VideoEditor.Ui
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _transitionPreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, Task<BitmapSource>> _effectPreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _stylePreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
         private Task<FfmpegTool> _locating;
         private Task<YtDlpTool> _locatingYtDlp;
@@ -356,12 +357,26 @@ namespace VideoEditor.Ui
         /// </summary>
         public Task<BitmapSource> TransitionPreview(TransitionDef def)
         {
-            var key = Transitions.PreviewKey(def);
-            var file = Path.Combine(Manager.DataDirectory, "cache", "transitions", key + ".png");
+            return CachedStrip(_transitionPreviews, "transitions", Transitions.PreviewKey(def), tool => MediaPictures.TransitionStrip(tool, def, CancellationToken.None));
+        }
+
+        /// <summary>
+        /// 동영상 효과 미리 보기 띠(<see cref="VideoEffects.PreviewFrames"/>칸). 전환 띠와 같이 한 번만 그려 데이터 폴더\cache\video-effects에 둔다.
+        /// FFmpeg가 없거나 실패하면 null(다음에 다시 시도).
+        /// </summary>
+        public Task<BitmapSource> EffectPreview(VideoEffectDef def)
+        {
+            return CachedStrip(_effectPreviews, "video-effects", VideoEffects.PreviewKey(def), tool => MediaPictures.EffectStrip(tool, def, CancellationToken.None));
+        }
+
+        /// <summary>미리 보기 띠 캐시: 메모리(key) → 데이터 폴더\cache\folder\key.png → FFmpeg로 그리기(다 쓴 뒤 이름을 바꿔 넣음).</summary>
+        private Task<BitmapSource> CachedStrip(ConcurrentDictionary<string, Task<BitmapSource>> memory, string folder, string key, Func<FfmpegTool, Task<byte[]>> draw)
+        {
+            var file = Path.Combine(Manager.DataDirectory, "cache", folder, key + ".png");
             var tool = Tool;
             if (tool == null && !File.Exists(file))
                 return Task.FromResult<BitmapSource>(null);
-            return _transitionPreviews.GetOrAdd(key, k => Task.Run(async () =>
+            return memory.GetOrAdd(key, k => Task.Run(async () =>
             {
                 try
                 {
@@ -371,7 +386,7 @@ namespace VideoEditor.Ui
                     await PictureGate.WaitAsync().ConfigureAwait(false);
                     try
                     {
-                        png = await MediaPictures.TransitionStrip(tool, def, CancellationToken.None).ConfigureAwait(false);
+                        png = await draw(tool).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -397,7 +412,7 @@ namespace VideoEditor.Ui
                 }
                 catch (Exception)
                 {
-                    _transitionPreviews.TryRemove(k, out _);
+                    memory.TryRemove(k, out _);
                     return null;
                 }
             }));

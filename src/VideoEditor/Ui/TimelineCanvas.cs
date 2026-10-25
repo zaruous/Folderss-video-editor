@@ -37,6 +37,8 @@ namespace VideoEditor.Ui
         public const string MediaDataFormat = "VideoEditor.MediaPaths";
         /// <summary>효과 탭에서 끄는 전환 — "종류|초".</summary>
         public const string TransitionDataFormat = "VideoEditor.Transition";
+        /// <summary>효과 탭에서 끄는 동영상 효과 — 효과 id.</summary>
+        public const string VideoEffectDataFormat = "VideoEditor.VideoEffect";
         private const double EdgeGrip = 7;
         private const double DragThreshold = 3;
         private const double SnapPixels = 8;
@@ -156,6 +158,8 @@ namespace VideoEditor.Ui
         public event Action<string[], Track, long> MediaDropped;
         /// <summary>효과 탭의 전환을 클립에 놓음 — ("종류|초", 클립 Id).</summary>
         public event Action<string, string> TransitionDropped;
+        /// <summary>효과 탭의 동영상 효과를 클립에 놓음 — (효과 id, 클립 Id).</summary>
+        public event Action<string, string> VideoEffectDropped;
         /// <summary>오른쪽 클릭: 클립(없으면 null), 트랙(없으면 null), 프레임. 받은 쪽이 메뉴를 연다.</summary>
         public event Action<Clip, Track, long> ContextRequested;
 
@@ -606,12 +610,21 @@ namespace VideoEditor.Ui
             return clip != null && row != null && row.Track.Kind == TrackKind.Video && !row.Track.Subtitles ? clip : null;
         }
 
+        /// <summary>효과 탭에서 끈 동영상 효과를 놓을 클립(놓은 자리의 동영상·사진 클립).</summary>
+        private Clip VideoEffectTarget(DragEventArgs e)
+        {
+            if (!e.Data.GetDataPresent(VideoEffectDataFormat))
+                return null;
+            var clip = HitClip(e.GetPosition(this), out var row, out _);
+            return row != null && VideoEffects.CanHave(clip) ? clip : null;
+        }
+
         protected override void OnDragOver(DragEventArgs e)
         {
             base.OnDragOver(e);
-            if (e.Data.GetDataPresent(TransitionDataFormat))
+            if (e.Data.GetDataPresent(TransitionDataFormat) || e.Data.GetDataPresent(VideoEffectDataFormat))
             {
-                e.Effects = TransitionTarget(e) != null ? DragDropEffects.Copy : DragDropEffects.None;
+                e.Effects = TransitionTarget(e) != null || VideoEffectTarget(e) != null ? DragDropEffects.Copy : DragDropEffects.None;
                 e.Handled = true;
                 return;
             }
@@ -647,6 +660,14 @@ namespace VideoEditor.Ui
                 var target = TransitionTarget(e);
                 if (target != null)
                     TransitionDropped?.Invoke(e.Data.GetData(TransitionDataFormat) as string, target.Id);
+                e.Handled = true;
+                return;
+            }
+            if (e.Data.GetDataPresent(VideoEffectDataFormat))
+            {
+                var target = VideoEffectTarget(e);
+                if (target != null)
+                    VideoEffectDropped?.Invoke(e.Data.GetData(VideoEffectDataFormat) as string, target.Id);
                 e.Handled = true;
                 return;
             }

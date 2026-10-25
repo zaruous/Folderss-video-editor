@@ -10,7 +10,7 @@ using VideoEditor.Core;
 namespace VideoEditor.Ui
 {
     /// <summary>
-    /// 속성 패널(오른쪽 위): 고른 클립의 [화면] 위치·크기·회전·불투명도·크로스페이드, [소리] 음량·페이드, [속도·길이], [글자].
+    /// 속성 패널(오른쪽 위): 고른 클립의 [화면] 위치·크기·회전·불투명도·크로스페이드, [효과] 동영상 효과(동영상·사진), [소리] 음량·페이드, [속도·길이], [글자].
     /// 아무것도 고르지 않으면 안내(프로젝트 설정은 왼쪽 프로젝트 트리). 값을 바꾸면 바로 편집(실행 취소 가능 — 슬라이더를 끄는 동안은 한 단계로 합침).
     /// 편집 때마다 다시 만들지 않고 값만 갱신한다(끄는 슬라이더가 사라지지 않게).
     /// </summary>
@@ -21,6 +21,10 @@ namespace VideoEditor.Ui
         private readonly EditorCommands _commands;
         private readonly ContentControl _body = new ContentControl();
         private readonly List<Action> _refreshers = new List<Action>();
+        // 다시 만드는 줄(효과 탭)은 갱신을 자기 목록에 모은다 — 갱신하는 도중에 _refreshers를 바꾸지 않게(null이면 _refreshers)
+        private List<Action> _collect;
+        // 지금 보이는 클립의 [효과] 탭(동영상·사진 클립이 아니면 null)
+        private TabItem _effectsTab;
         private string _shownKey;
         private bool _updating;
 
@@ -33,6 +37,12 @@ namespace VideoEditor.Ui
             Children.Add(scroll);
             session.SelectionChanged += (s, e) => Update();
             session.Changed += (s, e) => Update();
+            // 효과 탭에서 동영상 효과를 넣으면 그 클립의 [효과] 탭을 연다(값을 바로 조절하게)
+            commands.VideoEffectsApplied += ids =>
+            {
+                if (_effectsTab != null && Selected() is Clip clip && ids.Contains(clip.Id))
+                    _effectsTab.IsSelected = true;
+            };
             Update();
         }
 
@@ -63,6 +73,7 @@ namespace VideoEditor.Ui
             }
             _shownKey = key;
             _refreshers.Clear();
+            _effectsTab = null;
             _body.Content = clip != null ? ClipView(clip) : clips.Count > 1 ? Note(clips.Count + "개 클립을 골랐습니다. 하나를 고르면 속성을 바꿀 수 있습니다.") : ProjectView();
         }
 
@@ -133,6 +144,13 @@ namespace VideoEditor.Ui
                 }
                 if (clip.IsVisual)
                     tabs.Items.Add(new TabItem { Header = "화면", Content = VisualTab(id) });
+                // 동영상 효과(동영상·사진 클립만 — 글자 클립에는 넣지 않음)
+                if (VideoEffects.CanHave(clip))
+                {
+                    _effectsTab = new TabItem { Header = "효과", Content = EffectsTab(id) };
+                    AutomationProperties.SetAutomationId(_effectsTab, "ClipEffectsTab");
+                    tabs.Items.Add(_effectsTab);
+                }
             }
             if (clip.Kind == ClipKind.Media && clip.HasAudio)
                 tabs.Items.Add(new TabItem { Header = "소리", Content = AudioTab(id) });
@@ -280,6 +298,196 @@ namespace VideoEditor.Ui
             reset.HorizontalAlignment = HorizontalAlignment.Left;
             panel.Children.Add(reset);
             return panel;
+        }
+
+        /// <summary>
+        /// [효과] 이 클립의 동영상 효과(동영상·사진 클립): 효과마다 이름·[빼기], 매개변수 줄(숫자는 슬라이더 — 끄는 동안 실행 취소 한 단계, 색은 팔레트·16진), [사람에게만].
+        /// "사람에게만"을 켠 효과가 있으면 아래에 원본의 인물 마스크 상태와 [인물 마스크 만들기]. 효과를 더하거나 빼면(실행 취소 포함) 줄을 다시 만들고, 값만 바뀌면 값만 갱신한다.
+        /// 효과를 더하는 곳은 미디어 패널의 [효과] 탭(두 번 누르기·끌어 놓기).
+        /// </summary>
+        private UIElement EffectsTab(string id)
+        {
+            var panel = new StackPanel { Margin = new Thickness(6) };
+            var empty = UiKit.Label("효과가 없습니다. 왼쪽 [효과] 탭의 동영상 효과를 두 번 누르거나 이 클립으로 끌어 놓으세요.", true);
+            empty.TextWrapping = TextWrapping.Wrap;
+            AutomationProperties.SetAutomationId(empty, "EffectEmpty");
+            panel.Children.Add(empty);
+            var rows = new StackPanel();
+            panel.Children.Add(rows);
+
+            // 인물 마스크: 클립 원본 하나에 하나 — 상태는 갱신할 때마다 디스크에서 확인한다(다 만든 뒤에도 보이게)
+            var maskBox = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+            var maskStatus = UiKit.Label("", true);
+            maskStatus.TextWrapping = TextWrapping.Wrap;
+            AutomationProperties.SetAutomationId(maskStatus, "EffectMaskStatus");
+            maskBox.Children.Add(Row("인물 마스크", maskStatus));
+            var maskHint = UiKit.Label("마스크가 없으면 효과를 클립 전체에 칠합니다. 만들고 나면 사람 자리(마스크의 흰 곳)에만 칠합니다.", true);
+            maskHint.TextWrapping = TextWrapping.Wrap;
+            maskHint.Margin = new Thickness(0, 2, 0, 4);
+            maskBox.Children.Add(maskHint);
+            void ShowMask()
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                string mask = null;
+                try
+                {
+                    mask = VideoEditor.Media.RenderEnvironment.PersonMasks?.Find(c.Path);
+                }
+                catch (Exception)
+                {
+                    // 마스크를 확인하지 못하면 없는 것으로 보인다(그리기도 같음)
+                }
+                maskStatus.Text = string.IsNullOrEmpty(mask) ? "인물 마스크가 없습니다" : "인물 마스크 준비됨";
+            }
+            Button build = null;
+            build = UiKit.TextButton("인물 마스크 만들기", "EffectMaskBuild", async () =>
+            {
+                build.IsEnabled = false;
+                try
+                {
+                    await _commands.BuildPersonMask(id);
+                }
+                catch (Exception ex)
+                {
+                    _commands.Status("인물 마스크를 만들지 못했습니다: " + ex.Message);
+                }
+                finally
+                {
+                    build.IsEnabled = true;
+                    ShowMask();
+                }
+            });
+            build.HorizontalAlignment = HorizontalAlignment.Left;
+            build.Margin = new Thickness(0);
+            maskBox.Children.Add(build);
+            panel.Children.Add(maskBox);
+
+            var hint = UiKit.Label("효과는 클립 그림 위에 차례로 그려져(아래 효과가 위) 클립과 함께 옮기고 돌고 사라집니다.", true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Margin = new Thickness(0, 8, 0, 0);
+            panel.Children.Add(hint);
+
+            var local = new List<Action>();
+            string shown = null;
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                var effects = c.Effects ?? new List<ClipEffect>();
+                // 효과를 더하거나 빼거나 순서가 바뀐 때만 줄을 다시 만든다(값만 바뀌면 그대로 — 끄는 슬라이더가 사라지지 않게)
+                var signature = string.Join("|", effects.Select(e => e?.Id));
+                if (signature != shown)
+                {
+                    shown = signature;
+                    local.Clear();
+                    rows.Children.Clear();
+                    _collect = local;
+                    try
+                    {
+                        for (var i = 0; i < effects.Count; i++)
+                            rows.Children.Add(EffectRows(id, i, effects[i]?.Id, local));
+                    }
+                    finally
+                    {
+                        _collect = null;
+                    }
+                }
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    foreach (var refresh in local)
+                        refresh();
+                }
+                finally
+                {
+                    _updating = was;
+                }
+                empty.Visibility = effects.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+                maskBox.Visibility = effects.Any(e => e != null && e.PersonOnly && VideoEffects.Find(e.Id) != null) ? Visibility.Visible : Visibility.Collapsed;
+                ShowMask();
+            });
+            return panel;
+        }
+
+        /// <summary>효과 하나의 줄들(index번째, effectId — 그 자리의 효과가 바뀌었으면 고치지 않는다). 갱신은 local에 모은다.</summary>
+        private UIElement EffectRows(string id, int index, string effectId, List<Action> local)
+        {
+            var box = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var def = VideoEffects.Find(effectId);
+            ClipEffect EffectOf(Clip c)
+            {
+                return c?.Effects != null && index < c.Effects.Count && c.Effects[index]?.Id == effectId ? c.Effects[index] : null;
+            }
+            void Change(Action<ClipEffect> change, string mergeKey)
+            {
+                Edit(id, c =>
+                {
+                    var effect = EffectOf(c);
+                    if (effect != null)
+                        change(effect);
+                }, mergeKey);
+            }
+            var head = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+            var remove = UiKit.TextButton("빼기", "EffectRemove" + index, () => Edit(id, c =>
+            {
+                if (EffectOf(c) != null)
+                    VideoEffects.Remove(c, index);
+            }, null));
+            remove.MinWidth = 50;
+            remove.Padding = new Thickness(6, 1, 6, 1);
+            DockPanel.SetDock(remove, Dock.Right);
+            head.Children.Add(remove);
+            var title = Section(def?.Name ?? "알 수 없는 효과(" + effectId + ")");
+            title.ToolTip = def?.Description;
+            head.Children.Add(title);
+            box.Children.Add(head);
+            if (def == null)
+            {
+                var note = UiKit.Label("이 판에서 그리지 못하는 효과입니다(새 판에서 만든 효과일 수 있습니다). 그대로 두면 저장할 때 남고, 빼도 됩니다.", true);
+                note.TextWrapping = TextWrapping.Wrap;
+                box.Children.Add(note);
+                return box;
+            }
+            var prefix = "Effect" + index + "_";
+            foreach (var param in def.Params)
+            {
+                var key = param.Key;
+                if (param.Kind == EffectParamKind.Color)
+                {
+                    var color = UiKit.ColorRow(param.Name, prefix + key,
+                        () => VideoEffects.ColorOf(EffectOf(_session.Project.FindClip(id)), def),
+                        hex => Change(e => VideoEffects.SetColor(e, hex), null));
+                    color.ToolTip = param.Hint;
+                    local.Add(color.Refresh);
+                    box.Children.Add(color);
+                    continue;
+                }
+                var row = NumberRow(param.Name, prefix + key, param.Min, param.Max, param.Unit, id,
+                    c => VideoEffects.Number(EffectOf(c), def, key),
+                    (c, v) =>
+                    {
+                        var effect = EffectOf(c);
+                        if (effect != null)
+                            VideoEffects.SetNumber(effect, key, v);
+                    });
+                if (row is FrameworkElement element)
+                    element.ToolTip = param.Hint;
+                box.Children.Add(row);
+            }
+            var person = new CheckBox { Content = "사람에게만", VerticalAlignment = VerticalAlignment.Center, ToolTip = "원본의 인물 마스크가 있으면 사람 자리에만 칠합니다(없으면 클립 전체)." };
+            AutomationProperties.SetAutomationId(person, index == 0 ? "EffectPersonOnly" : "EffectPersonOnly" + index);
+            person.Click += (s, e) =>
+            {
+                var on = person.IsChecked == true;
+                Change(effect => effect.PersonOnly = on, null);
+            };
+            local.Add(() => person.IsChecked = EffectOf(_session.Project.FindClip(id))?.PersonOnly == true);
+            box.Children.Add(Row("칠할 곳", person));
+            return box;
         }
 
         private UIElement AudioTab(string id)
@@ -1335,7 +1543,7 @@ namespace VideoEditor.Ui
                     _updating = was;
                 }
             }
-            _refreshers.Add(Refresh);
+            (_collect ?? _refreshers).Add(Refresh);
             return row;
         }
     }

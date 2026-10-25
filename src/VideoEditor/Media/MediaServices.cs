@@ -386,6 +386,12 @@ namespace VideoEditor.Media
             return FfmpegRunner.RunBytes(tool.FfmpegPath, Transitions.PreviewArguments(def), TimeSpan.FromSeconds(30), cancellation);
         }
 
+        /// <summary>동영상 효과 미리 보기 띠(PNG, <see cref="VideoEffects.PreviewFrames"/>칸을 가로로).</summary>
+        public static Task<byte[]> EffectStrip(FfmpegTool tool, VideoEffectDef def, CancellationToken cancellation)
+        {
+            return FfmpegRunner.RunBytes(tool.FfmpegPath, VideoEffects.PreviewArguments(def), TimeSpan.FromSeconds(30), cancellation);
+        }
+
         /// <summary>오디오 크기(0~1)를 초당 peaksPerSecond개로. 소리 없는 파일이면 빈 배열.</summary>
         public static async Task<float[]> Waveform(FfmpegTool tool, string path, int peaksPerSecond, CancellationToken cancellation)
         {

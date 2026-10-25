@@ -151,6 +151,8 @@ namespace VideoEditor.Core
                 if (clip.Kind != ClipKind.Text || !Enum.IsDefined(clip.TextVerticalAlign))
                     clip.TextVerticalAlign = TextVerticalAlign.Middle;
                 clip.Words = CleanWords(clip);
+                // 동영상 효과: 동영상·사진 클립에만, 값은 효과 범위 안으로 — 모르는 효과는 남겨 두고 그리지 않는다(VideoEffects.Clean)
+                clip.Effects = VideoEffects.Clean(clip);
             }
             // 사운드 분리 링크: 같은 원본의 영상·사운드 짝만(예전 프로젝트는 링크 없음)
             ClipLinks.Normalize(project);

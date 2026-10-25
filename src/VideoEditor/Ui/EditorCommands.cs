@@ -578,6 +578,45 @@ namespace VideoEditor.Ui
             }, "전환을 뺐습니다.");
         }
 
+        // ---------- 동영상 효과 ----------
+
+        /// <summary>동영상 효과를 넣었다 — 넣은 클립 Id(속성 패널이 [효과] 탭을 연다).</summary>
+        public event Action<IReadOnlyList<string>> VideoEffectsApplied;
+
+        /// <summary>[효과] 동영상 효과를 고른 동영상·사진 클립마다 더한다(클립 위에 그린다 — 위치·길이는 그대로).</summary>
+        public void AddVideoEffect(string effectId)
+        {
+            var ids = _session.SelectedClips.Where(VideoEffects.CanHave).Select(c => c.Id).ToList();
+            if (ids.Count == 0)
+            {
+                Status("동영상 효과를 넣을 동영상·사진 클립을 타임라인에서 고르세요(글자 클립에는 넣지 않습니다).");
+                return;
+            }
+            AddVideoEffect(effectId, ids);
+        }
+
+        /// <summary>효과 탭에서 끈 동영상 효과를 클립에 놓음 — 데이터는 효과 id.</summary>
+        public void DropVideoEffect(string effectId, string clipId)
+        {
+            AddVideoEffect(effectId, new[] { clipId });
+        }
+
+        private void AddVideoEffect(string effectId, IReadOnlyList<string> ids)
+        {
+            var def = VideoEffects.Find(effectId);
+            if (def == null)
+                return;
+            if (Run(p =>
+                {
+                    foreach (var id in ids)
+                        VideoEffects.Add(p, p.FindClip(id), def);
+                }, "'" + def.Name + "' 효과를 " + (ids.Count == 1 ? "클립" : ids.Count + "개 클립") + "에 넣었습니다(속성 패널 [효과] 탭에서 조절)."))
+            {
+                _session.Select(ids.Select(Project.FindClip).Where(c => c != null));
+                VideoEffectsApplied?.Invoke(ids);
+            }
+        }
+
         /// <summary>[효과 폴더 열기] 사용자 전환 효과 폴더를 만들고(처음이면 쓰는 법 README.txt도) 탐색기로 연다.</summary>
         public void OpenTransitionFolder()
         {

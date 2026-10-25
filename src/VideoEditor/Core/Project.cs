@@ -169,6 +169,12 @@ namespace VideoEditor.Core
         /// <summary>시계 방향 회전(도).</summary>
         public double Rotation { get; set; }
         public double Opacity { get; set; } = 1;
+        /// <summary>
+        /// 동영상 효과(<see cref="VideoEffects"/>, 동영상·사진 클립만) — 틀 크기 그림 위에 차례로 그린다(뒤 효과가 위). 없으면 null(저장할 때 빠져 예전 형식 그대로).
+        /// </summary>
+        [JsonConverter(typeof(LenientListConverter<ClipEffect>))]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<ClipEffect> Effects { get; set; }
 
         // 글자
         public string Text { get; set; }
@@ -238,6 +244,7 @@ namespace VideoEditor.Core
             copy.LinkId = null;
             copy.Unlinked = false;
             copy.Style = Style?.Clone();
+            copy.Effects = Effects?.Select(e => e?.Clone()).ToList();
             copy.Words = Words?.Select(w => new ClipWord { Text = w.Text, Start = w.Start, End = w.End }).ToList();
             return copy;
         }
