@@ -163,16 +163,16 @@ namespace VideoEditor.Ui
             var kinds = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
             AutomationProperties.SetAutomationId(kinds, "PropTransitionKind");
             AutomationProperties.SetName(kinds, "전환 효과");
-            foreach (var kind in Transitions.All)
-                kinds.Items.Add(Transitions.Name(kind));
+            // 보이는 효과: 효과 목록 + 이 클립에만 저장된 효과(효과 파일이 없는 PC에서 연 프로젝트)
+            var shown = new List<TransitionDef>();
             kinds.SelectionChanged += (s, e) =>
             {
-                if (_updating || kinds.SelectedIndex < 0)
+                if (_updating || kinds.SelectedIndex < 0 || kinds.SelectedIndex >= shown.Count)
                     return;
-                var kind = Transitions.All[kinds.SelectedIndex];
+                var def = shown[kinds.SelectedIndex];
                 var current = _session.Project.FindClip(id);
-                if (current != null && current.Transition != kind)
-                    Edit(id, c => c.Transition = kind, null);
+                if (current != null && current.Transition != def.Id)
+                    Edit(id, c => Transitions.Assign(c, def), null);
             };
             _refreshers.Add(() =>
             {
@@ -184,7 +184,18 @@ namespace VideoEditor.Ui
                 _updating = true;
                 try
                 {
-                    kinds.SelectedIndex = Math.Max(0, Transitions.All.ToList().IndexOf(c.Transition));
+                    var defs = Transitions.All.ToList();
+                    if (Transitions.Find(c.Transition) == null && c.TransitionDef != null && c.TransitionDef.Id == c.Transition)
+                        defs.Add(c.TransitionDef);
+                    if (!defs.SequenceEqual(shown))
+                    {
+                        shown.Clear();
+                        shown.AddRange(defs);
+                        kinds.Items.Clear();
+                        foreach (var def in shown)
+                            kinds.Items.Add(def.Name);
+                    }
+                    kinds.SelectedIndex = Math.Max(0, shown.FindIndex(d => d.Id == c.Transition));
                 }
                 finally
                 {

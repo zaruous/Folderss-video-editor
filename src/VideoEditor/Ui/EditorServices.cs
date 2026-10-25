@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Threading;
@@ -30,6 +31,7 @@ namespace VideoEditor.Ui
 
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Task<BitmapSource>> _transitionPreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
         private Task<FfmpegTool> _locating;
         private Task<YtDlpTool> _locatingYtDlp;
         // 썸네일·파형 FFmpeg를 한꺼번에 수십 개 띄우지 않게
@@ -38,6 +40,7 @@ namespace VideoEditor.Ui
         public EditorServices(IPluginManager manager)
         {
             Manager = manager;
+            LoadTransitions();
         }
 
         public IPluginManager Manager { get; }
@@ -273,6 +276,80 @@ namespace VideoEditor.Ui
         }
 
         public const int WaveformPeaksPerSecond = 50;
+
+        // ---------- 전환 효과 ----------
+
+        /// <summary>사용자 전환 효과 폴더(데이터 폴더\transitions) — *.json을 넣고 [다시 읽기]를 누르면 효과 탭에 더해진다.</summary>
+        public string TransitionFolder { get { return Path.Combine(Manager.DataDirectory, "transitions"); } }
+
+        /// <summary>마지막으로 사용자 효과 폴더를 읽을 때 건너뛴 정의·파일과 그 까닭.</summary>
+        public IReadOnlyList<string> TransitionErrors { get; private set; } = Array.Empty<string>();
+
+        /// <summary>사용자 효과 폴더를 (다시) 읽는다.</summary>
+        public void LoadTransitions()
+        {
+            try
+            {
+                TransitionErrors = Transitions.LoadFolder(TransitionFolder);
+            }
+            catch (Exception ex)
+            {
+                TransitionErrors = new[] { "효과 폴더를 읽지 못했습니다: " + ex.Message };
+            }
+        }
+
+        /// <summary>
+        /// 효과 미리 보기 띠(<see cref="Transitions.PreviewFrames"/>칸). 그리는 방법이 같으면 한 번만 그려 데이터 폴더\cache\transitions에 둔다.
+        /// FFmpeg가 없거나 실패하면 null(다음에 다시 시도).
+        /// </summary>
+        public Task<BitmapSource> TransitionPreview(TransitionDef def)
+        {
+            var key = Transitions.PreviewKey(def);
+            var file = Path.Combine(Manager.DataDirectory, "cache", "transitions", key + ".png");
+            var tool = Tool;
+            if (tool == null && !File.Exists(file))
+                return Task.FromResult<BitmapSource>(null);
+            return _transitionPreviews.GetOrAdd(key, k => Task.Run(async () =>
+            {
+                try
+                {
+                    if (File.Exists(file))
+                        return Decode(await File.ReadAllBytesAsync(file).ConfigureAwait(false));
+                    byte[] png;
+                    await PictureGate.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        png = await MediaPictures.TransitionStrip(tool, def, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        PictureGate.Release();
+                    }
+                    var picture = Decode(png);
+                    if (picture != null)
+                    {
+                        // 다 쓴 뒤에 이름을 바꿔 넣는다(쓰다 끊겨도 깨진 캐시가 남지 않게)
+                        Directory.CreateDirectory(Path.GetDirectoryName(file));
+                        var part = file + "." + Guid.NewGuid().ToString("N") + ".part";
+                        await File.WriteAllBytesAsync(part, png).ConfigureAwait(false);
+                        try
+                        {
+                            File.Move(part, file, false);
+                        }
+                        catch (IOException)
+                        {
+                            File.Delete(part);
+                        }
+                    }
+                    return picture;
+                }
+                catch (Exception)
+                {
+                    _transitionPreviews.TryRemove(k, out _);
+                    return null;
+                }
+            }));
+        }
 
         public static BitmapSource Decode(byte[] png)
         {

@@ -358,7 +358,7 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>[효과] 고른 클립마다 그 앞(앞 클립에서 바뀌어 들어오는 곳)에 전환을 넣는다. 타임라인 위치는 그대로.</summary>
-        public void ApplyTransition(TransitionKind kind, double seconds)
+        public void ApplyTransition(string id, double seconds)
         {
             var ids = TransitionTargets();
             if (ids.Count == 0)
@@ -366,26 +366,29 @@ namespace VideoEditor.Ui
                 Status("전환을 넣을 클립(바뀌어 들어올 뒤 클립)을 타임라인에서 고르세요. 클립 사이마다 넣으려면 [모든 클립 사이에]를 누르세요.");
                 return;
             }
-            ApplyTransition(kind, seconds, ids);
+            ApplyTransition(id, seconds, ids);
         }
 
-        /// <summary>효과 탭에서 끈 전환을 클립에 놓음 — 데이터는 "종류|초".</summary>
+        /// <summary>효과 탭에서 끈 전환을 클립에 놓음 — 데이터는 "효과 id|초".</summary>
         public void DropTransition(string data, string clipId)
         {
             var parts = (data ?? "").Split('|');
-            if (parts.Length != 2 || !Enum.TryParse(parts[0], out TransitionKind kind) || !Enum.IsDefined(kind) || !UiKit.TryNumber(parts[1], out var seconds))
+            if (parts.Length != 2 || Transitions.Find(parts[0]) == null || !UiKit.TryNumber(parts[1], out var seconds))
                 return;
-            ApplyTransition(kind, seconds, new[] { clipId });
+            ApplyTransition(parts[0], seconds, new[] { clipId });
         }
 
-        private void ApplyTransition(TransitionKind kind, double seconds, IReadOnlyList<string> ids)
+        private void ApplyTransition(string effect, double seconds, IReadOnlyList<string> ids)
         {
+            var def = Transitions.Find(effect);
+            if (def == null)
+                return;
             var frames = Math.Max(1, Project.Rate.ToFrames(seconds));
             if (Run(p =>
                 {
                     foreach (var id in ids)
-                        TimelineEdits.SetTransition(p, p.FindClip(id), kind, frames);
-                }, "'" + Transitions.Name(kind) + "' 전환을 " + (ids.Count == 1 ? "클립" : ids.Count + "개 클립") + " 앞에 넣었습니다(" + UiKit.Number(seconds) + "초)."))
+                        TimelineEdits.SetTransition(p, p.FindClip(id), def.Id, frames);
+                }, "'" + def.Name + "' 전환을 " + (ids.Count == 1 ? "클립" : ids.Count + "개 클립") + " 앞에 넣었습니다(" + UiKit.Number(seconds) + "초)."))
                 ShowTransitions(ids);
         }
 
@@ -397,8 +400,11 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>[모든 클립 사이에] 고른 클립의 트랙(없으면 주 트랙)에서 서로 붙어 있는 클립 사이마다 전환을 넣는다.</summary>
-        public void ApplyTransitionBetween(TransitionKind kind, double seconds)
+        public void ApplyTransitionBetween(string effect, double seconds)
         {
+            var def = Transitions.Find(effect);
+            if (def == null)
+                return;
             var selected = _session.SelectedClips.Select(Project.TrackOf).FirstOrDefault(t => t != null && t.Kind == TrackKind.Video && !t.Subtitles);
             var track = selected ?? Project.MainTrack;
             var clips = track.Clips.Where(c => c.IsVisual).OrderBy(c => c.Start).ToList();
@@ -411,8 +417,8 @@ namespace VideoEditor.Ui
             }
             var trackId = track.Id;
             var frames = Math.Max(1, Project.Rate.ToFrames(seconds));
-            if (Run(p => TimelineEdits.SetTransitionsBetween(p, p.FindTrack(trackId), kind, frames),
-                    "'" + Transitions.Name(kind) + "' 전환을 '" + track.Name + "'의 클립 사이 " + places + "곳에 넣었습니다(" + UiKit.Number(seconds) + "초)."))
+            if (Run(p => TimelineEdits.SetTransitionsBetween(p, p.FindTrack(trackId), def.Id, frames),
+                    "'" + def.Name + "' 전환을 '" + track.Name + "'의 클립 사이 " + places + "곳에 넣었습니다(" + UiKit.Number(seconds) + "초)."))
                 ShowTransitions(ids);
         }
 
@@ -434,6 +440,50 @@ namespace VideoEditor.Ui
                 }
             }, "전환을 뺐습니다.");
         }
+
+        /// <summary>[효과 폴더 열기] 사용자 전환 효과 폴더를 만들고(처음이면 쓰는 법 README.txt도) 탐색기로 연다.</summary>
+        public void OpenTransitionFolder()
+        {
+            var folder = _services.TransitionFolder;
+            try
+            {
+                Directory.CreateDirectory(folder);
+                var readme = Path.Combine(folder, "README.txt");
+                if (!File.Exists(readme))
+                    File.WriteAllText(readme, TransitionFolderReadme.Replace("\r\n", "\n").Replace("\n", Environment.NewLine), new System.Text.UTF8Encoding(true));
+                Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { folder }, UseShellExecute = false });
+                Status("효과 폴더: *.json에 효과를 적고 [효과] 탭의 [다시 읽기]를 누르세요(쓰는 법은 README.txt).");
+            }
+            catch (Exception ex)
+            {
+                Status("효과 폴더를 열지 못했습니다: " + ex.Message);
+            }
+        }
+
+        private const string TransitionFolderReadme =
+@"전환 효과 폴더
+
+이 폴더의 *.json 파일에 효과를 적고 [효과] 탭의 [다시 읽기]를 누르면 효과가 더해집니다.
+
+{
+  ""transitions"": [
+    { ""id"": ""MyWipe"", ""name"": ""내 대각선 닦기"", ""group"": ""내 효과"", ""xfade"": ""wipetl"" },
+    { ""id"": ""Ring"", ""name"": ""고리"", ""group"": ""모양"", ""expr"": ""if(lt(abs(hypot(X-W/2,Y-H/2)/H-0.3),(1-P)*0.8),B,A)"" }
+  ]
+}
+
+- id: 영문으로 시작하는 영문·숫자·_·- (프로젝트에 저장되는 이름, 기본 효과와 겹치면 안 됨)
+- name: 효과 탭에 보일 이름(40자까지), group: 묶음(없으면 ""내 효과"")
+- xfade: FFmpeg xfade 효과 이름(wipeleft, circleopen, pixelize 등) — 또는
+- expr: 수식. X·Y 픽셀 위치, W·H 화면 크기, P 진행(1에서 0으로), A 앞 화면 값, B 새 화면 값, PLANE 색 평면,
+  a0~a3(x,y)·b0~b3(x,y) 다른 위치의 값.
+  글자는 영문·숫자·공백과 . , + - * / ^ ( ) 만, 함수는 if ifnot lt lte gt gte eq between clip not abs min max hypot
+  sin cos tan asin acos atan atan2 sinh cosh tanh sqrt pow exp log floor ceil round trunc mod sgn squish gauss isnan isinf.
+  수식 효과는 내장 효과보다 그리기가 느립니다.
+- ffmpeg: 필요한 FFmpeg 주 버전(선택)
+
+사용자 효과를 넣은 클립은 프로젝트 파일에 효과 정의를 함께 저장하므로, 이 폴더가 없는 PC에서도 같게 그려집니다.
+";
 
         public void AddSubtitleTrack()
         {

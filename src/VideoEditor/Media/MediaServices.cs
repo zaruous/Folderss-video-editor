@@ -179,7 +179,8 @@ namespace VideoEditor.Media
                 Width = settings.Width,
                 Height = settings.Height,
                 FontFile = RenderEnvironment.DefaultFont(),
-                TempFolder = RenderEnvironment.TempFolder()
+                TempFolder = RenderEnvironment.TempFolder(),
+                FfmpegMajor = tool.MajorVersion
             });
             string script;
             // 만드는 동안은 옆의 .part에 쓰고 다 되면 바꿔 넣는다 — 실패·취소해도 원래 있던 파일(덮어쓰기로 고른 것)이 남는다
@@ -233,7 +234,8 @@ namespace VideoEditor.Media
                 Audio = false,
                 Preview = true,
                 FontFile = RenderEnvironment.DefaultFont(),
-                TempFolder = RenderEnvironment.TempFolder()
+                TempFolder = RenderEnvironment.TempFolder(),
+                FfmpegMajor = tool.MajorVersion
             });
             string script;
             var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script);
@@ -262,7 +264,8 @@ namespace VideoEditor.Media
                 Audio = false,
                 Preview = true,
                 FontFile = RenderEnvironment.DefaultFont(),
-                TempFolder = RenderEnvironment.TempFolder()
+                TempFolder = RenderEnvironment.TempFolder(),
+                FfmpegMajor = tool.MajorVersion
             });
             string script;
             var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script);
@@ -297,6 +300,12 @@ namespace VideoEditor.Media
                 args.AddRange(new[] { "-ss", RenderGraph.N(seconds) });
             args.AddRange(new[] { "-protocol_whitelist", "file", "-i", media.Path, "-frames:v", "1", "-vf", "scale=" + width + ":-2", "-f", "image2pipe", "-c:v", "png", "pipe:1" });
             return FfmpegRunner.RunBytes(tool.FfmpegPath, args, TimeSpan.FromSeconds(30), cancellation);
+        }
+
+        /// <summary>전환 효과 미리 보기 띠(PNG, <see cref="Transitions.PreviewFrames"/>칸을 가로로).</summary>
+        public static Task<byte[]> TransitionStrip(FfmpegTool tool, TransitionDef def, CancellationToken cancellation)
+        {
+            return FfmpegRunner.RunBytes(tool.FfmpegPath, Transitions.PreviewArguments(def), TimeSpan.FromSeconds(30), cancellation);
         }
 
         /// <summary>오디오 크기(0~1)를 초당 peaksPerSecond개로. 소리 없는 파일이면 빈 배열.</summary>

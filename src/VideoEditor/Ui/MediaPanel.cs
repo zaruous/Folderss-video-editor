@@ -6,6 +6,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Folderss.Plugins;
 using VideoEditor.Core;
 
@@ -13,7 +14,7 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// 미디어 패널(왼쪽 위): [미디어] 가져온 파일 목록(썸네일·종류·길이 — 두 번 누르면 타임라인 끝에 추가, 끌어서 원하는 자리에),
-    /// [폴더] Folderss 폴더 패널에서 골라 가져오기, [글자] 글자 클립 만들기. 도구 막대에 [URL에서 가져오기](직접 링크·유튜브).
+    /// [폴더] Folderss 폴더 패널에서 골라 가져오기, [글자] 글자 클립 만들기, [효과] 전환 효과(썸네일). 도구 막대에 [URL에서 가져오기](직접 링크·유튜브).
     /// </summary>
     internal sealed class MediaPanel : DockPanel
     {
@@ -37,26 +38,41 @@ namespace VideoEditor.Ui
             var folderTab = new TabItem { Header = "폴더", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
             _tabs.Items.Add(folderTab);
             _tabs.Items.Add(new TabItem { Header = "글자", Content = TextTab() });
-            var effectsTab = new TabItem { Header = "효과", Content = EffectsTab() };
+            // 효과 탭은 처음 볼 때 만든다(효과마다 미리 보기를 FFmpeg로 그리므로 열지 않으면 그리지 않게)
+            var effectsTab = new TabItem { Header = "효과", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
             AutomationProperties.SetAutomationId(effectsTab, "EffectsTab");
             _tabs.Items.Add(effectsTab);
             _tabs.SelectionChanged += (s, e) =>
             {
+                if (e.OriginalSource != _tabs)
+                    return;
                 if (_tabs.SelectedItem == folderTab && !_folderLoaded)
                 {
                     _folderLoaded = true;
                     folderTab.Content = FolderTab();
                 }
+                if (_tabs.SelectedItem == effectsTab && _refillEffects == null)
+                    effectsTab.Content = EffectsTab();
             };
             Children.Add(_tabs);
             session.Changed += (s, e) => Refill();
-            EventHandler toolChanged = (s, e) => Dispatcher.BeginInvoke(new Action(Refill));
+            // FFmpeg를 찾으면(또는 바꾸면) 썸네일·효과 목록(FFmpeg 버전에 따라 쓸 수 있는 효과)을 다시
+            EventHandler toolChanged = (s, e) => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                Refill();
+                _refillEffects?.Invoke();
+            }));
+            _previewTimer.Tick += (s, e) => PreviewTick();
             Loaded += (s, e) =>
             {
                 services.ToolChanged -= toolChanged;
                 services.ToolChanged += toolChanged;
             };
-            Unloaded += (s, e) => services.ToolChanged -= toolChanged;
+            Unloaded += (s, e) =>
+            {
+                services.ToolChanged -= toolChanged;
+                StopPreview();
+            };
             Refill();
         }
 
@@ -268,51 +284,59 @@ namespace VideoEditor.Ui
         // ---------- 효과 ----------
 
         /// <summary>
-        /// [효과] 전환 효과: 목록에서 고르고 [고른 클립에 넣기]·[모든 클립 사이에] — 또는 효과를 타임라인의 클립으로 끌어 놓는다.
+        /// [효과] 전환 효과: 썸네일에서 고르고 [고른 클립에 넣기]·[모든 클립 사이에] — 또는 효과를 타임라인의 클립으로 끌어 놓는다.
         /// 클립 앞(앞 클립에서 바뀌어 들어오는 곳)에 들어가고, 앞 클립이 그 길이만큼 밑에 더 그려질 뿐 타임라인 위치는 바뀌지 않는다.
+        /// 효과는 데이터(기본 효과 + 데이터 폴더\transitions\*.json)에서 오고, 썸네일은 그 효과를 실제로 그린 띠다(마우스를 올리면 움직임).
         /// </summary>
         private UIElement EffectsTab()
         {
             var panel = new DockPanel { Margin = new Thickness(8) };
             var top = new StackPanel();
-            var hint = UiKit.Label("전환 효과 — 클립 앞(앞 클립에서 바뀌어 들어오는 곳)에 넣습니다. 효과를 타임라인의 클립으로 끌어 놓아도 됩니다. 타임라인 위치는 바뀌지 않습니다.", true);
-            hint.TextWrapping = TextWrapping.Wrap;
+            // 설명은 한 줄(전체는 툴팁) — 좁은 패널에서도 썸네일이 많이 보이게
+            var hint = UiKit.Label("클립 앞에 넣습니다(타임라인 위치는 그대로) · 타임라인의 클립으로 끌어 놓아도 됩니다", true);
+            hint.TextTrimming = TextTrimming.CharacterEllipsis;
+            hint.ToolTip = "전환 효과는 클립 앞(앞 클립에서 바뀌어 들어오는 곳)에 들어갑니다. 앞 클립이 그 길이만큼 밑에 더 그려질 뿐 타임라인 위치는 바뀌지 않습니다.\n"
+                + "효과를 타임라인의 클립으로 끌어 놓거나, 두 번 눌러 고른 클립에 넣습니다. 썸네일에 마우스를 올리면 효과가 움직입니다.";
             top.Children.Add(hint);
 
-            var lengthRow = new DockPanel { Margin = new Thickness(0, 6, 0, 6) };
-            var lengthLabel = UiKit.Label("길이");
-            lengthLabel.Width = 40;
-            DockPanel.SetDock(lengthLabel, Dock.Left);
-            lengthRow.Children.Add(lengthLabel);
-            var unit = UiKit.Label(" 초", true);
-            DockPanel.SetDock(unit, Dock.Right);
-            lengthRow.Children.Add(unit);
-            var seconds = new TextBox { Text = UiKit.Number(Transitions.DefaultSeconds), VerticalContentAlignment = VerticalAlignment.Center };
+            var seconds = new TextBox { Text = UiKit.Number(Transitions.DefaultSeconds), VerticalContentAlignment = VerticalAlignment.Center, Width = 44 };
             AutomationProperties.SetAutomationId(seconds, "TransitionSeconds");
             AutomationProperties.SetName(seconds, "전환 길이(초)");
-            lengthRow.Children.Add(seconds);
-            top.Children.Add(lengthRow);
+            var groups = new ComboBox { VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetAutomationId(groups, "TransitionGroup");
+            AutomationProperties.SetName(groups, "효과 묶음");
+            // 길이 [ ] 초 · 묶음 [          ]
+            var row = new DockPanel { Margin = new Thickness(0, 6, 0, 6) };
+            var length = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 10, 0) };
+            length.Children.Add(UiKit.Label("길이 "));
+            length.Children.Add(seconds);
+            length.Children.Add(UiKit.Label(" 초", true));
+            foreach (FrameworkElement child in length.Children)
+                child.VerticalAlignment = VerticalAlignment.Center;
+            DockPanel.SetDock(length, Dock.Left);
+            row.Children.Add(length);
+            var groupLabel = UiKit.Label("묶음 ", true);
+            groupLabel.VerticalAlignment = VerticalAlignment.Center;
+            DockPanel.SetDock(groupLabel, Dock.Left);
+            row.Children.Add(groupLabel);
+            row.Children.Add(groups);
+            top.Children.Add(row);
 
-            var list = new ListBox { BorderThickness = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            var list = new ListBox { BorderThickness = new Thickness(0) };
             AutomationProperties.SetAutomationId(list, "TransitionList");
             AutomationProperties.SetName(list, "전환 효과");
             list.SetResourceReference(BackgroundProperty, "PanelBackground");
-            foreach (var kind in Transitions.All)
-            {
-                var item = new ListBoxItem { Content = new TextBlock { Text = Transitions.Name(kind), Margin = new Thickness(4, 3, 4, 3) }, Tag = kind };
-                AutomationProperties.SetAutomationId(item, "Transition_" + kind);
-                AutomationProperties.SetName(item, Transitions.Name(kind));
-                list.Items.Add(item);
-            }
-            list.SelectedIndex = 0;
+            // 썸네일을 가로로 채우고 줄을 바꾼다(가로 스크롤 없음)
+            list.ItemsPanel = new ItemsPanelTemplate(new FrameworkElementFactory(typeof(WrapPanel)));
+            ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
 
-            TransitionKind Chosen() => list.SelectedItem is ListBoxItem chosen ? (TransitionKind)chosen.Tag : TransitionKind.Fade;
+            TransitionDef Chosen() => list.SelectedItem is ListBoxItem chosen ? (TransitionDef)chosen.Tag : Transitions.Dissolve;
             // 길이는 0.1~10초(잘못 쓰면 기본 길이)
             double Seconds() => UiKit.TryNumber(seconds.Text, out var value) ? Math.Max(0.1, Math.Min(10, value)) : Transitions.DefaultSeconds;
 
             var buttons = new WrapPanel { Margin = new Thickness(0, 0, 0, 6) };
-            buttons.Children.Add(UiKit.TextButton("고른 클립에 넣기", "TransitionApplyButton", () => _commands.ApplyTransition(Chosen(), Seconds())));
-            buttons.Children.Add(UiKit.TextButton("모든 클립 사이에", "TransitionAllButton", () => _commands.ApplyTransitionBetween(Chosen(), Seconds())));
+            buttons.Children.Add(UiKit.TextButton("고른 클립에 넣기", "TransitionApplyButton", () => _commands.ApplyTransition(Chosen().Id, Seconds())));
+            buttons.Children.Add(UiKit.TextButton("모든 클립 사이에", "TransitionAllButton", () => _commands.ApplyTransitionBetween(Chosen().Id, Seconds())));
             buttons.Children.Add(UiKit.TextButton("전환 빼기", "TransitionRemoveButton", _commands.RemoveTransition));
             foreach (FrameworkElement button in buttons.Children)
                 button.Margin = new Thickness(0, 0, 4, 4);
@@ -320,11 +344,70 @@ namespace VideoEditor.Ui
             DockPanel.SetDock(top, Dock.Top);
             panel.Children.Add(top);
 
+            // 아래: 사용자 효과 폴더(*.json을 넣으면 효과가 늘어난다)와 읽지 못한 파일 알림
+            var bottom = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+            var problems = UiKit.Label("", true);
+            problems.TextWrapping = TextWrapping.Wrap;
+            AutomationProperties.SetAutomationId(problems, "TransitionProblems");
+            var folderButtons = new WrapPanel();
+            folderButtons.Children.Add(UiKit.TextButton("효과 폴더 열기", "TransitionFolderButton", _commands.OpenTransitionFolder));
+            bottom.Children.Add(folderButtons);
+            bottom.Children.Add(problems);
+            DockPanel.SetDock(bottom, Dock.Bottom);
+            panel.Children.Add(bottom);
+
+            // 목록 채우기: 고른 묶음의 효과 중 지금 FFmpeg로 그릴 수 있는 것(FFmpeg를 모르면 모두)
+            const string allGroups = "모든 효과";
+            void Fill()
+            {
+                var keep = (list.SelectedItem as ListBoxItem)?.Tag is TransitionDef was ? was.Id : Transitions.DefaultId;
+                var major = _services.Tool?.MajorVersion ?? 0;
+                var usable = Transitions.All.Where(d => major == 0 || d.Ffmpeg <= major).ToList();
+                var group = groups.SelectedItem as string ?? allGroups;
+                var names = new[] { allGroups }.Concat(usable.Select(d => d.Group).Where(g => g != null).Distinct()).ToList();
+                if (!names.SequenceEqual(groups.Items.Cast<string>()))
+                {
+                    _fillingEffects = true;
+                    groups.Items.Clear();
+                    foreach (var name in names)
+                        groups.Items.Add(name);
+                    groups.SelectedItem = names.Contains(group) ? group : allGroups;
+                    _fillingEffects = false;
+                    group = (string)groups.SelectedItem;
+                }
+                StopPreview();
+                list.Items.Clear();
+                foreach (var def in usable.Where(d => group == allGroups || d.Group == group))
+                    list.Items.Add(TransitionTile(def));
+                list.SelectedItem = list.Items.Cast<ListBoxItem>().FirstOrDefault(i => ((TransitionDef)i.Tag).Id == keep) ?? list.Items.Cast<ListBoxItem>().FirstOrDefault();
+                var errors = _services.TransitionErrors;
+                problems.Text = errors.Count == 0 ? "" : "효과 파일에서 " + errors.Count + "개를 건너뛰었습니다(마우스를 올리면 까닭).";
+                problems.ToolTip = errors.Count == 0 ? null : string.Join("\n", errors.Take(30));
+                problems.Visibility = errors.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            }
+            groups.SelectionChanged += (s, e) =>
+            {
+                if (!_fillingEffects)
+                    Fill();
+            };
+            folderButtons.Children.Add(UiKit.TextButton("다시 읽기", "TransitionReloadButton", () =>
+            {
+                _services.LoadTransitions();
+                Fill();
+                var user = Transitions.All.Count(d => !d.BuiltIn);
+                _commands.Status("전환 효과를 다시 읽었습니다: " + Transitions.All.Count + "개(사용자 효과 " + user + "개)"
+                    + (_services.TransitionErrors.Count > 0 ? ", 건너뜀 " + _services.TransitionErrors.Count + "개" : "") + ".");
+            }));
+            foreach (FrameworkElement button in folderButtons.Children)
+                button.Margin = new Thickness(0, 0, 4, 0);
+            _refillEffects = Fill;
+            Fill();
+
             // 두 번 누르면 고른 클립에, 끌어서 타임라인의 클립에 놓으면 그 클립에
             list.MouseDoubleClick += (s, e) =>
             {
                 if (OnItem(list, e))
-                    _commands.ApplyTransition(Chosen(), Seconds());
+                    _commands.ApplyTransition(Chosen().Id, Seconds());
             };
             var dragStart = new Point();
             var fromItem = false;
@@ -340,12 +423,107 @@ namespace VideoEditor.Ui
                 var point = e.GetPosition(list);
                 if (Math.Abs(point.X - dragStart.X) < 6 && Math.Abs(point.Y - dragStart.Y) < 6)
                     return;
+                StopPreview();
                 var data = new DataObject();
-                data.SetData(TimelineCanvas.TransitionDataFormat, Chosen() + "|" + UiKit.Number(Seconds()));
+                data.SetData(TimelineCanvas.TransitionDataFormat, Chosen().Id + "|" + UiKit.Number(Seconds()));
                 DragDrop.DoDragDrop(list, data, DragDropEffects.Copy);
             };
             panel.Children.Add(list);
             return panel;
+        }
+
+        // 효과 썸네일: 정지 화면은 전환이 절반쯤 진행된 칸, 마우스를 올리면 띠의 칸을 차례로 보인다(한 번에 하나만)
+        private const int TileWidth = 96;
+        private const int TileHeight = 54;
+        private readonly System.Windows.Threading.DispatcherTimer _previewTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(90) };
+        private Image _previewImage;
+        private BitmapSource[] _previewFrames;
+        private int _previewTick;
+        private bool _fillingEffects;
+        private Action _refillEffects;
+
+        private ListBoxItem TransitionTile(TransitionDef def)
+        {
+            var image = new Image { Width = TileWidth, Height = TileHeight, Stretch = Stretch.UniformToFill };
+            var frame = new Border { Width = TileWidth, Height = TileHeight, Child = image, CornerRadius = new CornerRadius(3), ClipToBounds = true };
+            frame.SetResourceReference(Border.BackgroundProperty, "ControlBackground");
+            var name = new TextBlock { Text = def.Name, Width = TileWidth, TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 11, Margin = new Thickness(0, 3, 0, 0) };
+            var content = new StackPanel { Margin = new Thickness(1) };
+            content.Children.Add(frame);
+            content.Children.Add(name);
+            var tip = def.Name + (def.Group != null ? " · " + def.Group : "");
+            if (def.IsExpression)
+                tip += "\n수식으로 그리는 효과 — 내장 효과보다 그리기가 느립니다.";
+            if (!def.BuiltIn)
+                tip += "\n사용자 효과(효과 폴더)";
+            var item = new ListBoxItem { Content = content, Tag = def, ToolTip = tip, Padding = new Thickness(3) };
+            AutomationProperties.SetAutomationId(item, "Transition_" + def.Id);
+            AutomationProperties.SetName(item, def.Name);
+            BitmapSource[] frames = null;
+            _services.TransitionPreview(def).ContinueWith(t =>
+            {
+                if (t.Status != System.Threading.Tasks.TaskStatus.RanToCompletion || t.Result == null)
+                    return;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    frames = Frames(t.Result);
+                    if (frames != null && _previewImage != image)
+                        image.Source = frames[Transitions.PreviewStill];
+                }));
+            });
+            item.MouseEnter += (s, e) =>
+            {
+                if (frames == null)
+                    return;
+                StopPreview();
+                _previewImage = image;
+                _previewFrames = frames;
+                _previewTick = 0;
+                image.Source = frames[0];
+                _previewTimer.Start();
+            };
+            item.MouseLeave += (s, e) =>
+            {
+                if (_previewImage == image)
+                    StopPreview();
+            };
+            return item;
+        }
+
+        /// <summary>미리 보기 띠를 칸마다 자른다(띠 크기가 맞지 않으면 null).</summary>
+        private static BitmapSource[] Frames(BitmapSource strip)
+        {
+            if (strip.PixelWidth != Transitions.PreviewWidth * Transitions.PreviewFrames || strip.PixelHeight != Transitions.PreviewHeight)
+                return null;
+            var frames = new BitmapSource[Transitions.PreviewFrames];
+            for (var i = 0; i < frames.Length; i++)
+            {
+                var crop = new CroppedBitmap(strip, new Int32Rect(i * Transitions.PreviewWidth, 0, Transitions.PreviewWidth, Transitions.PreviewHeight));
+                crop.Freeze();
+                frames[i] = crop;
+            }
+            return frames;
+        }
+
+        private void PreviewTick()
+        {
+            if (_previewImage == null)
+            {
+                _previewTimer.Stop();
+                return;
+            }
+            // 칸을 차례로 보이고 마지막(새 화면)에서 잠깐 멈췄다가 처음부터
+            _previewTick = (_previewTick + 1) % (Transitions.PreviewFrames + 6);
+            _previewImage.Source = _previewFrames[Math.Min(_previewTick, Transitions.PreviewFrames - 1)];
+        }
+
+        private void StopPreview()
+        {
+            _previewTimer.Stop();
+            if (_previewImage != null && _previewFrames != null)
+                _previewImage.Source = _previewFrames[Transitions.PreviewStill];
+            _previewImage = null;
+            _previewFrames = null;
         }
     }
 }

@@ -129,9 +129,15 @@ namespace VideoEditor.Core
                     clip.Speed = 1;
                 if (clip.SourceOut <= clip.SourceIn)
                     clip.SourceOut = clip.SourceIn + 1;
-                // JsonStringEnumConverter는 정수도 받는다 — 정의되지 않은 효과는 디졸브로
-                if (!Enum.IsDefined(clip.Transition))
-                    clip.Transition = TransitionKind.Fade;
+                // 전환 효과: id 형식이 아니면 디졸브로. 모르는 id는 남겨 둔다(효과 파일이 있는 PC에서는 그 효과로).
+                // 함께 저장된 정의는 남이 만든 것일 수 있으므로 검사를 거친 것만(id가 다르면 버림)
+                if (!Transitions.IsValidId(clip.Transition))
+                    clip.Transition = Transitions.DefaultId;
+                if (clip.TransitionDef != null)
+                {
+                    var def = Transitions.Check(clip.TransitionDef, out _);
+                    clip.TransitionDef = def != null && def.Id == clip.Transition ? def : null;
+                }
                 clip.TransitionIn = Math.Max(0, clip.TransitionIn);
                 if (clip.Kind != ClipKind.Text)
                     clip.Style = null;

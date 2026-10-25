@@ -18,6 +18,11 @@
     <PackageReference Include="NAudio.WinMM" Version="2.2.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 기본 전환 효과 데이터(효과는 이 파일에 더하면 늘어난다) -->
+    <EmbeddedResource Include="Core\transitions.json" LogicalName="VideoEditor.Core.transitions.json" />
+  </ItemGroup>
+
   <!--
     빌드할 때마다 bin\<구성>\net8.0-windows\<AssemblyName>.zip 을 만든다:
     plugin.json + 플러그인 DLL + .deps.json + NuGet 패키지 DLL(ReferenceCopyLocalPaths, 계약 DLL은 Private=false라 빠짐).

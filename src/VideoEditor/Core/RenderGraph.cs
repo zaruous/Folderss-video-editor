@@ -22,6 +22,8 @@ namespace VideoEditor.Core
         public string FontFile { get; set; }
         /// <summary>글자 클립의 글을 담을 임시 파일 폴더.</summary>
         public string TempFolder { get; set; }
+        /// <summary>쓰는 FFmpeg 주 버전(0이면 모름) — 이보다 새 버전이 필요한 전환 효과는 디졸브로 그린다.</summary>
+        public int FfmpegMajor { get; set; }
     }
 
     /// <summary>FFmpeg에 줄 입력(파일마다 인수 묶음)과 filter_complex. 출력 라벨은 [vout]·[aout].</summary>
@@ -125,9 +127,10 @@ namespace VideoEditor.Core
                     // 뒤 클립이 전환으로 들어오면 그동안 이 클립이 밑에 계속 보여야 한다(타임라인 위치는 그대로)
                     var tail = next != null && next.Start == clip.End ? Math.Min(next.TransitionIn, next.Duration) : 0;
                     var transition = Math.Min(clip.TransitionIn, clip.Duration);
+                    var effect = Transitions.Resolve(clip, options.FfmpegMajor);
                     // 디졸브가 아닌 전환은 앞 클립과 xfade로 잇는다 — 전환 구간이 그리는 구간에 걸칠 때만
-                    var xfadeIn = Transitions.UsesXfade(clip.Transition) && Overlaps(clip.Start, transition, options);
-                    var xfadeOut = tail > 0 && Transitions.UsesXfade(next.Transition) && Overlaps(next.Start, tail, options);
+                    var xfadeIn = !effect.IsDissolve && Overlaps(clip.Start, transition, options);
+                    var xfadeOut = tail > 0 && !Transitions.Resolve(next, options.FfmpegMajor).IsDissolve && Overlaps(next.Start, tail, options);
                     var segStart = Math.Max(clip.Start, options.From);
                     var segEnd = Math.Min(clip.End + tail, options.To);
                     // 전환 도중부터 그리면 전환 시간이 맞도록 클립 처음부터 디코드한다(앞부분은 바탕 시작 전이라 버려짐)
@@ -160,7 +163,7 @@ namespace VideoEditor.Core
                     if (clip.Opacity < 0.999)
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",colorchannelmixer=aa={0}", N(Math.Max(0, clip.Opacity)));
                     // 디졸브: 앞 클립(밑에 더 그려짐) 위로 이 클립이 서서히 나타난다
-                    if (transition > 0 && segStart == clip.Start && !Transitions.UsesXfade(clip.Transition))
+                    if (transition > 0 && segStart == clip.Start && effect.IsDissolve)
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",fade=t=in:st=0:d={0}:alpha=1", N(rate.ToSeconds(transition)));
                     if (!xfadeIn && !xfadeOut)
                     {
@@ -194,8 +197,8 @@ namespace VideoEditor.Core
                             groupStart = clip.Start;
                         }
                         // offset: 묶음 흐름에서 이 클립(=전환)이 시작하는 초
-                        filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}][{1}]xfade=transition={2}:duration={3}:offset={4}[x{5}]",
-                            group, piece, Transitions.FilterName(clip.Transition), N(rate.ToSeconds(transition)), N(rate.ToSeconds(clip.Start - groupStart)), n));
+                        filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}][{1}]xfade={2}:duration={3}:offset={4}[x{5}]",
+                            group, piece, Transitions.XfadeOption(effect), N(rate.ToSeconds(transition)), N(rate.ToSeconds(clip.Start - groupStart)), n));
                         group = "x" + n;
                     }
                     else

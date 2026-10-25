@@ -17,7 +17,7 @@ namespace VideoEditor.Tests
     public class TransitionTests
     {
         /// <summary>a.mp4 [0, 60) → b.mp4 [60, 120) — b 앞에 kind 전환 15프레임(0.5초).</summary>
-        private static (Project Project, Clip A, Clip B) TwoClips(TransitionKind kind, long frames = 15)
+        private static (Project Project, Clip A, Clip B) TwoClips(string kind, long frames = 15)
         {
             var project = TestProjects.Empty();
             var a = TestProjects.VideoClip(0, 60, "a.mp4");
@@ -43,7 +43,7 @@ namespace VideoEditor.Tests
         [Fact]
         public void Wipe_UsesXfadeBetweenBakedCanvases_AndKeepsTimeline()
         {
-            var (project, a, b) = TwoClips(TransitionKind.WipeLeft);
+            var (project, a, b) = TwoClips("WipeLeft");
             var plan = Build(project, 0, 120);
             // 타임라인 위치는 그대로, 앞 클립만 전환 길이만큼 더 읽는다(꼬리)
             Assert.Equal(60, b.Start);
@@ -60,7 +60,7 @@ namespace VideoEditor.Tests
         [Fact]
         public void WindowInsideTransition_StartsBothAtTransitionStart()
         {
-            var (project, _, _) = TwoClips(TransitionKind.SlideUp);
+            var (project, _, _) = TwoClips("SlideUp");
             var plan = Build(project, 65, 66);
             // a는 전환이 시작하는 60프레임(원본 2초)부터 꼬리 끝까지, b는 자기 처음부터
             Assert.Equal(new[] { "-ss", "2", "-t", "0.5", "-i", "a.mp4" }, plan.Inputs[0]);
@@ -73,7 +73,7 @@ namespace VideoEditor.Tests
         [Fact]
         public void WindowOutsideTransition_HasNoXfade()
         {
-            var (project, _, _) = TwoClips(TransitionKind.WipeLeft);
+            var (project, _, _) = TwoClips("WipeLeft");
             var before = Build(project, 10, 11);
             Assert.DoesNotContain("xfade", before.Filter);
             Assert.Single(before.Inputs);
@@ -88,7 +88,7 @@ namespace VideoEditor.Tests
             var project = TestProjects.Empty();
             var a = TestProjects.VideoClip(0, 60, "a.mp4");
             TimelineEdits.Place(project, project.MainTrack, a, 0);
-            TimelineEdits.SetTransition(project, a, TransitionKind.CircleOpen, 15);
+            TimelineEdits.SetTransition(project, a, "CircleOpen", 15);
             var plan = Build(project, 0, 60);
             Assert.Contains("color=c=black@0.0:s=640x360:r=30/1:d=0.5,format=gbrap[t0]", plan.Filter);
             Assert.Contains("[t0][k0]xfade=transition=circleopen:duration=0.5:offset=0[x0]", plan.Filter);
@@ -97,10 +97,10 @@ namespace VideoEditor.Tests
         [Fact]
         public void ChainedTransitions_FormOneGroup()
         {
-            var (project, _, b) = TwoClips(TransitionKind.WipeRight);
+            var (project, _, b) = TwoClips("WipeRight");
             var c = TestProjects.VideoClip(0, 60, "c.mp4");
             TimelineEdits.Place(project, project.MainTrack, c, 999);
-            TimelineEdits.SetTransition(project, c, TransitionKind.ZoomIn, 30);
+            TimelineEdits.SetTransition(project, c, "ZoomIn", 30);
             var plan = Build(project, 0, 180);
             Assert.Contains("[k0][k1]xfade=transition=wiperight:duration=0.5:offset=2[x1]", plan.Filter);
             Assert.Contains("[x1][k2]xfade=transition=zoomin:duration=1:offset=4[x2]", plan.Filter);
@@ -110,10 +110,10 @@ namespace VideoEditor.Tests
         [Fact]
         public void DissolveThenWipe_MixesAlphaFadeAndXfade()
         {
-            var (project, _, b) = TwoClips(TransitionKind.Fade);
+            var (project, _, b) = TwoClips("Fade");
             var c = TestProjects.VideoClip(0, 60, "c.mp4");
             TimelineEdits.Place(project, project.MainTrack, c, 999);
-            TimelineEdits.SetTransition(project, c, TransitionKind.WipeLeft, 15);
+            TimelineEdits.SetTransition(project, c, "WipeLeft", 15);
             var plan = Build(project, 0, 180);
             // b는 a 위로 서서히 나타나고(디졸브), 그 b에서 c로 닦아낸다
             Assert.Contains("fade=t=in:st=0:d=0.5:alpha=1", plan.Filter);
@@ -124,20 +124,185 @@ namespace VideoEditor.Tests
         [Fact]
         public void Dissolve_StillUsesAlphaFade()
         {
-            var (project, _, _) = TwoClips(TransitionKind.Fade);
+            var (project, _, _) = TwoClips("Fade");
             var plan = Build(project, 0, 120);
             Assert.Contains("fade=t=in:st=0:d=0.5:alpha=1", plan.Filter);
             Assert.DoesNotContain("xfade", plan.Filter);
         }
 
         [Fact]
-        public void EveryKind_HasNameAndFilter()
+        public void ExpressionTransition_UsesCustomXfade()
         {
-            Assert.Equal(Enum.GetValues<TransitionKind>().Length, Transitions.All.Count);
-            Assert.Equal(Transitions.All.Count, Transitions.All.Select(Transitions.Name).Distinct().Count());
-            Assert.All(Transitions.All, kind => Assert.Matches("^[a-z]+$", Transitions.FilterName(kind)));
-            Assert.False(Transitions.UsesXfade(TransitionKind.Fade));
-            Assert.True(Transitions.UsesXfade(TransitionKind.WipeLeft));
+            var (project, _, _) = TwoClips("Heart");
+            var plan = Build(project, 0, 120);
+            Assert.Contains("[k0][k1]xfade=transition=custom:expr='if(lte(pow(", plan.Filter);
+            Assert.Contains("),B,A)':duration=0.5:offset=2[x1]", plan.Filter);
+        }
+
+        [Fact]
+        public void OlderFfmpeg_FallsBackToDissolve()
+        {
+            // 덮기는 FFmpeg 7부터 — 6이면 디졸브로 그린다(모르면 그대로)
+            var (project, _, _) = TwoClips("CoverLeft");
+            var older = RenderGraph.Build(project, new RenderOptions { From = 0, To = 120, Width = 640, Height = 360, Audio = false, FfmpegMajor = 6 });
+            Assert.DoesNotContain("xfade", older.Filter);
+            Assert.Contains("fade=t=in:st=0:d=0.5:alpha=1", older.Filter);
+            var newer = RenderGraph.Build(project, new RenderOptions { From = 0, To = 120, Width = 640, Height = 360, Audio = false, FfmpegMajor = 7 });
+            Assert.Contains("xfade=transition=coverleft:duration=0.5", newer.Filter);
+            Assert.Contains("xfade=transition=coverleft", Build(project, 0, 120).Filter);
+        }
+
+        // ---------- 효과 데이터 ----------
+
+        [Fact]
+        public void BuiltInData_IsValid_AndKeepsEarlierIds()
+        {
+            var all = Transitions.All.Where(d => d.BuiltIn).ToList();
+            Assert.True(all.Count >= 60, "기본 효과 " + all.Count);
+            Assert.Equal("Fade", all[0].Id);
+            Assert.True(all[0].IsDissolve);
+            Assert.Equal(all.Count, all.Select(d => d.Id).Distinct().Count());
+            Assert.Equal(all.Count, all.Select(d => d.Name).Distinct().Count());
+            Assert.All(all, d => Assert.False(string.IsNullOrEmpty(d.Group)));
+            Assert.All(all, d => Assert.NotNull(Transitions.Check(d, out _)));
+            // 효과 목록이 코드에 있던 때 저장한 프로젝트의 효과가 그대로 열린다
+            foreach (var id in new[] { "Fade", "FadeBlack", "FadeWhite", "Dissolve", "WipeLeft", "WipeRight", "WipeUp", "WipeDown", "SlideLeft", "SlideRight",
+                "SlideUp", "SlideDown", "SmoothLeft", "SmoothRight", "CircleOpen", "CircleClose", "HorizontalOpen", "VerticalOpen", "Radial", "ZoomIn",
+                "Pixelize", "Blur", "Diagonal" })
+                Assert.True(Transitions.Find(id)?.BuiltIn == true, id);
+            Assert.Contains(all, d => d.IsExpression);
+            Assert.Equal(5, Transitions.Find("WipeLeft").Ffmpeg);
+            Assert.Equal(7, Transitions.Find("CoverLeft").Ffmpeg);
+        }
+
+        [Theory]
+        [InlineData("if(lt(X,W*P),A,B)", true)]
+        [InlineData("if(lt(hypot(X-W/2,Y-H/2),(1-P)*W),b0(X,Y),a1(X,H-Y))", true)]
+        [InlineData("if(lt(X,W*P),A,B)':x='1", false)]
+        [InlineData("A[out];[in]B", false)]
+        [InlineData("if(lt(X,W*P),A,B);1", false)]
+        [InlineData("A\\B", false)]
+        [InlineData("while(1,A)", false)]
+        [InlineData("st(0,X)", false)]
+        [InlineData("random(0)*A", false)]
+        [InlineData("if(lt(X,W*P),A,B", false)]
+        [InlineData("1e9*A", false)]
+        [InlineData("Z*A", false)]
+        [InlineData("", false)]
+        public void Check_Expr_AllowsOnlyKnownNamesAndCharacters(string expr, bool ok)
+        {
+            var def = Transitions.Check(new TransitionDef { Id = "Test", Name = "시험", Expr = expr }, out var error);
+            Assert.True(ok == (def != null), error);
+        }
+
+        [Fact]
+        public void Check_RejectsBadFields_AndRaisesFfmpegVersion()
+        {
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "1a", Name = "가", Xfade = "fade" }, out _));
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "a b", Name = "가", Xfade = "fade" }, out _));
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = "  ", Xfade = "fade" }, out _));
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = new string('가', 41), Xfade = "fade" }, out _));
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = "가", Xfade = "fade", Expr = "A" }, out _));
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = "가" }, out _));
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = "가", Xfade = "wipeleft:offset=9" }, out var error));
+            Assert.Contains("모르는 xfade", error);
+            var def = Transitions.Check(new TransitionDef { Id = "A", Name = " 덮기 ", Xfade = "coverleft", Ffmpeg = 5 }, out _);
+            Assert.Equal(("덮기", 7), (def.Name, def.Ffmpeg));
+            Assert.False(def.BuiltIn);
+        }
+
+        [Fact]
+        public void PreviewArguments_UseTheSameXfadeOption()
+        {
+            var args = Transitions.PreviewArguments(Transitions.Find("Heart")).ToList();
+            var graph = args[args.IndexOf("-filter_complex") + 1];
+            Assert.Contains("[a][b]xfade=transition=custom:expr='if(", graph);
+            Assert.EndsWith("tile=15x1", graph);
+            Assert.NotEqual(Transitions.PreviewKey(Transitions.Find("WipeLeft")), Transitions.PreviewKey(Transitions.Find("WipeRight")));
+            // 그리는 방법이 같으면 같은 캐시를 쓴다
+            Assert.Equal(Transitions.PreviewKey(Transitions.Find("WipeLeft")), Transitions.PreviewKey(new TransitionDef { Id = "Other", Name = "다른", Xfade = "wipeleft" }));
+        }
+
+        /// <summary>사용자 효과 폴더를 잠시 만들어 읽고, 끝나면 기본 효과만 남긴다.</summary>
+        private static void WithUserFolder(Action<string> body, params (string Name, string Json)[] files)
+        {
+            var folder = Path.Combine(Path.GetTempPath(), "fv-user-transitions-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try
+            {
+                foreach (var (name, json) in files)
+                    File.WriteAllText(Path.Combine(folder, name), json);
+                body(folder);
+            }
+            finally
+            {
+                Transitions.LoadFolder(null);
+                Directory.Delete(folder, true);
+            }
+        }
+
+        private const string RingExpr = "if(lt(abs(hypot(X-W/2,Y-H/2)/H-0.3),(1-P)*0.8),B,A)";
+
+        [Fact]
+        public void UserFolder_AddsTransitions_AndSkipsBadOnes()
+        {
+            WithUserFolder(folder =>
+            {
+                var errors = Transitions.LoadFolder(folder);
+                Assert.Equal(3, errors.Count);
+                Assert.Contains(errors, e => e.StartsWith("a.json: id 'WipeLeft'", StringComparison.Ordinal));
+                Assert.Contains(errors, e => e.StartsWith("a.json: Bad: expr에 쓸 수 없는 이름 'while'", StringComparison.Ordinal));
+                Assert.Contains(errors, e => e.StartsWith("b.json: JSON 형식이 아닙니다", StringComparison.Ordinal));
+                var ring = Transitions.Find("Ring");
+                Assert.False(ring.BuiltIn);
+                Assert.Equal(("고리", "내 효과"), (ring.Name, ring.Group));
+                Assert.Equal(Transitions.All.Count(d => d.BuiltIn) + 1, Transitions.All.Count);
+                Assert.Same(ring, Transitions.All[Transitions.All.Count - 1]);
+            },
+            ("a.json", "{ \"transitions\": [ { \"id\": \"Ring\", \"name\": \"고리\", \"expr\": \"" + RingExpr + "\" }, // 주석도 된다\n"
+                + "{ \"id\": \"WipeLeft\", \"name\": \"겹침\", \"xfade\": \"wipeleft\" }, { \"id\": \"Bad\", \"name\": \"나쁨\", \"expr\": \"while(1,A)\" }, ] }"),
+            ("b.json", "{ not json"));
+            Assert.Null(Transitions.Find("Ring"));
+        }
+
+        [Fact]
+        public void UserTransition_TravelsWithTheProject_AndTamperedDefinitionIsDropped()
+        {
+            WithUserFolder(folder =>
+            {
+                Transitions.LoadFolder(folder);
+                var (project, _, b) = TwoClips("Ring");
+                Assert.Equal("고리", b.TransitionDef.Name);
+                // 기본 효과는 정의를 저장하지 않는다(id만)
+                var (plain, _, wipe) = TwoClips("WipeLeft");
+                Assert.Null(wipe.TransitionDef);
+                Assert.DoesNotContain("TransitionDef", ProjectFile.Snapshot(plain));
+                var json = ProjectFile.Snapshot(project);
+
+                // 그 효과 파일이 없는 PC에서 열어도 같은 효과로 그린다
+                Transitions.LoadFolder(null);
+                Assert.Null(Transitions.Find("Ring"));
+                var loaded = ProjectFile.FromSnapshot(json);
+                var clip = loaded.MainTrack.Clips[1];
+                Assert.Equal("고리", Transitions.Name(clip));
+                Assert.Contains("xfade=transition=custom:expr='" + RingExpr + "':duration=0.5:offset=2", Build(loaded, 0, 120).Filter);
+                // 다시 저장해도 정의가 남는다
+                Assert.Contains("\"Expr\"", ProjectFile.Snapshot(loaded));
+
+                // 함께 저장된 정의를 고쳐 필터 그래프를 벗어나려 하면 정의를 버리고 디졸브로 그린다(id는 남김)
+                var node = JsonNode.Parse(json);
+                node["VideoTracks"][0]["Clips"][1]["TransitionDef"]["Expr"] = "A',movie='x";
+                var tampered = ProjectFile.FromSnapshot(node.ToJsonString());
+                Assert.Null(tampered.MainTrack.Clips[1].TransitionDef);
+                Assert.Equal("Ring", tampered.MainTrack.Clips[1].Transition);
+                var plan = Build(tampered, 0, 120);
+                Assert.DoesNotContain("xfade", plan.Filter);
+                Assert.DoesNotContain("movie", plan.Filter);
+                // 정의 자리에 엉뚱한 값이 있어도 프로젝트는 열린다
+                node["VideoTracks"][0]["Clips"][1]["TransitionDef"] = "이상한 값";
+                Assert.Null(ProjectFile.FromSnapshot(node.ToJsonString()).MainTrack.Clips[1].TransitionDef);
+            },
+            ("shapes.json", "{ \"transitions\": [ { \"id\": \"Ring\", \"name\": \"고리\", \"group\": \"모양\", \"expr\": \"" + RingExpr + "\" } ] }"));
         }
 
         // ---------- 편집 ----------
@@ -145,22 +310,24 @@ namespace VideoEditor.Tests
         [Fact]
         public void SetTransition_ClampsToClipLength_ZeroRemoves_KeepsPositions()
         {
-            var (project, a, b) = TwoClips(TransitionKind.Pixelize, 999);
+            var (project, a, b) = TwoClips("Pixelize", 999);
             Assert.Equal(60, b.TransitionIn);
-            Assert.Equal(TransitionKind.Pixelize, b.Transition);
+            Assert.Equal("Pixelize", b.Transition);
             Assert.Equal((0L, 60L), (a.Start, b.Start));
-            TimelineEdits.SetTransition(project, b, TransitionKind.Pixelize, 0);
+            TimelineEdits.SetTransition(project, b, "Pixelize", 0);
             Assert.Equal(0, b.TransitionIn);
         }
 
         [Fact]
-        public void SetTransition_RejectsSubtitlesAndLockedTracks()
+        public void SetTransition_RejectsSubtitlesLockedTracksAndUnknownIds()
         {
-            var (project, _, b) = TwoClips(TransitionKind.WipeLeft);
+            var (project, _, b) = TwoClips("WipeLeft");
+            Assert.Throws<EditException>(() => TimelineEdits.SetTransition(project, b, "NoSuchEffect", 15));
+            Assert.Equal("WipeLeft", b.Transition);
             var subtitles = TimelineEdits.ImportSubtitles(project, new[] { new SubtitleCue { Start = 0, End = 1, Text = "가" } });
-            Assert.Throws<EditException>(() => TimelineEdits.SetTransition(project, subtitles.Clips[0], TransitionKind.WipeLeft, 15));
+            Assert.Throws<EditException>(() => TimelineEdits.SetTransition(project, subtitles.Clips[0], "WipeLeft", 15));
             project.MainTrack.Locked = true;
-            Assert.Throws<EditException>(() => TimelineEdits.SetTransition(project, b, TransitionKind.SlideLeft, 15));
+            Assert.Throws<EditException>(() => TimelineEdits.SetTransition(project, b, "SlideLeft", 15));
         }
 
         [Fact]
@@ -170,10 +337,10 @@ namespace VideoEditor.Tests
             var a = TestProjects.Add(project, project.MainTrack, 0, 30, "a.mp4");
             var b = TestProjects.Add(project, project.MainTrack, 30, 30, "b.mp4");
             var c = TestProjects.Add(project, project.MainTrack, 90, 30, "c.mp4");
-            var count = TimelineEdits.SetTransitionsBetween(project, project.MainTrack, TransitionKind.FadeBlack, 9);
+            var count = TimelineEdits.SetTransitionsBetween(project, project.MainTrack, "FadeBlack", 9);
             Assert.Equal(1, count);
             Assert.Equal(0, a.TransitionIn);
-            Assert.Equal((TransitionKind.FadeBlack, 9L), (b.Transition, b.TransitionIn));
+            Assert.Equal(("FadeBlack", 9L), (b.Transition, b.TransitionIn));
             Assert.Equal(0, c.TransitionIn);
         }
 
@@ -187,16 +354,16 @@ namespace VideoEditor.Tests
                 TimelineEdits.Place(p, p.MainTrack, TestProjects.VideoClip(0, 60, "a.mp4"), 0);
                 TimelineEdits.Place(p, p.MainTrack, b, 999);
             });
-            Assert.True(session.Execute(p => TimelineEdits.SetTransition(p, p.FindClip(b.Id), TransitionKind.Radial, 20)));
-            Assert.Equal(TransitionKind.Radial, session.Project.FindClip(b.Id).Transition);
+            Assert.True(session.Execute(p => TimelineEdits.SetTransition(p, p.FindClip(b.Id), "Radial", 20)));
+            Assert.Equal("Radial", session.Project.FindClip(b.Id).Transition);
             Assert.True(session.Undo());
             Assert.Equal(0, session.Project.FindClip(b.Id).TransitionIn);
         }
 
         [Fact]
-        public void ProjectFile_KeepsKind_AndUnknownBecomesDissolve()
+        public void ProjectFile_KeepsId_AndInvalidBecomesDissolve()
         {
-            var (project, _, _) = TwoClips(TransitionKind.SmoothRight);
+            var (project, _, _) = TwoClips("SmoothRight");
             var json = JsonNode.Parse(ProjectFile.Snapshot(project)).AsObject();
             Assert.Equal("SmoothRight", (string)json["VideoTracks"][0]["Clips"][1]["Transition"]);
             var folder = Path.Combine(Path.GetTempPath(), "fv-transition-" + Guid.NewGuid().ToString("N"));
@@ -205,13 +372,23 @@ namespace VideoEditor.Tests
             {
                 var path = Path.Combine(folder, "a" + ProjectFile.Extension);
                 File.WriteAllText(path, json.ToJsonString());
-                Assert.Equal(TransitionKind.SmoothRight, ProjectFile.Load(path).MainTrack.Clips[1].Transition);
+                Assert.Equal("SmoothRight", ProjectFile.Load(path).MainTrack.Clips[1].Transition);
                 json["VideoTracks"][0]["Clips"][1]["Transition"] = 999;
                 json["VideoTracks"][0]["Clips"][1]["TransitionIn"] = -5;
                 File.WriteAllText(path, json.ToJsonString());
+                // 숫자 자리(형식이 다른 값)여도 프로젝트는 열리고 디졸브로
                 var loaded = ProjectFile.Load(path).MainTrack.Clips[1];
-                Assert.Equal(TransitionKind.Fade, loaded.Transition);
+                Assert.Equal("Fade", loaded.Transition);
                 Assert.Equal(0, loaded.TransitionIn);
+                json["VideoTracks"][0]["Clips"][1]["Transition"] = "a b;c";
+                File.WriteAllText(path, json.ToJsonString());
+                Assert.Equal("Fade", ProjectFile.Load(path).MainTrack.Clips[1].Transition);
+                // 모르는 효과(다른 PC의 효과 파일)는 id를 남기고 디졸브로 그린다
+                json["VideoTracks"][0]["Clips"][1]["Transition"] = "SomeoneElsesEffect";
+                File.WriteAllText(path, json.ToJsonString());
+                var unknown = ProjectFile.Load(path);
+                Assert.Equal("SomeoneElsesEffect", unknown.MainTrack.Clips[1].Transition);
+                Assert.Same(Transitions.Dissolve, Transitions.Resolve(unknown.MainTrack.Clips[1]));
             }
             finally
             {
@@ -231,7 +408,7 @@ namespace VideoEditor.Tests
         }
 
         /// <summary>파란 동영상 [0, 60) → 빨간 사진 [60, 120), 사진 앞에 kind 전환 30프레임.</summary>
-        private static Project BlueToRed(TransitionKind kind)
+        private static Project BlueToRed(string kind)
         {
             var project = TestProjects.Empty();
             project.Width = 320;
@@ -265,7 +442,7 @@ namespace VideoEditor.Tests
         [FfmpegFact]
         public void Wipe_MidwayShowsBothSides_ThenRed()
         {
-            var project = BlueToRed(TransitionKind.WipeLeft);
+            var project = BlueToRed("WipeLeft");
             Assert.Equal(60, project.MainTrack.Clips[1].Start);
             var before = Frame(project, 50);
             var mid = Frame(project, 75);
@@ -283,7 +460,7 @@ namespace VideoEditor.Tests
         {
             // 한 장만 그린 미리 보기와 재생처럼 이어 그린 같은 프레임이 같아야 한다(전환 도중부터 그려도 진행이 맞음)
             // 61·64·70처럼 시작 초를 TB로 나눈 값이 0.99999가 되는 프레임도 본다(잘리면 한 프레임 앞이 나온다)
-            var project = BlueToRed(TransitionKind.CircleOpen);
+            var project = BlueToRed("CircleOpen");
             const int size = 320 * 240 * 4;
             var pixels = new byte[size * 90];
             List<string> files;
@@ -334,7 +511,7 @@ namespace VideoEditor.Tests
             var red = TimelineEdits.CreateClip(FfmpegMedia.Probe(FfmpegMedia.RedImage), project.Rate, 0, 60);
             red.Scale = 4;
             TimelineEdits.Place(project, project.MainTrack, red, 0);
-            TimelineEdits.SetTransition(project, red, TransitionKind.Blur, 30);
+            TimelineEdits.SetTransition(project, red, "Blur", 30);
             var center = Pixel(Frame(project, 15), 160, 120);
             _out.WriteLine("가운데 " + center);
             Assert.InRange(center.R, 100, 160);
@@ -349,12 +526,57 @@ namespace VideoEditor.Tests
             var red = TimelineEdits.CreateClip(FfmpegMedia.Probe(FfmpegMedia.RedImage), project.Rate, 0, 60);
             red.Scale = 4;
             TimelineEdits.Place(project, project.MainTrack, red, 0);
-            TimelineEdits.SetTransition(project, red, TransitionKind.CircleOpen, 30);
+            TimelineEdits.SetTransition(project, red, "CircleOpen", 30);
             var mid = Frame(project, 15);
             _out.WriteLine("가운데 " + Pixel(mid, 160, 120) + " 모서리 " + Pixel(mid, 2, 2));
             Assert.True(IsRed(Pixel(mid, 160, 120)));
             var corner = Pixel(mid, 2, 2);
             Assert.True(corner.R < 30 && corner.G < 30 && corner.B < 30, "모서리는 아직 검정 " + corner);
+        }
+
+        [FfmpegFact]
+        public void ExpressionTransition_Heart_OpensFromTheMiddle()
+        {
+            // 하트가 커지며 새 화면(빨강)이 드러난다 — 가운데는 이미 빨강, 아래 모서리는 아직 파랑
+            var project = BlueToRed("Heart");
+            var frame = Frame(project, 82);
+            _out.WriteLine("가운데 " + Pixel(frame, 160, 120) + " 아래 모서리 " + Pixel(frame, 2, 237));
+            Assert.True(IsRed(Pixel(frame, 160, 120)));
+            Assert.True(IsBlue(Pixel(frame, 2, 237)));
+        }
+
+        [FfmpegFact]
+        public async Task EveryBuiltIn_RendersAPreviewStrip()
+        {
+            // 데이터에 적은 효과가 실제 FFmpeg에서 그려지는지(이 FFmpeg보다 새 버전이 필요한 효과는 건너뜀)
+            var tool = FfmpegMedia.Tool;
+            var defs = Transitions.All.Where(d => d.BuiltIn && d.Ffmpeg <= tool.MajorVersion).ToList();
+            Assert.NotEmpty(defs);
+            var gate = new SemaphoreSlim(4);
+            var failures = new System.Collections.Concurrent.ConcurrentBag<string>();
+            await Task.WhenAll(defs.Select(async def =>
+            {
+                await gate.WaitAsync();
+                try
+                {
+                    var png = await MediaPictures.TransitionStrip(tool, def, CancellationToken.None);
+                    // PNG 머리(IHDR)의 너비·높이: 칸 15개를 가로로
+                    var width = png[16] << 24 | png[17] << 16 | png[18] << 8 | png[19];
+                    var height = png[20] << 24 | png[21] << 16 | png[22] << 8 | png[23];
+                    if (width != Transitions.PreviewWidth * Transitions.PreviewFrames || height != Transitions.PreviewHeight)
+                        failures.Add(def.Id + " " + width + "x" + height);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(def.Id + ": " + ex.Message);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }));
+            _out.WriteLine(defs.Count + "개 효과(FFmpeg " + tool.MajorVersion + ")");
+            Assert.Empty(failures);
         }
     }
 }

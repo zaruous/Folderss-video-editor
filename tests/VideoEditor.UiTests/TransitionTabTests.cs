@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -6,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using VideoEditor.UiTests.Headless;
 using Xunit;
 using static VideoEditor.UiTests.EditorTestKit;
@@ -41,8 +43,25 @@ namespace VideoEditor.UiTests
 
         private static void Choose(Window window, string kind)
         {
-            var list = Ui.ById<ListBox>(window, "TransitionList");
-            list.SelectedItem = list.Items.Cast<ListBoxItem>().First(i => System.Windows.Automation.AutomationProperties.GetAutomationId(i) == "Transition_" + kind);
+            Ui.ById<ListBox>(window, "TransitionList").SelectedItem = Tile(window, kind);
+        }
+
+        private static ListBoxItem Tile(Window window, string id)
+        {
+            return Ui.ById<ListBox>(window, "TransitionList").Items.Cast<ListBoxItem>()
+                .FirstOrDefault(i => System.Windows.Automation.AutomationProperties.GetAutomationId(i) == "Transition_" + id);
+        }
+
+        private static List<string> Tiles(Window window)
+        {
+            return Ui.ById<ListBox>(window, "TransitionList").Items.Cast<ListBoxItem>().Select(System.Windows.Automation.AutomationProperties.GetAutomationId).ToList();
+        }
+
+        /// <summary>효과 썸네일 그림(아직 없으면 null).</summary>
+        private static ImageSource Thumbnail(Window window, string id)
+        {
+            var tile = Tile(window, id);
+            return tile == null ? null : ((Image)((Border)((StackPanel)tile.Content).Children[0]).Child).Source;
         }
 
         [EditorFact]
@@ -65,6 +84,27 @@ namespace VideoEditor.UiTests
                     Ui.ById<TabControl>(window, "MediaTabs").SelectedItem = Ui.ById<TabItem>(window, "EffectsTab");
                 });
                 await ui.WaitFor(() => Ui.ById<ListBox>(window, "TransitionList"), Wait, "효과 목록");
+
+                // 효과마다 실제로 그린 썸네일(미리 보기 띠의 가운데 칸)이 붙고, 마우스를 올리면 칸이 바뀌며 움직인다
+                await ui.WaitUntil(() => Thumbnail(window, "WipeLeft") != null && Thumbnail(window, "Heart") != null, Wait, "효과 썸네일");
+                var still = ui.Run(() => Thumbnail(window, "WipeLeft"));
+                var first = ui.Run(() =>
+                {
+                    Tile(window, "WipeLeft").RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = Mouse.MouseEnterEvent });
+                    return Thumbnail(window, "WipeLeft");
+                });
+                Assert.NotSame(still, first);
+                await ui.WaitUntil(() => !ReferenceEquals(Thumbnail(window, "WipeLeft"), first), Wait, "썸네일 움직임");
+                ui.Run(() => Tile(window, "WipeLeft").RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = Mouse.MouseLeaveEvent }));
+                Assert.Same(still, ui.Run(() => Thumbnail(window, "WipeLeft")));
+
+                // 묶음으로 거르기
+                ui.Run(() => Ui.ById<ComboBox>(window, "TransitionGroup").SelectedItem = "모양");
+                await ui.WaitUntil(() => Tiles(window).Contains("Transition_Heart") && !Tiles(window).Contains("Transition_WipeLeft"), Wait, "모양 묶음");
+                await ui.WaitUntil(() => Thumbnail(window, "Diamond") != null, Wait, "모양 썸네일");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "transition-thumbnails-shapes"));
+                ui.Run(() => Ui.ById<ComboBox>(window, "TransitionGroup").SelectedItem = "모든 효과");
+                await ui.WaitUntil(() => Tiles(window).Contains("Transition_WipeLeft"), Wait, "모든 효과");
                 ui.Run(() =>
                 {
                     Choose(window, "WipeLeft");
@@ -137,6 +177,42 @@ namespace VideoEditor.UiTests
                 ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
                 await ui.WaitUntil(() => Length(window) == 15, Wait, "실행 취소");
                 Assert.Equal(start, ui.Run(() => (long)Get(Red(window), "Start")));
+
+                // 사용자 효과: 효과 폴더에 JSON을 넣고 [다시 읽기] → 효과가 늘어난다(잘못된 정의는 건너뛰고 알림)
+                var folder = Path.Combine(plugin.Manager.DataDirectory, "transitions");
+                Directory.CreateDirectory(folder);
+                var file = Path.Combine(folder, "ui-test.json");
+                File.WriteAllText(file, "{ \"transitions\": [ { \"id\": \"UiRing\", \"name\": \"시험 고리\", \"expr\": \"if(lt(abs(hypot(X-W/2,Y-H/2)/H-0.3),(1-P)*0.8),B,A)\" },"
+                    + " { \"id\": \"Bad\", \"name\": \"나쁨\", \"expr\": \"while(1,A)\" } ] }");
+                try
+                {
+                    ui.Run(() => Ui.Click(Ui.ById<Button>(window, "TransitionReloadButton")));
+                    await ui.WaitUntil(() => Tiles(window).Contains("Transition_UiRing"), Wait, "사용자 효과");
+                    ui.Run(() =>
+                    {
+                        Assert.StartsWith("전환 효과를 다시 읽었습니다", Status(window));
+                        Assert.Contains("건너뜀 1개", Status(window));
+                        Assert.Equal(Visibility.Visible, Ui.ById<TextBlock>(window, "TransitionProblems").Visibility);
+                        SelectClip(window, n => n.Contains("red.png"));
+                        Choose(window, "UiRing");
+                        Ui.Click(Ui.ById<Button>(window, "TransitionApplyButton"));
+                    });
+                    await ui.WaitUntil(() => Kind(window) == "UiRing", Wait, "사용자 효과 넣기");
+                    await ui.WaitUntil(() => Thumbnail(window, "UiRing") != null, Wait, "사용자 효과 썸네일");
+                }
+                finally
+                {
+                    File.Delete(file);
+                }
+                // 효과 파일이 없어져도 클립에 정의가 함께 있어 이름과 그리기가 그대로다
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "TransitionReloadButton")));
+                await ui.WaitUntil(() => !Tiles(window).Contains("Transition_UiRing"), Wait, "사용자 효과 빠짐");
+                ui.Run(() =>
+                {
+                    Assert.NotNull(Get(Red(window), "TransitionDef"));
+                    Assert.Contains(Clips(window), n => n.StartsWith("동영상 1 · red.png", StringComparison.Ordinal) && n.EndsWith("· 전환 시험 고리 1초", StringComparison.Ordinal));
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<TextBlock>(window, "TransitionProblems").Visibility);
+                });
                 Assert.Empty(ui.TakeErrors());
             }
             finally

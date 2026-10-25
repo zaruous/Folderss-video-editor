@@ -376,7 +376,7 @@ namespace VideoEditor.Ui
             if (transition != null)
             {
                 Cursor = Cursors.Hand;
-                var tip = "전환: " + Transitions.Name(transition.Transition) + " · " + UiKit.Number(_session.Project.Rate.ToSeconds(transition.TransitionIn)) + "초 (누르면 이 클립을 골라 속성에서 바꿉니다)";
+                var tip = "전환: " + Transitions.Name(transition) + " · " + UiKit.Number(_session.Project.Rate.ToSeconds(transition.TransitionIn)) + "초 (누르면 이 클립을 골라 속성에서 바꿉니다)";
                 if (!Equals(ToolTip, tip))
                     ToolTip = tip;
                 return;
@@ -439,7 +439,7 @@ namespace VideoEditor.Ui
             if (transition != null)
             {
                 _session.Select(new[] { transition });
-                StatusMessage?.Invoke("전환: " + Transitions.Name(transition.Transition) + " · " + UiKit.Number(_session.Project.Rate.ToSeconds(transition.TransitionIn))
+                StatusMessage?.Invoke("전환: " + Transitions.Name(transition) + " · " + UiKit.Number(_session.Project.Rate.ToSeconds(transition.TransitionIn))
                                       + "초 — 속성 [화면] 탭에서 효과·길이를 바꾸거나 [효과] 탭에서 다른 효과를 넣습니다.");
                 return;
             }
@@ -875,7 +875,7 @@ namespace VideoEditor.Ui
             var glyph = Text("⇄", 12, TransitionGlyphBrush, true);
             dc.DrawText(glyph, new Point(badge.Left + (badge.Width - glyph.Width) / 2, badge.Top + (badge.Height - glyph.Height) / 2));
             // 이름은 배지 오른쪽(클립 안에 자리가 있을 때)
-            var name = Text(Transitions.Name(clip.Transition) + " " + UiKit.Number(rate.ToSeconds(clip.TransitionIn)) + "초", 10, Brushes.White, true);
+            var name = Text(Transitions.Name(clip) + " " + UiKit.Number(rate.ToSeconds(clip.TransitionIn)) + "초", 10, Brushes.White, true);
             if (rect.Width > BadgeWidth / 2 + name.Width + 10 && rect.Height > 40)
             {
                 var label = new Rect(badge.Right + 3, rect.Bottom - name.Height - 4, name.Width + 6, name.Height + 2);
@@ -1057,7 +1057,7 @@ namespace VideoEditor.Ui
                 var name = _track.Name + " · " + _clip.Name + " · " + rate.Timecode(_clip.Start) + "–" + rate.Timecode(_clip.End);
                 // 화면 읽기 프로그램·시험에도 전환이 들어 있다는 것을 알린다
                 if (_clip.TransitionIn > 0 && _clip.IsVisual && !_track.Subtitles)
-                    name += " · 전환 " + Transitions.Name(_clip.Transition) + " " + UiKit.Number(rate.ToSeconds(_clip.TransitionIn)) + "초";
+                    name += " · 전환 " + Transitions.Name(_clip) + " " + UiKit.Number(rate.ToSeconds(_clip.TransitionIn)) + "초";
                 return name;
             }
 
