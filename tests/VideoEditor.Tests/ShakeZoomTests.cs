@@ -90,9 +90,9 @@ namespace VideoEditor.Tests
             Assert.True(ScanLine.Def.AllowsPersonOnly);
             Assert.Equal(new[] { "horizontal", "vertical", "rotate", "speed" }, ShakeZoom.CameraShake.Params.Select(p => p.Key));
             Assert.Equal(new[] { "amount", "speed", "blur" }, ShakeZoom.Earthquake.Params.Select(p => p.Key));
-            Assert.Equal(new[] { "amount", "bpm", "second" }, ShakeZoom.Heartbeat.Params.Select(p => p.Key));
+            Assert.Equal(new[] { "amount", "bpm", "second", "centerx", "centery" }, ShakeZoom.Heartbeat.Params.Select(p => p.Key));
             Assert.Equal(new[] { "zoom", "duration", "start", "centerx", "centery" }, ShakeZoom.PunchZoom.Params.Select(p => p.Key));
-            Assert.Equal(new[] { "zoom", "period", "elastic", "repeat" }, ShakeZoom.ZoomBounce.Params.Select(p => p.Key));
+            Assert.Equal(new[] { "zoom", "period", "elastic", "repeat", "centerx", "centery" }, ShakeZoom.ZoomBounce.Params.Select(p => p.Key));
             Assert.Equal(VideoEffects.All.Count, ids.Distinct().Count());
         }
 
@@ -329,6 +329,23 @@ namespace VideoEditor.Tests
             VideoEffects.SetNumber(effect, "centerx", 0);
             VideoEffects.SetNumber(effect, "centery", 100);
             Assert.Equal((0.0, 360.0), ShakeZoom.PunchZoomCenter(effect, 640, 360));
+        }
+
+        [Fact]
+        public void HeartbeatAndZoomBounce_HaveACenter_DefaultIsTheMiddle_OldProjectsOpenTheSame()
+        {
+            foreach (var def in new[] { ShakeZoom.Heartbeat, ShakeZoom.ZoomBounce, ShakeZoom.PunchZoom })
+            {
+                // 예전 프로젝트(중심 값 없음)는 가운데 — 지금과 같게
+                var old = new ClipEffect { Id = def.Id, Values = new Dictionary<string, double>() };
+                Assert.Equal((320.0, 180.0), ShakeZoom.ZoomCenter(old, def, 640, 360));
+                var effect = VideoEffects.Create(def);
+                VideoEffects.SetNumber(effect, "centerx", 25);
+                VideoEffects.SetNumber(effect, "centery", 100);
+                Assert.Equal((160.0, 360.0), ShakeZoom.ZoomCenter(effect, def, 640, 360));
+                Assert.Equal("%", def.Param("centerx").Unit);
+                Assert.Equal(50, def.Param("centery").Default);
+            }
         }
 
         [Fact]

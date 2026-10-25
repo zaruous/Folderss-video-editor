@@ -43,7 +43,9 @@ namespace VideoEditor.Core
         /// <summary>숫자(슬라이더): 최소·최대·기본값·단위.</summary>
         Number,
         /// <summary>색(#RRGGBB) — 값은 <see cref="ClipEffect.Color"/>에 둔다(효과마다 색은 하나).</summary>
-        Color
+        Color,
+        /// <summary>고르기(콤보): 값은 선택지 번호(0부터)를 숫자로 저장한다 — 숫자 슬라이더였던 예전 값도 가까운 번호로 그대로 열린다.</summary>
+        Choice
     }
 
     /// <summary>효과 매개변수 하나(속성 패널의 한 줄).</summary>
@@ -63,10 +65,18 @@ namespace VideoEditor.Core
         public string DefaultColor { get; set; }
         /// <summary>툴팁 설명.</summary>
         public string Hint { get; set; }
+        /// <summary>고르기 매개변수의 선택지 이름(번호 순서). 다른 종류는 null.</summary>
+        public IReadOnlyList<string> Options { get; set; }
 
         public static EffectParam Number(string key, string name, double min, double max, double value, string unit, string hint)
         {
             return new EffectParam { Key = key, Name = name, Kind = EffectParamKind.Number, Min = min, Max = max, Default = value, Unit = unit, Hint = hint };
+        }
+
+        /// <summary>고르기: 선택지 번호 0 ~ 개수 − 1, 기본은 value번째.</summary>
+        public static EffectParam Choice(string key, string name, IReadOnlyList<string> options, int value, string hint)
+        {
+            return new EffectParam { Key = key, Name = name, Kind = EffectParamKind.Choice, Min = 0, Max = options.Count - 1, Default = value, Unit = "", Options = options, Hint = hint };
         }
 
         public static EffectParam ColorParam(string key, string name, string color, string hint)
@@ -239,16 +249,16 @@ namespace VideoEditor.Core
         public static ClipEffect Create(VideoEffectDef def)
         {
             var values = new Dictionary<string, double>(StringComparer.Ordinal);
-            foreach (var param in def.Params.Where(p => p.Kind == EffectParamKind.Number))
+            foreach (var param in def.Params.Where(p => p.Kind != EffectParamKind.Color))
                 values[param.Key] = param.Default;
             return new ClipEffect { Id = def.Id, Values = values, Color = def.ColorParam?.DefaultColor };
         }
 
-        /// <summary>숫자 값: 적힌 값(범위 안으로), 없거나 NaN이면 기본값. 매개변수가 없으면 0.</summary>
+        /// <summary>숫자 값(고르기는 선택지 번호): 적힌 값(범위 안으로), 없거나 NaN이면 기본값. 매개변수가 없으면 0.</summary>
         public static double Number(ClipEffect effect, VideoEffectDef def, string key)
         {
             var param = def?.Param(key);
-            if (param == null || param.Kind != EffectParamKind.Number)
+            if (param == null || param.Kind == EffectParamKind.Color)
                 return 0;
             return effect?.Values != null && effect.Values.TryGetValue(key, out var value) ? Range(value, param) : param.Default;
         }
@@ -260,11 +270,11 @@ namespace VideoEditor.Core
             return Rgb(effect?.Color) ?? fallback;
         }
 
-        /// <summary>숫자 값을 바꾼다(범위 안으로). 클립 효과 고치기는 이것으로 — 실행 취소는 부르는 쪽의 EditClip.</summary>
+        /// <summary>숫자 값(고르기는 선택지 번호)을 바꾼다(범위 안으로). 클립 효과 고치기는 이것으로 — 실행 취소는 부르는 쪽의 EditClip.</summary>
         public static void SetNumber(ClipEffect effect, string key, double value)
         {
             var param = Find(effect?.Id)?.Param(key);
-            if (param == null || param.Kind != EffectParamKind.Number)
+            if (param == null || param.Kind == EffectParamKind.Color)
                 return;
             effect.Values ??= new Dictionary<string, double>(StringComparer.Ordinal);
             effect.Values[key] = Range(value, param);
@@ -306,6 +316,22 @@ namespace VideoEditor.Core
                 clip.Effects = null;
         }
 
+        /// <summary>
+        /// 클립의 from번째 효과를 to번째 자리로 옮긴다(뒤 효과가 앞 효과 위에 그린다). 옮겼으면 true, 번호가 틀리거나 같으면 그대로 false.
+        /// 실행 취소는 부르는 쪽의 EditClip.
+        /// </summary>
+        public static bool Move(Project project, Clip clip, int from, int to)
+        {
+            var effects = clip?.Effects;
+            if (effects == null || from == to || from < 0 || to < 0 || from >= effects.Count || to >= effects.Count)
+                return false;
+            TimelineEdits.EnsureEditable(project.TrackOf(clip));
+            var effect = effects[from];
+            effects.RemoveAt(from);
+            effects.Insert(to, effect);
+            return true;
+        }
+
         /// <summary>그릴 효과(목록에 있는 효과만 — 알 수 없는 효과는 남겨 두되 그리지 않는다)와 그 정의.</summary>
         public static List<(ClipEffect Effect, VideoEffectDef Def)> Renderable(Clip clip)
         {
@@ -342,7 +368,7 @@ namespace VideoEditor.Core
                 if (def != null)
                 {
                     effect.Values = new Dictionary<string, double>(StringComparer.Ordinal);
-                    foreach (var param in def.Params.Where(p => p.Kind == EffectParamKind.Number))
+                    foreach (var param in def.Params.Where(p => p.Kind != EffectParamKind.Color))
                         effect.Values[param.Key] = Number(raw, def, param.Key);
                     effect.Color = def.ColorParam != null ? ColorOf(raw, def) : null;
                 }
@@ -363,6 +389,9 @@ namespace VideoEditor.Core
         {
             if (!double.IsFinite(value))
                 return param.Default;
+            // 고르기는 가까운 번호로(예전 슬라이더 값 — 그리기도 가까운 정수였다)
+            if (param.Kind == EffectParamKind.Choice)
+                value = Math.Round(value, MidpointRounding.AwayFromZero);
             return Math.Max(param.Min, Math.Min(param.Max, value));
         }
 

@@ -395,7 +395,7 @@ namespace VideoEditor.Ui
                     try
                     {
                         for (var i = 0; i < effects.Count; i++)
-                            rows.Children.Add(EffectRows(id, i, effects[i]?.Id, local));
+                            rows.Children.Add(EffectRows(id, i, effects.Count, effects[i]?.Id, local));
                     }
                     finally
                     {
@@ -422,8 +422,8 @@ namespace VideoEditor.Ui
             return panel;
         }
 
-        /// <summary>효과 하나의 줄들(index번째, effectId — 그 자리의 효과가 바뀌었으면 고치지 않는다). 갱신은 local에 모은다.</summary>
-        private UIElement EffectRows(string id, int index, string effectId, List<Action> local)
+        /// <summary>효과 하나의 줄들(count개 중 index번째, effectId — 그 자리의 효과가 바뀌었으면 고치지 않는다). 갱신은 local에 모은다.</summary>
+        private UIElement EffectRows(string id, int index, int count, string effectId, List<Action> local)
         {
             var box = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
             var def = VideoEffects.Find(effectId);
@@ -450,6 +450,21 @@ namespace VideoEditor.Ui
             remove.Padding = new Thickness(6, 1, 6, 1);
             DockPanel.SetDock(remove, Dock.Right);
             head.Children.Add(remove);
+            // 순서 바꾸기(뒤 효과가 앞 효과 위에 그린다) — 실행 취소 한 단계
+            foreach (var (text, to) in new[] { ("아래로", index + 1), ("위로", index - 1) })
+            {
+                var target = to;
+                var move = UiKit.TextButton(text, "EffectMove" + (target > index ? "Down" : "Up") + index, () => _commands.EditClip(id, (p, c) =>
+                {
+                    if (EffectOf(c) != null)
+                        VideoEffects.Move(p, c, index, target);
+                }, null));
+                move.MinWidth = 0;
+                move.Padding = new Thickness(6, 1, 6, 1);
+                move.IsEnabled = target >= 0 && target < count;
+                DockPanel.SetDock(move, Dock.Right);
+                head.Children.Add(move);
+            }
             var title = Section(def?.Name ?? "알 수 없는 효과(" + effectId + ")");
             title.ToolTip = def?.Description;
             DockPanel.SetDock(title, Dock.Left);
@@ -481,6 +496,25 @@ namespace VideoEditor.Ui
                     color.ToolTip = param.Hint;
                     local.Add(color.Refresh);
                     box.Children.Add(color);
+                    continue;
+                }
+                if (param.Kind == EffectParamKind.Choice)
+                {
+                    var choice = new ComboBox { ToolTip = param.Hint };
+                    AutomationProperties.SetAutomationId(choice, prefix + key);
+                    AutomationProperties.SetName(choice, param.Name);
+                    foreach (var option in param.Options)
+                        choice.Items.Add(option);
+                    choice.SelectionChanged += (s, e) =>
+                    {
+                        if (_updating || choice.SelectedIndex < 0)
+                            return;
+                        var value = choice.SelectedIndex;
+                        if (VideoEffects.Number(EffectOf(_session.Project.FindClip(id)), def, key) != value)
+                            Change(effect => VideoEffects.SetNumber(effect, key, value), null);
+                    };
+                    local.Add(() => choice.SelectedIndex = (int)VideoEffects.Number(EffectOf(_session.Project.FindClip(id)), def, key));
+                    box.Children.Add(Row(param.Name, choice));
                     continue;
                 }
                 var row = NumberRow(param.Name, prefix + key, param.Min, param.Max, param.Unit, id,

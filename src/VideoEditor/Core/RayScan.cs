@@ -30,7 +30,7 @@ namespace VideoEditor.Core
                 EffectParam.Number("core", "굵기", 1, 20, 4, "px", "가운데 흰 선의 굵기"),
                 EffectParam.Number("trail", "꼬리", 0, 400, 140, "px", "지나온 쪽에 남는 빛 꼬리의 길이(0 = 꼬리 없음)"),
                 EffectParam.Number("rays", "빛줄기", 0, 100, 60, "%", "빛에서 옆으로 뻗는 가는 빛줄기와 반짝임의 양(0 = 없음)"),
-                EffectParam.Number("dir", "방향", 0, 3, 0, "", "훑는 방향: 0 = 왼쪽→오른쪽, 1 = 오른쪽→왼쪽, 2 = 위→아래, 3 = 아래→위(가까운 정수로)"),
+                EffectParam.Choice("dir", "방향", new[] { "왼쪽 → 오른쪽", "오른쪽 → 왼쪽", "위 → 아래", "아래 → 위" }, 0, "빛이 훑고 지나가는 방향"),
                 EffectParam.Number("period", "속도", 0.8, 6, 2.4, "초", "한 번 훑고 다시 시작할 때까지 걸리는 시간(작을수록 빠름)"),
                 EffectParam.Number("opacity", "불투명도", 0, 100, 100, "%", "빛의 세기"),
                 EffectParam.ColorParam("color", "색", "#FF3355", "빛 번짐·꼬리·빛줄기의 색(가운데 선은 흰색)")

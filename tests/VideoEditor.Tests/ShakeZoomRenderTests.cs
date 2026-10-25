@@ -242,6 +242,31 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
+        public void HeartbeatAndZoomBounce_ZoomAroundTheirCenter()
+        {
+            // 중심 = 표지(왼쪽 위 네모의 가운데 (80, 60) = 25%, 25%) — 표지는 제자리에서 배율만큼 커진다
+            foreach (var def in new[] { ShakeZoom.Heartbeat, ShakeZoom.ZoomBounce })
+            {
+                var project = NewProject();
+                var clip = Add(project, project.MainTrack, CornerMarker, 0);
+                var effect = AddEffect(clip, def, ("centerx", 25), ("centery", 25));
+                var frames = Render(project, 0, 30);
+                var plain = PlainMass(CornerMarker);
+                for (var f = 0; f < 30; f++)
+                {
+                    var expected = def == ShakeZoom.Heartbeat ? ShakeZoom.HeartbeatZoom(effect, f / 30.0) : ShakeZoom.ZoomBounceAt(effect, f / 30.0);
+                    var spot = Spot(frames, f);
+                    var zoom = Math.Sqrt(spot.Mass / plain);
+                    if (f % 5 == 0)
+                        _out.WriteLine(def.Id + " 프레임 " + f + ": 배율 " + zoom.ToString("0.000") + " (예상 " + expected.ToString("0.000") + ") 자리 (" + spot.X.ToString("0.0") + ", " + spot.Y.ToString("0.0") + ")");
+                    Assert.InRange(zoom, expected - 0.025, expected + 0.025);
+                    Assert.InRange(spot.X, 79.5, 80.5);
+                    Assert.InRange(spot.Y, 59.5, 60.5);
+                }
+            }
+        }
+
+        [FfmpegFact]
         public void PunchZoom_ZoomsAtTheStartTime_AroundTheCenter_AndHolds()
         {
             var project = NewProject();

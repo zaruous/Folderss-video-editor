@@ -83,7 +83,9 @@ namespace VideoEditor.Core
             {
                 EffectParam.Number("amount", "세기", 1, 50, 12, "%", "한 번 뛸 때 커지는 정도"),
                 EffectParam.Number("bpm", "박자", 30, 200, 80, "bpm", "1분에 뛰는 횟수"),
-                EffectParam.Number("second", "두 번째 박동", 0, 100, 60, "%", "곧이어 뛰는 작은 박동의 세기(0 = 한 번만)")
+                EffectParam.Number("second", "두 번째 박동", 0, 100, 60, "%", "곧이어 뛰는 작은 박동의 세기(0 = 한 번만)"),
+                EffectParam.Number("centerx", "중심 가로", 0, 100, 50, "%", "커지는 중심(그림 왼쪽 0 ~ 오른쪽 100)"),
+                EffectParam.Number("centery", "중심 세로", 0, 100, 50, "%", "커지는 중심(그림 위 0 ~ 아래 100)")
             },
             HeartbeatRender,
             // 썸네일(1.5초)에 세 번 뛰게
@@ -112,7 +114,9 @@ namespace VideoEditor.Core
                 EffectParam.Number("zoom", "배율", 5, 100, 25, "%", "커지는 정도"),
                 EffectParam.Number("period", "주기", 0.4, 4, 1.6, "초", "튀어 커졌다가 돌아오기까지 걸리는 시간(앞 절반 커지고 뒤 절반 돌아옴)"),
                 EffectParam.Number("elastic", "탄성", 0, 100, 60, "%", "넘쳤다 되돌아오는 출렁임(0 = 출렁이지 않고 부드럽게)"),
-                EffectParam.Number("repeat", "반복", 0, 10, 0, "회", "튀는 횟수(0 = 끝없이, 1 = 한 번 튀어 커진 채 머묾, 2 이상이면 그만큼 되풀이한 뒤 커진 채 머묾)")
+                EffectParam.Number("repeat", "반복", 0, 10, 0, "회", "튀는 횟수(0 = 끝없이, 1 = 한 번 튀어 커진 채 머묾, 2 이상이면 그만큼 되풀이한 뒤 커진 채 머묾)"),
+                EffectParam.Number("centerx", "중심 가로", 0, 100, 50, "%", "커지는 중심(그림 왼쪽 0 ~ 오른쪽 100)"),
+                EffectParam.Number("centery", "중심 세로", 0, 100, 50, "%", "커지는 중심(그림 위 0 ~ 아래 100)")
             },
             ZoomBounceRender,
             new Dictionary<string, double> { ["zoom"] = 40, ["period"] = 1.5 })
@@ -243,7 +247,13 @@ namespace VideoEditor.Core
         /// <summary>빠른 줌의 중심(그림 픽셀).</summary>
         public static (double X, double Y) PunchZoomCenter(ClipEffect effect, int width, int height)
         {
-            return (VideoEffects.Number(effect, PunchZoom, "centerx") / 100 * width, VideoEffects.Number(effect, PunchZoom, "centery") / 100 * height);
+            return ZoomCenter(effect, PunchZoom, width, height);
+        }
+
+        /// <summary>줌 효과(빠른 줌·하트비트·줌 바운스)의 중심(그림 픽셀) — 중심 값이 없는 예전 프로젝트는 기본값(가운데).</summary>
+        public static (double X, double Y) ZoomCenter(ClipEffect effect, VideoEffectDef def, int width, int height)
+        {
+            return (VideoEffects.Number(effect, def, "centerx") / 100 * width, VideoEffects.Number(effect, def, "centery") / 100 * height);
         }
 
         /// <summary>
@@ -351,7 +361,8 @@ namespace VideoEditor.Core
             string Beat(string x) => string.Format(CultureInfo.InvariantCulture, "if(lt({0},0),0,if(lt({0},{1}),0.5-0.5*cos({2}*{0}),exp(({1}-{0})/{3})))",
                 x, N(attack), N(Math.PI / attack), N(decay));
             var zoom = "1+" + N(r.Number("amount") / 100) + "*(" + Beat(s) + "+" + N(r.Number("second") / 100) + "*" + Beat("(" + s + "-" + N(gap) + ")") + ")";
-            return Warp(r, picture, zoom, null, "0", "0", picture.Width / 2.0, picture.Height / 2.0);
+            var (cx, cy) = ZoomCenter(r.Effect, Heartbeat, picture.Width, picture.Height);
+            return Warp(r, picture, zoom, null, "0", "0", cx, cy);
         }
 
         private static string PunchZoomRender(EffectRender r)
@@ -382,7 +393,8 @@ namespace VideoEditor.Core
                 var last = N((repeat - 1) * period);
                 loop = string.Format(CultureInfo.InvariantCulture, "if(gte({0},{1}),{2},{3})", time, last, Curve("min(1,(" + time + "-" + last + ")/" + N(half) + ")"), loop);
             }
-            return Warp(r, picture, "1+" + amount + "*" + loop, null, "0", "0", picture.Width / 2.0, picture.Height / 2.0);
+            var (cx, cy) = ZoomCenter(r.Effect, ZoomBounce, picture.Width, picture.Height);
+            return Warp(r, picture, "1+" + amount + "*" + loop, null, "0", "0", cx, cy);
         }
 
         /// <summary>

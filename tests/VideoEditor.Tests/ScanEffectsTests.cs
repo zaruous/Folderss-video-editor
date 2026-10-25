@@ -113,7 +113,7 @@ namespace VideoEditor.Tests
                         var effect = VideoEffects.Create(def);
                         if (setting != "기본")
                         {
-                            foreach (var p in def.Params.Where(p => p.Kind == EffectParamKind.Number))
+                            foreach (var p in def.Params.Where(p => p.Kind != EffectParamKind.Color))
                                 VideoEffects.SetNumber(effect, p.Key, setting == "최소" ? p.Min : p.Max);
                         }
                         yield return (def.Id + " " + w + "x" + h + " " + setting + (mask != null ? " 사람에게만" : ""), Render(def, effect, w, h, k, mask, 1.25));
