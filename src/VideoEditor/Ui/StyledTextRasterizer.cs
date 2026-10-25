@@ -30,7 +30,7 @@ namespace VideoEditor.Ui
         private bool _disposed;
 
         /// <summary>그리는 방식을 바꾸면 올린다(캐시 키에 들어가 예전 PNG를 쓰지 않게).</summary>
-        public int Version { get { return 4; } }
+        public int Version { get { return 5; } }
 
         /// <summary>어느 스레드에서 불러도 된다. 배경 그리기 스레드에 맡기고 끝날 때까지(최대 30초) 기다린다.</summary>
         public void Render(TextImageRequest request, string pngPath, CancellationToken cancellation)
@@ -185,8 +185,14 @@ namespace VideoEditor.Ui
                     geometry.Children.Add(piece.Text.BuildGeometry(new Point(x + piece.Offset, top + line.Baseline - piece.Text.Baseline)));
             }
             cancellation.ThrowIfCancellationRequested();
+            // 휘기는 효과를 칠하기 전에 글자 윤곽에 먼저 — 채우기·윤곽선(뒤에 더할 효과도)이 모두 휘어진 윤곽을 쓴다. 없음·정도 0이면 그대로(바이트까지 같게)
+            if (style.Warp.Kind != WarpKind.None && style.Warp.Amount != 0 && boxWidth > 0 && boxHeight > 0)
+            {
+                geometry = Warp(geometry, style.Warp, boxWidth, boxHeight, cancellation);
+                cancellation.ThrowIfCancellationRequested();
+            }
 
-            // PNG 가운데 = 배치 상자 가운데. 글자 모양이 상자 밖으로 나가도(기울임·행간이 좁을 때) 잘리지 않게 대칭으로 넓힌다
+            // PNG 가운데 = 배치 상자 가운데. 글자 모양이 상자 밖으로 나가도(기울임·행간이 좁을 때·휘기) 잘리지 않게 대칭으로 넓힌다
             var ink = geometry.Bounds;
             var centerX = boxWidth / 2;
             var centerY = boxHeight / 2;
@@ -327,6 +333,57 @@ namespace VideoEditor.Ui
                 visual.Effect = blur;
             }
             return visual;
+        }
+
+        /// <summary>
+        /// 휘기: 글자 윤곽을 꺾은선으로 펴고(허용 오차 0.25px) 그림마다 점을 배치 상자 기준 0~1로 정규화해 <see cref="TextWarp.Map"/>으로 옮긴 뒤 픽셀로 되돌린다.
+        /// 긴 직선도 휘게 변을 상자 폭의 1% 이하로 쪼갠다(<see cref="TextWarp.Subdivide"/>) — 가로세로 같은 길이로 쪼개야 한 줄짜리 긴 글에서
+        /// 세로 변이 픽셀마다 쪼개지지 않는다(휘기는 세로 변을 곧게 두므로 쪼갤 필요도 없다). 채우기 규칙은 원래 것 — 글자 속 구멍이 그대로 남는다.
+        /// </summary>
+        private static GeometryGroup Warp(GeometryGroup geometry, TextWarpSetting warp, double boxWidth, double boxHeight, CancellationToken cancellation)
+        {
+            var flat = geometry.GetFlattenedPathGeometry(0.25, ToleranceType.Absolute);
+            var aspect = boxHeight / boxWidth;
+            var maxLength = boxWidth * 0.01;
+            var path = new PathGeometry { FillRule = geometry.FillRule };
+            var points = new List<(double U, double V)>();
+            foreach (var figure in flat.Figures)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                points.Clear();
+                points.Add((figure.StartPoint.X, figure.StartPoint.Y));
+                // 편 윤곽에는 직선 조각만 있다
+                foreach (var segment in figure.Segments)
+                {
+                    if (segment is PolyLineSegment poly)
+                    {
+                        foreach (var p in poly.Points)
+                            points.Add((p.X, p.Y));
+                    }
+                    else if (segment is LineSegment line)
+                    {
+                        points.Add((line.Point.X, line.Point.Y));
+                    }
+                }
+                var divided = TextWarp.Subdivide(points, maxLength);
+                var bent = new PathFigure { IsClosed = figure.IsClosed, IsFilled = figure.IsFilled };
+                var rest = new PointCollection(divided.Count - 1);
+                for (var i = 0; i < divided.Count; i++)
+                {
+                    var (u, v) = TextWarp.Map(warp.Kind, warp.Amount, divided[i].U / boxWidth, divided[i].V / boxHeight, aspect);
+                    var point = new Point(u * boxWidth, v * boxHeight);
+                    if (i == 0)
+                        bent.StartPoint = point;
+                    else
+                        rest.Add(point);
+                }
+                bent.Segments.Add(new PolyLineSegment { Points = rest });
+                path.Figures.Add(bent);
+            }
+            var result = new GeometryGroup { FillRule = geometry.FillRule };
+            result.Children.Add(path);
+            result.Freeze();
+            return result;
         }
 
         /// <summary>

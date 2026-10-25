@@ -20,7 +20,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 namespace VideoEditor.UiTests
 {
     /// <summary>
-    /// 꾸민 글자(이슈 #3·#13·#14·#15·#16): WPF 그리개의 픽셀, 꾸미기 탭(글꼴·채우기·윤곽선·그림자), 미리 보기 = 내보내기.
+    /// 꾸민 글자(이슈 #3·#13·#14·#15·#16·#21): WPF 그리개의 픽셀, 꾸미기 탭(글꼴·채우기·윤곽선·그림자·휘기), 미리 보기 = 내보내기.
     /// 그리개·요청은 플러그인 형식이라 리플렉션으로 만들고, 요청은 JSON을 플러그인의 TextImageRequest로 역직렬화해 만든다.
     /// </summary>
     public class StyledTextTests
@@ -137,6 +137,55 @@ namespace VideoEditor.UiTests
                     }
                 }
                 return (right < 0 ? -1 : left, right);
+            }
+
+            /// <summary>[left, right) 열들에서 칠한 픽셀의 평균 y(무게중심, 없으면 NaN).</summary>
+            public double CenterY(int left, int right)
+            {
+                double sum = 0;
+                var count = 0;
+                for (var x = left; x < right; x++)
+                {
+                    for (var y = 0; y < Height; y++)
+                    {
+                        if (!Painted(x, y))
+                            continue;
+                        sum += y;
+                        count++;
+                    }
+                }
+                return count == 0 ? double.NaN : sum / count;
+            }
+
+            /// <summary>y 줄에서 칠한 픽셀이 이어진 토막 수(글자 속 구멍이 있으면 글자 하나가 토막 둘).</summary>
+            public int Runs(int y)
+            {
+                var runs = 0;
+                for (var x = 0; x < Width; x++)
+                {
+                    if (Painted(x, y) && (x == 0 || !Painted(x - 1, y)))
+                        runs++;
+                }
+                return runs;
+            }
+
+            /// <summary>칠한 픽셀이 있는 가장 위·아래 줄(없으면 -1).</summary>
+            public (int Top, int Bottom) Rows()
+            {
+                int top = -1, bottom = -1;
+                for (var y = 0; y < Height; y++)
+                {
+                    for (var x = 0; x < Width; x++)
+                    {
+                        if (!Painted(x, y))
+                            continue;
+                        if (top < 0)
+                            top = y;
+                        bottom = y;
+                        break;
+                    }
+                }
+                return (top, bottom);
             }
         }
 
@@ -545,6 +594,113 @@ namespace VideoEditor.UiTests
             Assert.Equal(360, huge.Height);
         }
 
+        private static string Warp(string kind, double amount)
+        {
+            return "\"Warp\":{\"Kind\":\"" + kind + "\",\"Amount\":" + amount.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}";
+        }
+
+        /// <summary>왼쪽 끝·가운데·오른쪽 끝 열(칠한 폭의 5%·50%·95%, 폭의 2% 띠)에서 칠한 픽셀의 무게중심 y.</summary>
+        private static (double Left, double Middle, double Right) ColumnCenters(Png png)
+        {
+            var (left, right) = png.Extent(0, png.Height);
+            var span = right - left;
+            var band = Math.Max(2, span / 50);
+            double At(double fraction)
+            {
+                var x = left + (int)(span * fraction) - band / 2;
+                return png.CenterY(x, x + band);
+            }
+            return (At(0.05), At(0.5), At(0.95));
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WarpArchUp_RaisesMiddleColumn_OutlineBendsToo()
+        {
+            var rasterizer = NewRasterizer();
+            // 휘기 없음: 가로줄 다섯 개의 열 무게중심이 모두 같은 높이
+            var flat = await Render(rasterizer, Request(rasterizer, "ㅡㅡㅡㅡㅡ"), "warp-flat");
+            var level = ColumnCenters(flat);
+            _out.WriteLine("없음 왼쪽 " + level.Left + " · 가운데 " + level.Middle + " · 오른쪽 " + level.Right);
+            Assert.InRange(level.Middle - level.Left, -2, 2);
+            Assert.InRange(level.Middle - level.Right, -2, 2);
+
+            // 아치 위(80): 가운데 열이 양 끝 열보다 위(화면 y가 작다)
+            var arch = await Render(rasterizer, Request(rasterizer, "ㅡㅡㅡㅡㅡ", style: Warp("ArchUp", 80)), "warp-arch-up");
+            var bent = ColumnCenters(arch);
+            _out.WriteLine("아치 위 80 왼쪽 " + bent.Left + " · 가운데 " + bent.Middle + " · 오른쪽 " + bent.Right + " · " + arch.Width + "×" + arch.Height);
+            Assert.True(bent.Middle < bent.Left - 10, "가운데가 왼쪽 끝보다 위");
+            Assert.True(bent.Middle < bent.Right - 10, "가운데가 오른쪽 끝보다 위");
+            Assert.Equal(0, arch.BorderInk());
+
+            // 윤곽선도 휘어진 윤곽에 그린다(채우기 없음 + 윤곽선 = 속 빈 글자도 아치)
+            var outline = await Render(rasterizer, Request(rasterizer, "ㅡㅡㅡㅡㅡ",
+                style: "\"Fill\":{\"Kind\":\"None\",\"Colors\":[\"#FFFFFF\"]}," + Outline(6) + "," + Warp("ArchUp", 80)), "warp-arch-up-outline");
+            var ring = ColumnCenters(outline);
+            _out.WriteLine("윤곽선만 왼쪽 " + ring.Left + " · 가운데 " + ring.Middle + " · 오른쪽 " + ring.Right);
+            Assert.True(outline.PaintedCount() > 500);
+            Assert.True(ring.Middle < ring.Left - 10 && ring.Middle < ring.Right - 10, "윤곽선도 가운데가 위");
+            Assert.Equal(0, outline.BorderInk());
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WarpAmountZero_ByteIdenticalToNone()
+        {
+            var rasterizer = NewRasterizer();
+            const string text = "가나다 ABC\n휘기";
+            await Render(rasterizer, Request(rasterizer, text, style: Outline(4)), "warp-base");
+            var expected = File.ReadAllBytes(Path.Combine(Folder(), "warp-base.png"));
+            // 정도 0이면 종류와 상관없이, 없음이면 정도와 상관없이 휘기 없이 그린 것과 바이트까지 같다
+            foreach (var (kind, amount) in new[] { ("Circle", 0.0), ("ArchUp", 0.0), ("Stairs", 0.0), ("None", 80.0), ("None", -100.0) })
+            {
+                var name = "warp-" + kind + "-" + amount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                await Render(rasterizer, Request(rasterizer, text, style: Outline(4) + "," + Warp(kind, amount)), name);
+                Assert.True(expected.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), name + ".png"))), kind + " " + amount + "가 휘기 없음과 다르다");
+            }
+            // 휘기가 있으면 다르다(비교가 헛돌지 않는지)
+            await Render(rasterizer, Request(rasterizer, text, style: Outline(4) + "," + Warp("Wave", 40)), "warp-wave-40");
+            Assert.False(expected.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "warp-wave-40.png"))));
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WarpCircle100_FitsCanvas_EveryKindKeepsInkInside()
+        {
+            var rasterizer = NewRasterizer();
+            // 원(100): 기준선을 한 바퀴 감아도 PNG는 캔버스 이하이고 잘리지 않는다(가장자리 1px 줄 알파 0)
+            var circle = await Render(rasterizer, Request(rasterizer, "휘기 ABC 가나다", style: Warp("Circle", 100)), "warp-circle-100");
+            _out.WriteLine("원 100 " + circle.Width + "×" + circle.Height + " · 칠한 픽셀 " + circle.PaintedCount());
+            Assert.True(circle.Width <= 1280 && circle.Height <= 720);
+            Assert.True(circle.PaintedCount() > 1000);
+            Assert.Equal(0, circle.BorderInk());
+
+            // 모든 종류 ±100 + 각지게 윤곽선 10px도 가장자리에 닿지 않는다(PNG 크기는 휘어진 윤곽의 경계로)
+            foreach (var kind in new[] { "ArchUp", "ArchDown", "Circle", "Wave", "Bulge", "Pinch", "Slant", "Stairs" })
+            {
+                foreach (var amount in new[] { 100.0, -100.0 })
+                {
+                    var png = await Render(rasterizer, Request(rasterizer, "휘기 ABC 가나다", style: Outline(10, "Miter") + "," + Warp(kind, amount)), "warp-all-" + kind + amount);
+                    _out.WriteLine(kind + " " + amount + ": " + png.Width + "×" + png.Height + " · 칠한 픽셀 " + png.PaintedCount());
+                    Assert.True(png.Width <= 1280 && png.Height <= 720, kind + " " + amount);
+                    Assert.True(png.PaintedCount() > 1000, kind + " " + amount);
+                    Assert.Equal(0, png.BorderInk());
+                }
+            }
+        }
+
+        [UiFact]
+        public async Task Rasterizer_Warp_KeepsHolesInLetters()
+        {
+            // 채우기 규칙을 지키면 'O'·'ㅇ' 속 구멍이 그대로 — 가운데 줄에서 글자마다 칠한 토막이 둘(구멍이 메워지면 하나)
+            var rasterizer = NewRasterizer();
+            foreach (var style in new[] { (string)null, Warp("Bulge", 60), Warp("Slant", 40), Warp("Pinch", 60) })
+            {
+                var png = await Render(rasterizer, Request(rasterizer, "Oㅇ", fontSize: 200, style: style), "warp-hole-" + (style == null ? "none" : style.Split('"')[5]));
+                var (top, bottom) = png.Rows();
+                var runs = png.Runs((top + bottom) / 2);
+                _out.WriteLine((style ?? "없음") + ": 가운데 줄 토막 " + runs);
+                Assert.True(runs >= 4, (style ?? "없음") + " 토막 " + runs);
+            }
+        }
+
         // ---------- 화면 ----------
 
         /// <summary>미리 보기 화면의 픽셀(UI 스레드).</summary>
@@ -827,6 +983,89 @@ namespace VideoEditor.UiTests
                 Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
                 await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
                 Assert.False(ui.Run(() => Ui.ById<TextBox>(window, "StyleOutlineWidth").IsEnabled));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        private static string WarpKind(Window window, object id)
+        {
+            return Get(Get(StyleOf(window, id), "Warp"), "Kind").ToString();
+        }
+
+        private static double WarpAmount(Window window, object id)
+        {
+            return (double)Get(Get(StyleOf(window, id), "Warp"), "Amount");
+        }
+
+        [EditorFact]
+        public async Task StyleTab_WarpKind_ChangesPreview_AmountDragIsOneUndoStep()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                var id = await AddStyledText(ui, window, "휘기 ABC");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                await ui.WaitFor(() => Ui.ById<ComboBox>(window, "StyleWarpKind"), Wait, "휘기 칸");
+                var before = ui.Run(() =>
+                {
+                    // 스타일이 없을 때: 없음, 정도는 기본값(50)이 보이되 꺼져 있다 — 보이기만 해서는 스타일이 생기지 않는다
+                    Assert.Equal("없음", Ui.ById<ComboBox>(window, "StyleWarpKind").SelectedItem);
+                    Assert.Equal("50", Ui.ById<TextBox>(window, "StyleWarpAmount").Text);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleWarpAmount").IsEnabled);
+                    Assert.Null(StyleOf(window, id));
+                    return PreviewPixels(window);
+                });
+
+                // 아치 위 → 스타일이 생기고(정도 50) 미리 보기가 바뀐다, 정도 칸이 켜진다
+                ui.Run(() => Ui.Choose(Ui.ById<ComboBox>(window, "StyleWarpKind"), "아치 위"));
+                await ui.WaitUntil(() => StyleOf(window, id) != null && WarpKind(window, id) == "ArchUp", Wait, "아치 위");
+                await ui.WaitUntil(() => Differs(before, PreviewPixels(window)), Wait, "아치 미리 보기");
+                await Task.Delay(500);
+                var arch = ui.Run(() =>
+                {
+                    Assert.True(Ui.ById<TextBox>(window, "StyleWarpAmount").IsEnabled);
+                    Assert.Equal(50, WarpAmount(window, id), 6);
+                    return PreviewPixels(window);
+                });
+
+                // 원 → 보이는 이름대로 Circle이 되고 미리 보기가 또 바뀐다
+                ui.Run(() => Ui.Choose(Ui.ById<ComboBox>(window, "StyleWarpKind"), "원"));
+                await ui.WaitUntil(() => WarpKind(window, id) == "Circle", Wait, "원");
+                await ui.WaitUntil(() => Differs(arch, PreviewPixels(window)), Wait, "원 미리 보기");
+                await Task.Delay(500);
+                var circle = ui.Run(() => PreviewPixels(window));
+
+                // 정도 슬라이더를 끄는 동안(값 여러 번)은 실행 취소 한 단계 — 미리 보기도 바뀐다
+                ui.Run(() =>
+                {
+                    var slider = Ui.ById<Slider>(window, "StyleWarpAmountSlider");
+                    foreach (var value in new[] { 60.0, 80.0, 100.0 })
+                        slider.Value = value;
+                });
+                await ui.WaitUntil(() => Math.Abs(WarpAmount(window, id) - 100) < 1e-6, Wait, "정도 100");
+                await ui.WaitUntil(() => Differs(circle, PreviewPixels(window)), Wait, "정도 미리 보기");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-tab-warp"));
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => Math.Abs(WarpAmount(window, id) - 50) < 1e-6, Wait, "실행 취소 한 번에 정도 50");
+                Assert.Equal("Circle", ui.Run(() => WarpKind(window, id)));
+                await ui.WaitUntil(() => !Differs(circle, PreviewPixels(window)), Wait, "정도 50 미리 보기로 돌아옴");
+
+                // 실행 취소 두 번(원·아치 위) → 스타일 없던 처음, 정도 칸은 다시 꺼진다
+                foreach (var step in new[] { "원", "아치 위" })
+                    ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
+                await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+                ui.Run(() =>
+                {
+                    Assert.Equal("없음", Ui.ById<ComboBox>(window, "StyleWarpKind").SelectedItem);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleWarpAmount").IsEnabled);
+                });
                 Assert.Empty(ui.TakeErrors());
             }
             finally
