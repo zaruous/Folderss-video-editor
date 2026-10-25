@@ -31,6 +31,8 @@ namespace VideoEditor.Ui
         private readonly Recognizer _recognize;
         private readonly ComboBox _language = new ComboBox { Margin = new Thickness(0, 4, 0, 0) };
         private readonly TextBox _prompt = new TextBox { Margin = new Thickness(0, 4, 0, 0), MaxLength = SpeechText.MaxPromptLength };
+        private readonly TextBlock _promptNote = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0), Visibility = Visibility.Collapsed };
+        private readonly bool _mixed;
         private readonly TextBox _script = new TextBox
         {
             AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 72, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -49,6 +51,7 @@ namespace VideoEditor.Ui
         {
             _services = services;
             _recognize = recognize;
+            _mixed = mixed;
             Title = "음성 인식으로 자막 만들기";
             Width = 560;
             SizeToContent = SizeToContent.Height;
@@ -83,13 +86,27 @@ namespace VideoEditor.Ui
             _language.SelectedItem = _language.Items.Cast<ComboBoxItem>().First(i => (string)i.Tag == savedLanguage);
             panel.Children.Add(_language);
 
-            var promptLabel = UiKit.Label("자주 나오는 낱말(선택) — 이름·용어를 쉼표로, 예: 맹자, 반구저기");
+            // 한국어 Windows(코드 페이지 949)에서는 whisper-cli에 한글 낱말이 깨져 들어가므로 영문 낱말만 넘긴다
+            var unicode = SpeechRecognizer.AnsiCodePage == 65001;
+            var promptLabel = UiKit.Label(unicode ? "자주 나오는 낱말(선택) — 이름·용어를 쉼표로, 예: 맹자, 반구저기"
+                : "자주 나오는 낱말(선택) — 영문 이름·용어를 쉼표로, 예: Folderss, OpenAI");
             promptLabel.Margin = new Thickness(0, 12, 0, 0);
             panel.Children.Add(promptLabel);
             AutomationProperties.SetAutomationId(_prompt, "SpeechPrompt");
             AutomationProperties.SetName(_prompt, "자주 나오는 낱말");
             _prompt.Text = services.Setting(PromptKey) ?? "";
             panel.Children.Add(_prompt);
+            _promptNote.Text = "이 PC는 whisper.cpp에 한글을 넘길 수 없어(시스템 코드 페이지 " + SpeechRecognizer.AnsiCodePage + ") 한글 낱말은 빼고 영문만 씁니다. 정확한 한글은 [대본]으로 맞추세요.";
+            _promptNote.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
+            AutomationProperties.SetAutomationId(_promptNote, "SpeechPromptNote");
+            panel.Children.Add(_promptNote);
+            void ShowPromptNote()
+            {
+                SpeechText.PromptFor(_prompt.Text, SpeechRecognizer.AnsiCodePage, out var dropped);
+                _promptNote.Visibility = dropped ? Visibility.Visible : Visibility.Collapsed;
+            }
+            _prompt.TextChanged += (s, e) => ShowPromptNote();
+            ShowPromptNote();
 
             // 대본(선택): 글은 대본에서, 시각은 소리에서 — 대본의 장면 설명·해시태그처럼 말하지 않은 글은 저절로 빠진다
             var scriptRow = new DockPanel { Margin = new Thickness(0, 12, 0, 0), LastChildFill = true };
@@ -241,7 +258,8 @@ namespace VideoEditor.Ui
                     whisper = await SpeechRecognizer.DownloadTool(_services.WhisperFolder, progress, cancellation);
                     _services.Whisper = whisper;
                 }
-                var vad = await SpeechRecognizer.DownloadModel(_services.WhisperFolder, SpeechText.VadModel, progress, cancellation);
+                // 말소리 구간 감지는 음악이 섞인 타임라인 전체 소리에만(내레이션 클립은 꺼야 시각이 같거나 낫다)
+                var vad = _mixed ? await SpeechRecognizer.DownloadModel(_services.WhisperFolder, SpeechText.VadModel, progress, cancellation) : null;
                 var modelPath = await SpeechRecognizer.DownloadModel(_services.WhisperFolder, model, progress, cancellation);
                 ShowModels();
                 watch.Restart();

@@ -51,7 +51,10 @@ namespace VideoEditor.Media
     public sealed class SpeechOptions
     {
         public string Model { get; set; }
-        /// <summary>말소리 구간 감지(Silero VAD) 모델 경로 — 없으면 소리 전체를 인식.</summary>
+        /// <summary>
+        /// 말소리 구간 감지(Silero VAD) 모델 경로 — 없으면 소리 전체를 인식. 음악이 섞인 타임라인 전체 소리에만 쓴다
+        /// (내레이션만 있는 클립은 끄는 편이 같거나 낫다: turbo는 켜면 단어 시각 중앙 오차 0.14 → 0.26초).
+        /// </summary>
         public string Vad { get; set; }
         public string Language { get; set; }
         public string Prompt { get; set; }
@@ -67,6 +70,15 @@ namespace VideoEditor.Media
     public static class SpeechRecognizer
     {
         private static readonly SemaphoreSlim Gate = new SemaphoreSlim(1);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern uint GetACP();
+
+        /// <summary>시스템 코드 페이지(whisper-cli가 명령줄 글자를 받는 방식) — Windows가 아니면 UTF-8.</summary>
+        public static int AnsiCodePage
+        {
+            get { return OperatingSystem.IsWindows() ? (int)GetACP() : 65001; }
+        }
 
         /// <summary>folder(데이터 폴더\whisper)에 whisper.cpp를 받아 풀고 실행해 본다(verify — 시험에서만 끔).</summary>
         public static async Task<WhisperTool> DownloadTool(string folder, IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation,
@@ -229,7 +241,8 @@ namespace VideoEditor.Media
                 if (converted.ExitCode != 0 || !File.Exists(wav))
                     throw new FfmpegException("소리를 꺼내지 못했습니다.", converted.Error);
                 progress?.Report(new FfmpegDownloader.Status { Stage = "음성 인식 중", Done = 0, Total = 100 });
-                var args = SpeechText.Arguments(options.Model, wav, output, options.Language, SpeechText.Threads(Environment.ProcessorCount), options.Vad, options.Prompt);
+                var prompt = SpeechText.PromptFor(options.Prompt, AnsiCodePage, out _);
+                var args = SpeechText.Arguments(options.Model, wav, output, options.Language, SpeechText.Threads(Environment.ProcessorCount), options.Vad, prompt);
                 await Run(whisper, args, progress, cancellation).ConfigureAwait(false);
                 var srt = output + ".srt";
                 if (!File.Exists(srt))

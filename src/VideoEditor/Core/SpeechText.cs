@@ -174,6 +174,22 @@ namespace VideoEditor.Core
 
         public const int MaxPromptLength = 200;
 
+        /// <summary>
+        /// whisper-cli에 넘길 낱말: whisper-cli는 명령줄을 시스템 코드 페이지(한국어 Windows는 949)로 받아 UTF-8로 읽으므로,
+        /// 코드 페이지가 UTF-8(65001)이 아니면 영문 낱말만 넘긴다(한글은 깨져 엉뚱한 문맥이 됨). 뺀 낱말이 있으면 dropped.
+        /// </summary>
+        public static string PromptFor(string prompt, int codePage, out bool dropped)
+        {
+            var text = CleanPrompt(prompt);
+            dropped = false;
+            if (codePage == 65001 || text.All(c => c < 128))
+                return text;
+            var words = text.Split(new[] { ',', '，', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            var kept = words.Where(w => w.All(c => c < 128)).ToList();
+            dropped = kept.Count < words.Length;
+            return string.Join(", ", kept);
+        }
+
         /// <summary>자주 나오는 낱말(이름·용어): 줄바꿈 등 제어 문자를 공백으로, 200자까지.</summary>
         public static string CleanPrompt(string prompt)
         {

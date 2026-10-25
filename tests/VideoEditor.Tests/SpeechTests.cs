@@ -85,6 +85,20 @@ namespace VideoEditor.Tests
             Assert.Equal("ko", SpeechText.Language("xx"));
         }
 
+        [Fact]
+        public void PromptFor_DropsNonAsciiWords_UnlessUtf8CodePage()
+        {
+            // 한국어 Windows(949)에서는 whisper-cli가 한글을 깨진 바이트로 받으므로 영문 낱말만
+            Assert.Equal("Folderss, OpenAI", SpeechText.PromptFor("맹자, Folderss 반구저기, OpenAI", 949, out var dropped));
+            Assert.True(dropped);
+            Assert.Equal("맹자, Folderss 반구저기, OpenAI", SpeechText.PromptFor(" 맹자, Folderss 반구저기, OpenAI ", 65001, out dropped));
+            Assert.False(dropped);
+            Assert.Equal("Folderss, OpenAI", SpeechText.PromptFor("Folderss, OpenAI", 949, out dropped));
+            Assert.False(dropped);
+            Assert.Equal("", SpeechText.PromptFor("맹자", 949, out dropped));
+            Assert.True(dropped);
+        }
+
         [Theory]
         [InlineData("whisper_print_progress_callback: progress =  37%", 37)]
         [InlineData("whisper_print_progress_callback: progress = 100%", 100)]
