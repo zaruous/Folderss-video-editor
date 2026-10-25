@@ -475,7 +475,10 @@ namespace VideoEditor.Core
         /// <summary>읽고 쓰는 id 수 상한.</summary>
         public const int MaxIds = 256;
 
-        /// <summary>설정 글에서 본 효과 id(처음 판의 효과는 늘 들어 있다). all이 없으면 <see cref="VideoEffects.All"/>.</summary>
+        /// <summary>
+        /// 설정 글에서 본 효과 id(처음 판의 효과는 늘 들어 있다). all이 없으면 <see cref="VideoEffects.All"/>.
+        /// 모르는 id라도 형식이 맞으면 남긴다 — 다른 판(새 판·예전 판)과 설정을 같이 쓸 때 그 판의 효과를 본 기록이 지워져 다시 "새로"가 되지 않게.
+        /// </summary>
         public static HashSet<string> ReadSeen(string setting, IReadOnlyList<VideoEffectDef> all = null)
         {
             all ??= VideoEffects.All;
@@ -492,7 +495,7 @@ namespace VideoEditor.Core
                     foreach (var element in document.RootElement.EnumerateArray().Take(MaxIds))
                     {
                         var id = element.ValueKind == JsonValueKind.String ? element.GetString() : null;
-                        if (id != null && known.Contains(id))
+                        if (id != null && (known.Contains(id) || VideoEffects.IsValidId(id)))
                             seen.Add(id);
                     }
                 }
@@ -504,12 +507,17 @@ namespace VideoEditor.Core
             return seen;
         }
 
-        /// <summary>본 효과 id를 설정 글로(아는 효과만 목록 차례로, <see cref="MaxIds"/>개까지).</summary>
+        /// <summary>
+        /// 본 효과 id를 설정 글로: 아는 효과를 목록 차례로, 그 뒤에 형식이 맞는 모르는 id(다른 판의 효과)를 이름 차례로 — 모두 <see cref="MaxIds"/>개까지.
+        /// </summary>
         public static string WriteSeen(IEnumerable<string> seen, IReadOnlyList<VideoEffectDef> all = null)
         {
             all ??= VideoEffects.All;
-            var set = new HashSet<string>(seen ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
-            return JsonSerializer.Serialize(all.Where(d => set.Contains(d.Id)).Select(d => d.Id).Take(MaxIds).ToList());
+            var set = new HashSet<string>((seen ?? Enumerable.Empty<string>()).Where(id => id != null), StringComparer.Ordinal);
+            var known = all.Where(d => set.Contains(d.Id)).Select(d => d.Id).ToList();
+            var knownIds = new HashSet<string>(all.Select(d => d.Id), StringComparer.Ordinal);
+            var others = set.Where(id => !knownIds.Contains(id) && VideoEffects.IsValidId(id)).OrderBy(id => id, StringComparer.Ordinal);
+            return JsonSerializer.Serialize(known.Concat(others).Take(MaxIds).ToList());
         }
 
         /// <summary>아직 보지 않은 새 효과(목록 차례). 처음 판의 효과는 seen에 없어도 새로가 아니다.</summary>

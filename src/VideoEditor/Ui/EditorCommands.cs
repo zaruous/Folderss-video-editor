@@ -510,7 +510,7 @@ namespace VideoEditor.Ui
             ApplyTransition(id, seconds, ids);
         }
 
-        /// <summary>효과 탭에서 끈 전환을 클립에 놓음 — 데이터는 "효과 id|초".</summary>
+        /// <summary>[전환] 탭에서 끈 전환을 클립에 놓음 — 데이터는 "효과 id|초".</summary>
         public void DropTransition(string data, string clipId)
         {
             var parts = (data ?? "").Split('|');
@@ -634,7 +634,7 @@ namespace VideoEditor.Ui
                 if (!File.Exists(readme))
                     File.WriteAllText(readme, TransitionFolderReadme.Replace("\r\n", "\n").Replace("\n", Environment.NewLine), new System.Text.UTF8Encoding(true));
                 Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { folder }, UseShellExecute = false });
-                Status("효과 폴더: *.json에 효과를 적고 [효과] 탭의 [다시 읽기]를 누르세요(쓰는 법은 README.txt).");
+                Status("효과 폴더: *.json에 전환 효과를 적고 [전환] 탭의 [다시 읽기]를 누르세요(쓰는 법은 README.txt).");
             }
             catch (Exception ex)
             {
@@ -645,7 +645,7 @@ namespace VideoEditor.Ui
         private const string TransitionFolderReadme =
 @"전환 효과 폴더
 
-이 폴더의 *.json 파일에 효과를 적고 [효과] 탭의 [다시 읽기]를 누르면 효과가 더해집니다.
+이 폴더의 *.json 파일에 전환 효과를 적고 [전환] 탭의 [다시 읽기]를 누르면 효과가 더해집니다.
 
 {
   ""transitions"": [
@@ -655,7 +655,7 @@ namespace VideoEditor.Ui
 }
 
 - id: 영문으로 시작하는 영문·숫자·_·- (프로젝트에 저장되는 이름, 기본 효과와 겹치면 안 됨)
-- name: 효과 탭에 보일 이름(40자까지), group: 묶음(없으면 ""내 효과"")
+- name: [전환] 탭에 보일 이름(40자까지), group: 묶음(없으면 ""내 효과"")
 - xfade: FFmpeg xfade 효과 이름(wipeleft, circleopen, pixelize 등) — 또는
 - expr: 수식. X·Y 픽셀 위치, W·H 화면 크기, P 진행(1에서 0으로), A 앞 화면 값, B 새 화면 값, PLANE 색 평면,
   a0~a3(x,y)·b0~b3(x,y) 다른 위치의 값.

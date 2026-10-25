@@ -843,6 +843,32 @@ namespace VideoEditor.UiTests
                     Assert.Null(Effects(window));
                 });
 
+                // 첫 장이 보이자마자(아직 그리는 중) 떠나도 늦게 온 장이 다시 덮지 않고 이름표도 남지 않는다 — 1초 동안 살핀다
+                ui.Run(() => Enter(window, "line-slip"));
+                await ui.WaitUntil(() => HoverLabel(window).Visibility == Visibility.Visible, Wait, "그리는 중 미리 보기");
+                ui.Run(() => Leave(window, "line-slip"));
+                for (var i = 0; i < 10; i++)
+                {
+                    await Task.Delay(100);
+                    ui.Run(() =>
+                    {
+                        Assert.Equal(Visibility.Collapsed, HoverLabel(window).Visibility);
+                        Assert.Same(source, Ui.ById<Image>(window, "PreviewImage").Source);
+                    });
+                }
+
+                // 보이는 중에 탭을 바꾸면 바로 끝난다
+                ui.Run(() => Enter(window, "block-glitch"));
+                await ui.WaitUntil(() => HoverLabel(window).Visibility == Visibility.Visible, Wait, "탭 바꾸기 전 미리 보기");
+                ui.Run(() =>
+                {
+                    Ui.ById<TabControl>(window, "MediaTabs").SelectedIndex = 0;
+                    Assert.Equal(Visibility.Collapsed, HoverLabel(window).Visibility);
+                    Assert.Same(source, Ui.ById<Image>(window, "PreviewImage").Source);
+                });
+                OpenEffectsTab(ui, window);
+                ui.Run(() => Leave(window, "block-glitch"));
+
                 // 보이는 중에 고르기를 풀면 바로 끝난다
                 ui.Run(() => Enter(window, "rgb-split"));
                 await ui.WaitUntil(() => HoverLabel(window).Visibility == Visibility.Visible, Wait, "두 번째 미리 보기");

@@ -35,7 +35,7 @@ namespace VideoEditor.Ui
     {
         public const double RulerHeight = 28;
         public const string MediaDataFormat = "VideoEditor.MediaPaths";
-        /// <summary>효과 탭에서 끄는 전환 — "종류|초".</summary>
+        /// <summary>[전환] 탭에서 끄는 전환 — "종류|초".</summary>
         public const string TransitionDataFormat = "VideoEditor.Transition";
         /// <summary>효과 탭에서 끄는 동영상 효과 — 효과 id.</summary>
         public const string VideoEffectDataFormat = "VideoEditor.VideoEffect";
@@ -156,7 +156,7 @@ namespace VideoEditor.Ui
         public event Action<string> StatusMessage;
         /// <summary>파일·미디어를 끌어 놓음: 경로들, 놓은 트랙(줄 아래 빈 곳이면 null), 프레임.</summary>
         public event Action<string[], Track, long> MediaDropped;
-        /// <summary>효과 탭의 전환을 클립에 놓음 — ("종류|초", 클립 Id).</summary>
+        /// <summary>[전환] 탭의 전환을 클립에 놓음 — ("종류|초", 클립 Id).</summary>
         public event Action<string, string> TransitionDropped;
         /// <summary>효과 탭의 동영상 효과를 클립에 놓음 — (효과 id, 클립 Id).</summary>
         public event Action<string, string> VideoEffectDropped;
@@ -451,7 +451,7 @@ namespace VideoEditor.Ui
             {
                 _session.Select(new[] { transition });
                 StatusMessage?.Invoke("전환: " + Transitions.Name(transition) + " · " + UiKit.Number(_session.Project.Rate.ToSeconds(transition.TransitionIn))
-                                      + "초 — 속성 [화면] 탭에서 효과·길이를 바꾸거나 [효과] 탭에서 다른 효과를 넣습니다.");
+                                      + "초 — 속성 [화면] 탭에서 효과·길이를 바꾸거나 [전환] 탭에서 다른 효과를 넣습니다.");
                 return;
             }
             TimelineRow row;
@@ -601,7 +601,7 @@ namespace VideoEditor.Ui
             return null;
         }
 
-        /// <summary>효과 탭에서 끈 전환("종류|초")을 놓을 클립(놓은 자리의 클립 — 그 클립 앞에 넣는다).</summary>
+        /// <summary>[전환] 탭에서 끈 전환("종류|초")을 놓을 클립(놓은 자리의 클립 — 그 클립 앞에 넣는다).</summary>
         private Clip TransitionTarget(DragEventArgs e)
         {
             if (!e.Data.GetDataPresent(TransitionDataFormat))

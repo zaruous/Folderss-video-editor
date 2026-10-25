@@ -343,7 +343,7 @@ namespace VideoEditor.Ui
 
         // ---------- 전환 효과 ----------
 
-        /// <summary>사용자 전환 효과 폴더(데이터 폴더\transitions) — *.json을 넣고 [다시 읽기]를 누르면 효과 탭에 더해진다.</summary>
+        /// <summary>사용자 전환 효과 폴더(데이터 폴더\transitions) — *.json을 넣고 [다시 읽기]를 누르면 [전환] 탭에 더해진다.</summary>
         public string TransitionFolder { get { return Path.Combine(Manager.DataDirectory, "transitions"); } }
 
         /// <summary>마지막으로 사용자 효과 폴더를 읽을 때 건너뛴 정의·파일과 그 까닭.</summary>

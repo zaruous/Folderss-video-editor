@@ -668,11 +668,11 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
-        public void NewEffects_FollowTheSeenSetting_IgnoringUnknownIdsAndJunk()
+        public void NewEffects_FollowTheSeenSetting_KeepingOtherReleasesIds_IgnoringJunk()
         {
-            // 본 것만 빠진다(목록 차례 그대로), 모르는 id·글이 아닌 항목·형식이 틀린 글은 버린다
+            // 본 것만 빠진다(목록 차례 그대로). 모르는 id(다른 판의 효과)는 형식이 맞으면 남기고, 글이 아닌 항목·형식이 틀린 글은 버린다
             var seen = VideoEffectNews.ReadSeen("[\"rgb-split\", \"future-effect\", 42, null, {\"id\":\"heartbeat\"}, \"BAD TV\", \"camera-shake\"]");
-            Assert.Equal(new[] { "camera-shake", "rgb-split", "scan-line" }, seen.OrderBy(i => i));
+            Assert.Equal(new[] { "camera-shake", "future-effect", "rgb-split", "scan-line" }, seen.OrderBy(i => i, StringComparer.Ordinal));
             Assert.Equal(SecondRelease.Except(new[] { "rgb-split", "camera-shake" }), VideoEffectNews.New(seen).Select(d => d.Id));
             // 모두 보면 새 효과 없음, 처음 판의 효과는 모음에 없어도 새로가 아니다
             Assert.Empty(VideoEffectNews.New(new HashSet<string>(SecondRelease)));
@@ -684,9 +684,10 @@ namespace VideoEditor.Tests
         [Fact]
         public void SeenSetting_WritesKnownIdsInCatalogOrder_AndRoundTrips()
         {
-            var written = VideoEffectNews.WriteSeen(new[] { "zoom-bounce", "unknown", "scan-line", "rgb-split", "rgb-split", null });
-            Assert.Equal("[\"scan-line\",\"rgb-split\",\"zoom-bounce\"]", written);
-            Assert.Equal(new[] { "rgb-split", "scan-line", "zoom-bounce" }, VideoEffectNews.ReadSeen(written).OrderBy(i => i));
+            // 아는 효과는 목록 차례로, 형식이 맞는 모르는 id(다른 판의 효과)는 그 뒤에, 형식이 틀린 것은 버린다
+            var written = VideoEffectNews.WriteSeen(new[] { "zoom-bounce", "unknown", "scan-line", "rgb-split", "rgb-split", null, "BAD TV" });
+            Assert.Equal("[\"scan-line\",\"rgb-split\",\"zoom-bounce\",\"unknown\"]", written);
+            Assert.Equal(new[] { "rgb-split", "scan-line", "unknown", "zoom-bounce" }, VideoEffectNews.ReadSeen(written).OrderBy(i => i, StringComparer.Ordinal));
             Assert.Equal("[]", VideoEffectNews.WriteSeen(null));
         }
 
@@ -721,8 +722,11 @@ namespace VideoEditor.Tests
             var dismissed = VideoEffectNews.WriteSeen(VideoEffects.All.Select(d => d.Id));
             Assert.Equal(new[] { "future-effect" }, VideoEffectNews.New(VideoEffectNews.ReadSeen(dismissed, catalog), catalog).Select(d => d.Id));
             Assert.Equal(SecondRelease.Concat(new[] { "future-effect" }), VideoEffectNews.New(VideoEffectNews.ReadSeen(null, catalog), catalog).Select(d => d.Id));
-            // 이 판에서 그 효과를 본 기록은 지금 판에서 읽으면 버려진다(모르는 id)
-            Assert.DoesNotContain("future-effect", VideoEffectNews.ReadSeen(VideoEffectNews.WriteSeen(new[] { "future-effect", "rgb-split" }, catalog)));
+            // 다음 판에서 그 효과를 본 기록은 지금 판이 읽고 다시 써도 남는다 — 지금 판으로 돌아왔다 다음 판을 열어도 다시 "새로"가 되지 않게
+            var fromNext = VideoEffectNews.WriteSeen(new[] { "future-effect", "rgb-split" }, catalog);
+            var rewritten = VideoEffectNews.WriteSeen(VideoEffectNews.ReadSeen(fromNext));
+            Assert.Contains("future-effect", VideoEffectNews.ReadSeen(rewritten, catalog));
+            Assert.DoesNotContain(VideoEffectNews.New(VideoEffectNews.ReadSeen(rewritten, catalog), catalog), d => d.Id == "future-effect");
         }
     }
 }

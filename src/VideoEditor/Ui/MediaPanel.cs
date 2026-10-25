@@ -489,6 +489,9 @@ namespace VideoEditor.Ui
                     groups.SelectedItem = allGroups;
                 _services.MarkEffectsSeen(VideoEffects.All.Select(d => d.Id));
             }));
+            // 화면 낭독은 앞뒤 없이도 뜻이 통하게
+            AutomationProperties.SetName(noticeButtons.Children[0], "새 효과 보기");
+            AutomationProperties.SetName(noticeButtons.Children[1], "새 효과 모두 확인");
             foreach (Button button in noticeButtons.Children)
             {
                 button.MinWidth = 0;

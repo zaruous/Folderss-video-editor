@@ -129,8 +129,10 @@ namespace VideoEditor.Ui
         /// <summary>효과를 얹어 볼 클립: 속성 패널이 보이는 클립, 아니면 고른 클립 가운데 처음 동영상·사진 클립.</summary>
         private Clip Target()
         {
+            // 숨긴 트랙의 클립은 미리 보기에 그려지지 않으므로 고르지 않는다
+            bool Visible(Clip c) => VideoEffects.CanHave(c) && _session.Project.TrackOf(c)?.Hidden != true;
             var primary = _session.PrimaryClip;
-            return VideoEffects.CanHave(primary) ? primary : _session.SelectedClips.FirstOrDefault(VideoEffects.CanHave);
+            return primary != null && Visible(primary) ? primary : _session.SelectedClips.FirstOrDefault(Visible);
         }
 
         private void Start()
@@ -154,8 +156,15 @@ namespace VideoEditor.Ui
             var clip = copy.FindClip(target.Id);
             if (clip == null || clip.Duration <= 0)
                 return;
-            clip.Effects ??= new List<ClipEffect>();
-            clip.Effects.Add(VideoEffects.Create(def));
+            // [넣기]와 같은 길로 더한다 — 효과가 8개 찼거나 잠긴 트랙이면 넣기도 거절하므로 미리 보지 않는다
+            try
+            {
+                VideoEffects.Add(copy, clip, def);
+            }
+            catch (EditException)
+            {
+                return;
+            }
             var rate = copy.Rate;
             var playhead = _session.Playhead;
             var from = playhead >= clip.Start && playhead < clip.End ? playhead : clip.Start;

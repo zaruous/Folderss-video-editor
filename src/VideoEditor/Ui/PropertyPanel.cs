@@ -234,7 +234,7 @@ namespace VideoEditor.Ui
             }
             panel.Children.Add(NumberRow("회전", "PropRotation", -360, 360, "°", id, c => c.Rotation, (c, v) => c.Rotation = v));
             panel.Children.Add(NumberRow("불투명도", "PropOpacity", 0, 100, "%", id, c => c.Opacity * 100, (c, v) => c.Opacity = Math.Max(0, Math.Min(1, v / 100))));
-            // 전환 효과 종류(길이는 아래 줄) — 효과 탭에서 고르거나 끌어 놓아도 된다
+            // 전환 효과 종류(길이는 아래 줄) — [전환] 탭에서 고르거나 끌어 놓아도 된다
             var kinds = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
             AutomationProperties.SetAutomationId(kinds, "PropTransitionKind");
             AutomationProperties.SetName(kinds, "전환 효과");

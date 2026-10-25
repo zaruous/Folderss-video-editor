@@ -5,7 +5,7 @@ using System.Windows.Controls;
 namespace VideoEditor.Ui
 {
     /// <summary>
-    /// 효과 썸네일 칸 놓기(효과 탭의 동영상 효과·전환 효과 목록): 폭에 들어가는 만큼 칸 수를 정하고 남는 폭을 칸에 고루 나눈다 —
+    /// 효과 썸네일 칸 놓기([효과] 탭의 동영상 효과, [전환] 탭의 전환 효과 목록): 폭에 들어가는 만큼 칸 수를 정하고 남는 폭을 칸에 고루 나눈다 —
     /// 좁은 패널에서도 오른쪽이 비지 않고 모든 칸이 같은 크기다. 줄 높이는 그 줄에서 가장 높은 칸.
     /// </summary>
     internal sealed class TileGrid : Panel
