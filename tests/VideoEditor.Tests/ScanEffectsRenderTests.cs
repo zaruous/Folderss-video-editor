@@ -539,8 +539,8 @@ namespace VideoEditor.Tests
                 clip.Effects = new List<ClipEffect> { effect };
                 var cost = Measure() - plain;
                 report += " · " + name + " +" + cost.ToString("0.0");
-                // 목표는 +25ms 안팎 — 시험 기계의 부하를 생각해 넉넉하게
-                Assert.True(cost < 60, name + "이 장당 " + cost.ToString("0.0") + "ms 더 걸립니다");
+                // 목표는 +25ms 안팎 — 시험 기계의 속도와 부하를 생각해 넉넉하게
+                Assert.True(cost < FfmpegMedia.CostBudget(plain),name + "이 장당 " + cost.ToString("0.0") + "ms 더 걸립니다");
             }
             _out.WriteLine(report);
         }

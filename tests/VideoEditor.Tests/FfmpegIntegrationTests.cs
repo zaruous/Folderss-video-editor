@@ -59,6 +59,15 @@ namespace VideoEditor.Tests
         {
             return MediaProbe.Probe(Tool, path, CancellationToken.None).GetAwaiter().GetResult();
         }
+
+        /// <summary>
+        /// 1080p 효과 하나가 장당 더 써도 되는 시간(ms). 효과 없이 장당 6ms 안팎인 PC에서는 60ms,
+        /// 그보다 몇 배 느린 시험 기계(CI)에서는 효과 없는 시간의 4배까지 — 효과 비용도 기계 속도만큼 늘기 때문.
+        /// </summary>
+        public static double CostBudget(double plain)
+        {
+            return Math.Max(60, plain * 4);
+        }
     }
 
     public class FfmpegIntegrationTests

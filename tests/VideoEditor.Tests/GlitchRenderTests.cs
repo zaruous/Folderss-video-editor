@@ -500,9 +500,9 @@ namespace VideoEditor.Tests
             }
             _out.WriteLine("1080p 장당: 효과 없이 " + best[0].ToString("0.0") + "ms · "
                 + string.Join(" · ", Enumerable.Range(1, defs.Length - 1).Select(i => defs[i].Name + " " + best[i].ToString("0.0") + "ms(+" + (best[i] - best[0]).ToString("0.0") + ")")));
-            // 목표는 +25ms 안팎 — 시험 기계의 부하를 생각해 넉넉하게
+            // 목표는 +25ms 안팎 — 시험 기계의 속도와 부하를 생각해 넉넉하게
             for (var i = 1; i < defs.Length; i++)
-                Assert.True(best[i] - best[0] < 60, defs[i].Name + "가 장당 " + (best[i] - best[0]).ToString("0.0") + "ms 더 걸립니다");
+                Assert.True(best[i] - best[0] < FfmpegMedia.CostBudget(best[0]),defs[i].Name + "가 장당 " + (best[i] - best[0]).ToString("0.0") + "ms 더 걸립니다");
         }
     }
 }

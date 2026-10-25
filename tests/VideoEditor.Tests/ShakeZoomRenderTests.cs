@@ -525,8 +525,8 @@ namespace VideoEditor.Tests
                 line += " · " + def.Name + " +" + cost.ToString("0.0");
             }
             _out.WriteLine(line);
-            // 목표는 +25ms 안팎 — 시험 기계의 부하를 생각해 넉넉하게
-            Assert.True(worst < 60, line);
+            // 목표는 +25ms 안팎 — 시험 기계의 속도와 부하를 생각해 넉넉하게
+            Assert.True(worst < FfmpegMedia.CostBudget(plain), line);
         }
     }
 }
