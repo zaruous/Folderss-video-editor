@@ -174,7 +174,11 @@ namespace VideoEditor.Core
         /// <summary>효과 탭에 보일 순서. 효과를 더하려면 여기에 한 줄.</summary>
         public static IReadOnlyList<VideoEffectDef> All { get; } = new[]
         {
-            ScanLine.Def
+            ScanLine.Def,
+            ShockwaveScan.Def,
+            SciFiScan.Def,
+            RayScan.Def,
+            GlitchScan.Def,
         };
 
         public static VideoEffectDef Find(string id)
