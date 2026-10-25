@@ -39,7 +39,7 @@ namespace VideoEditor.Core
         public const string EnvFolder = "FOLDERSS_VE_PERSONMASK";
 
         /// <summary>마스크 모양(후처리)이 바뀌면 올린다 — 캐시 이름이 바뀌어 예전 마스크를 쓰지 않는다.</summary>
-        public const int FormatVersion = 1;
+        public const int FormatVersion = 2;
 
         /// <summary>모델 입력 크기는 이 배수(MODNet은 1/32까지 줄였다 키운다).</summary>
         public const int Multiple = 32;
@@ -71,7 +71,7 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// 모델에 넣을 크기: 비율을 지켜 짧은 변을 shortSide로(긴 변은 MaxLongSide까지), 두 변 모두 Multiple의 배수로 반올림.
-        /// 비율이 조금 어긋나도 마스크는 원본 화면 전체에 늘여 맞추므로 사람 자리는 그대로 겹친다.
+        /// 비율이 조금 어긋나도 렌더 그래프가 마스크를 원본 비율의 클립 그림 크기로 늘여 맞추므로 사람 자리는 그대로 겹친다.
         /// </summary>
         public static (int Width, int Height) InputSize(int width, int height, int shortSide = 256)
         {
@@ -140,8 +140,8 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// 원본 → 모델 크기 RGB 프레임(rgb24 원시 바이트를 표준 출력으로). 동영상은 마스크 레이트로 고정하고(fps) 파일 시작(0초)부터 채워
-        /// 마스크 프레임 k가 원본 k/레이트 초에 놓인다 — 렌더 그래프가 원본과 같은 -ss·-t·속도로 읽으면 사람 자리가 겹친다.
+        /// 원본 → 모델 크기 RGB 프레임(rgb24 원시 바이트를 표준 출력으로). 동영상은 마스크 레이트로 고정하고(fps) 첫 화면부터 만들어
+        /// 마스크 프레임 k가 원본 화면 시작 + k/레이트 초에 놓인다 — 렌더 그래프가 원본과 같은 -ss·-t·속도로, 화면 시작(<see cref="MediaInfo.VideoStart"/>)만큼 당겨 읽으면 사람 자리가 겹친다.
         /// 화면은 첫 동영상 스트림(표지 그림 제외), 회전 정보는 FFmpeg 기본대로 돌려 읽는다(그래프와 같음).
         /// </summary>
         public static List<string> DecodeArguments(string source, int width, int height, FrameRate rate, bool image)
@@ -151,7 +151,7 @@ namespace VideoEditor.Core
             if (image)
                 args.AddRange(new[] { "-frames:v", "1", "-vf", scale });
             else
-                args.AddRange(new[] { "-map", "0:V:0", "-an", "-sn", "-dn", "-vf", "fps=" + rate.Rational + ":start_time=0," + scale });
+                args.AddRange(new[] { "-map", "0:V:0", "-an", "-sn", "-dn", "-vf", "fps=" + rate.Rational + "," + scale });
             args.AddRange(new[] { "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1" });
             return args;
         }

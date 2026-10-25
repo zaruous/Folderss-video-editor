@@ -126,7 +126,7 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
-        public void DecodeArguments_FixedRateFromFileStart_OneScale_RgbToPipe()
+        public void DecodeArguments_FixedRateFromFirstFrame_OneScale_RgbToPipe()
         {
             var source = Path.Combine(_folder, "a b.mp4");
             var args = PersonMaskText.DecodeArguments(source, 448, 256, new FrameRate(30000, 1001), false);
@@ -136,7 +136,8 @@ namespace VideoEditor.Tests
             Assert.Equal("0:V:0", args[args.IndexOf("-map") + 1]);
             Assert.Contains("-an", args);
             var filter = args[args.IndexOf("-vf") + 1];
-            Assert.Equal("fps=30000/1001:start_time=0,scale=448:256:flags=bilinear", filter);
+            // 첫 화면부터(파일 0초부터 첫 화면으로 채우지 않음 — 화면이 늦게 시작하는 원본은 그래프가 VideoStart만큼 당겨 읽는다)
+            Assert.Equal("fps=30000/1001,scale=448:256:flags=bilinear", filter);
             // 한 사슬에 scale은 하나만(두 scale을 이으면 FFmpeg가 멈추던 일)
             Assert.Single(Regex.Matches(filter, "scale="));
             Assert.Equal(new[] { "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1" }, args.Skip(args.Count - 5));

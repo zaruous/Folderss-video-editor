@@ -33,6 +33,12 @@ namespace VideoEditor.Core
         /// <summary>읽을 때의 파일 크기·고친 시각(UTC 틱) — 같은 이름으로 파일을 바꿔 넣었는지 알아보려고(0 = 모름, 예전 프로젝트).</summary>
         public long FileSize { get; set; }
         public long FileTime { get; set; }
+        /// <summary>
+        /// 동영상 화면이 파일 시작보다 늦게 시작하는 초(스트림 복사로 자른 파일·방송 파일 등, 보통 0 — 0이면 저장하지 않음).
+        /// 그래프가 원본을 -ss로 읽으면 그 앞의 빈 구간은 건너뛰므로, 첫 화면부터 만든 인물 마스크는 이만큼 당겨 읽어야 겹친다.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public double VideoStart { get; set; }
 
         [JsonIgnore]
         public string Name { get { return System.IO.Path.GetFileName(Path); } }
@@ -52,6 +58,7 @@ namespace VideoEditor.Core
             AudioChannels = other.AudioChannels;
             FileSize = other.FileSize;
             FileTime = other.FileTime;
+            VideoStart = other.VideoStart;
         }
 
         /// <summary>화면(프로젝트) 비율과 3% 넘게 다른 그림인지 — 맞춤이면 빈 곳, 채우기면 잘리는 곳이 생긴다.</summary>

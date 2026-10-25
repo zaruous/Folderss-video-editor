@@ -26,7 +26,9 @@
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <!-- 링크한 Media/PersonSegmenter.cs가 쓰는 ONNX Runtime(플러그인과 같은 버전). 실제로 모델을 돌리는 시험은 FOLDERSS_VE_PERSONMASK를 줄 때만 -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
+    <!-- 인물 분리: Windows는 네이티브 DLL까지(모델을 실제로 돌리는 시험), 다른 OS(Linux CI)는 관리 코드만 — 전체 패키지는 모든 OS의 네이티브를 담아 약 120MB -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" Condition="'$(OS)' == 'Windows_NT'" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.22.1" Condition="'$(OS)' != 'Windows_NT'" />
   </ItemGroup>
 
 </Project>

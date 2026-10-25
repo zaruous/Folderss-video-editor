@@ -28,10 +28,12 @@ namespace VideoEditor.Core
                 var root = document.RootElement;
                 var info = new MediaInfo { Path = path };
                 double formatDuration = 0;
+                double formatStart = 0;
                 var formatName = "";
                 if (root.TryGetProperty("format", out var format))
                 {
                     formatDuration = Number(format, "duration");
+                    formatStart = Number(format, "start_time");
                     formatName = Text(format, "format_name");
                 }
                 JsonElement? video = null;
@@ -65,6 +67,9 @@ namespace VideoEditor.Core
                         info.Width = info.Height;
                         info.Height = w;
                     }
+                    // 화면이 파일 시작(가장 이른 스트림)보다 늦게 시작하는 초 — 이상한 값·수 밀리초 차이는 0
+                    var videoStart = Number(v, "start_time") - formatStart;
+                    info.VideoStart = double.IsFinite(videoStart) && videoStart > 0.0005 && videoStart < 86400 ? Math.Round(videoStart, 6) : 0;
                     var rateText = Text(v, "avg_frame_rate");
                     if (!FrameRate.TryParse(rateText, out var rate))
                         rateText = Text(v, "r_frame_rate");

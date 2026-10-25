@@ -315,7 +315,8 @@ namespace VideoEditor.Ui
             var rows = new StackPanel();
             panel.Children.Add(rows);
 
-            // 인물 마스크: 클립 원본 하나에 하나 — 상태는 갱신할 때마다 디스크에서 확인한다(다 만든 뒤에도 보이게)
+            // 인물 마스크: 클립 원본 하나에 하나 — "사람에게만" 효과가 있을 때만, 원본마다 한 번 디스크에서 확인하고 기억한다
+            // (슬라이더를 끌 때마다 확인하면 원본이 끊긴 네트워크 폴더에 있을 때 편집이 멈춘다). [인물 마스크 만들기] 뒤에는 다시 확인한다
             var maskBox = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
             var maskStatus = UiKit.Label("", true);
             maskStatus.TextWrapping = TextWrapping.Wrap;
@@ -325,21 +326,27 @@ namespace VideoEditor.Ui
             maskHint.TextWrapping = TextWrapping.Wrap;
             maskHint.Margin = new Thickness(0, 2, 0, 4);
             maskBox.Children.Add(maskHint);
-            void ShowMask()
+            string checkedPath = null;
+            var ready = false;
+            void ShowMask(bool again)
             {
                 var c = _session.Project.FindClip(id);
                 if (c == null)
                     return;
-                string mask = null;
-                try
+                if (again || !string.Equals(checkedPath, c.Path, StringComparison.OrdinalIgnoreCase))
                 {
-                    mask = VideoEditor.Media.RenderEnvironment.PersonMasks?.Find(c.Path);
+                    checkedPath = c.Path;
+                    try
+                    {
+                        ready = !string.IsNullOrEmpty(VideoEditor.Media.RenderEnvironment.PersonMasks?.Find(c.Path));
+                    }
+                    catch (Exception)
+                    {
+                        // 마스크를 확인하지 못하면 없는 것으로 보인다(그리기도 같음)
+                        ready = false;
+                    }
                 }
-                catch (Exception)
-                {
-                    // 마스크를 확인하지 못하면 없는 것으로 보인다(그리기도 같음)
-                }
-                maskStatus.Text = string.IsNullOrEmpty(mask) ? "인물 마스크가 없습니다" : "인물 마스크 준비됨";
+                maskStatus.Text = ready ? "인물 마스크 준비됨" : "인물 마스크가 없습니다";
             }
             Button build = null;
             build = UiKit.TextButton("인물 마스크 만들기", "EffectMaskBuild", async () =>
@@ -356,7 +363,7 @@ namespace VideoEditor.Ui
                 finally
                 {
                     build.IsEnabled = true;
-                    ShowMask();
+                    ShowMask(true);
                 }
             });
             build.HorizontalAlignment = HorizontalAlignment.Left;
@@ -407,8 +414,10 @@ namespace VideoEditor.Ui
                     _updating = was;
                 }
                 empty.Visibility = effects.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-                maskBox.Visibility = effects.Any(e => e != null && e.PersonOnly && VideoEffects.Find(e.Id) != null) ? Visibility.Visible : Visibility.Collapsed;
-                ShowMask();
+                var personal = effects.Any(e => e != null && e.PersonOnly && VideoEffects.Find(e.Id) != null);
+                maskBox.Visibility = personal ? Visibility.Visible : Visibility.Collapsed;
+                if (personal)
+                    ShowMask(false);
             });
             return panel;
         }

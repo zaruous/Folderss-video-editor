@@ -332,6 +332,63 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void Graph_PersonOnly_MaskTakesTheSourceAspect_AndShiftsByTheVideoStart()
+        {
+            // 마스크는 모델 크기(448×256 등)라 원본(16:9)과 비율이 다르다 — 마스크 비율이 아니라 원본 크기로 계산한 클립 그림 크기로 늘인다
+            Assert.Equal((320, 180), RenderGraph.FitSize(1920, 1080, 320, 240, false));
+            Assert.Equal((427, 240), RenderGraph.FitSize(1920, 1080, 320, 240, true));
+            Assert.Equal((1440, 1080), RenderGraph.FitSize(1440, 1080, 1920, 1080, false));
+            Assert.Equal((1920, 1440), RenderGraph.FitSize(1440, 1080, 1920, 1080, true));
+            Assert.Equal((1080, 1920), RenderGraph.FitSize(1080, 1920, 1080, 1920, false));
+
+            var project = TestProjects.Empty();
+            project.Width = 320;
+            project.Height = 240;
+            var media = TestProjects.Video("wide.mp4");
+            media.Width = 1920;
+            media.Height = 1080;
+            media.VideoStart = 0.4;
+            project.Media.Add(media);
+            var clip = TimelineEdits.CreateClip(media, project.Rate, 0, 0);
+            clip.Fit = ClipFit.Fit;
+            TimelineEdits.Place(project, project.MainTrack, clip, 0);
+            WithScanLine(clip, e => e.PersonOnly = true);
+            var masks = new FakeMasks(new Dictionary<string, string> { ["wide.mp4"] = "C:/masks/wide.mkv" });
+            var options = new RenderOptions { From = 0, To = 1, Width = 320, Height = 240, Audio = false, TempFolder = @"C:\Temp", PersonMasks = masks };
+            var plan = RenderGraph.Build(project, options);
+            Assert.Contains(",scale=320:180,pad=320:240:(ow-iw)/2:(oh-ih)/2,format=gbrap[fx0m0]", plan.Filter);
+            // 화면이 0.4초 늦게 시작하는 원본: 원본은 -ss 0이면 첫 화면부터, 마스크(첫 화면부터 만든 것)는 0.4초 당긴 자리 — 처음에선 둘 다 0
+            Assert.Equal("0", plan.Inputs[0][1]);
+            Assert.Equal("0", plan.Inputs[1][1]);
+            // 1초부터 그리면 원본 1초 ↔ 마스크 0.6초
+            options.From = 30;
+            options.To = 31;
+            plan = RenderGraph.Build(project, options);
+            Assert.Equal("1", plan.Inputs[0][1]);
+            Assert.Equal("0.6", plan.Inputs[1][1]);
+            // 채우기는 키워 가운데를 자른다
+            clip.Fit = ClipFit.Fill;
+            Assert.Contains(",scale=427:240,crop=320:240,format=gbrap[fx0m0]", RenderGraph.Build(project, options).Filter);
+        }
+
+        [Fact]
+        public void Probe_RecordsHowLateTheVideoStarts_AndOmitsZero()
+        {
+            const string late = "{\"format\":{\"format_name\":\"mov,mp4\",\"duration\":\"3.0\",\"start_time\":\"0.000000\"},"
+                + "\"streams\":[{\"codec_type\":\"audio\",\"codec_name\":\"aac\",\"channels\":2,\"start_time\":\"0.000000\"},"
+                + "{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":1920,\"height\":1080,\"avg_frame_rate\":\"30/1\",\"start_time\":\"0.400000\"}]}";
+            Assert.Equal(0.4, FfmpegText.ParseProbe("late.mp4", late).VideoStart, 6);
+            // 파일 시작이 0이 아니어도(방송 파일) 화면 시작과의 차이만, 차이가 없으면 0
+            var shifted = late.Replace("\"start_time\":\"0.000000\"},\"streams\"", "\"start_time\":\"1.400000\"},\"streams\"").Replace("0.400000", "1.400000");
+            Assert.Equal(0, FfmpegText.ParseProbe("ts.mp4", shifted).VideoStart);
+            var project = TestProjects.Empty();
+            project.Media.Add(TestProjects.Video("plain.mp4"));
+            Assert.DoesNotContain("VideoStart", ProjectFile.Snapshot(project));
+            project.Media[0].VideoStart = 0.4;
+            Assert.Equal(0.4, ProjectFile.FromSnapshot(ProjectFile.Snapshot(project)).Media[0].VideoStart, 6);
+        }
+
+        [Fact]
         public void Graph_PersonOnly_UsesTheMaskInput_TrimmedLikeTheSource_OnlyWhenFound()
         {
             var project = TestProjects.Empty();

@@ -344,7 +344,7 @@ namespace VideoEditor.Core
         /// <summary>
         /// 파일 클립의 화면 원본(입력 + 시간 맞춤). path는 클립 원본 또는 원본과 같은 시간축의 파일(인물 마스크) — 같은 -ss·-t·속도·사진 반복으로 읽어 프레임이 맞는다.
         /// </summary>
-        private static string MediaSource(Project project, RenderPlan plan, Clip clip, string path, long segStart, long segEnd)
+        private static string MediaSource(Project project, RenderPlan plan, Clip clip, string path, long segStart, long segEnd, double seekShift = 0)
         {
             var rate = project.Rate;
             var fps = rate.Rational;
@@ -366,7 +366,9 @@ namespace VideoEditor.Core
                 return "[" + last + ":v]reverse,trim=end_frame=1,setpts=PTS-STARTPTS,fps=" + fps + hold;
             }
             var sourceFrames = Math.Max(1, Math.Min((long)Math.Round(segFrames * clip.Speed), clip.SourceLength - sourceStart));
-            var input = AddInput(plan, "-ss", N(rate.ToSeconds(sourceStart)), "-t", N(rate.ToSeconds(sourceFrames)), "-i", path);
+            // seekShift: 같은 시간축이 그만큼 앞당겨진 파일(첫 화면부터 만든 인물 마스크)을 원본과 겹치게 읽는다
+            var seek = rate.ToSeconds(sourceStart) - seekShift;
+            var input = AddInput(plan, "-ss", N(Math.Max(0, seek)), "-t", N(rate.ToSeconds(sourceFrames)), "-i", path);
             var chain = "[" + input + ":v]setpts=PTS-STARTPTS";
             if (Math.Abs(clip.Speed - 1) > 1e-9)
                 chain += ",setpts=PTS/" + N(clip.Speed);
@@ -390,7 +392,8 @@ namespace VideoEditor.Core
             {
                 // 마스크 흐름은 효과마다 하나씩(틀 크기 gbrap, 흰색 = 사람)
                 var labels = Enumerable.Range(0, personal).Select(i => "fx" + n + "m" + i).ToList();
-                filters.Add(MediaSource(project, plan, clip, mask, segStart, segEnd) + MaskFit(fit, boxWidth, boxHeight) + ",format=gbrap"
+                var media = project.Media.FirstOrDefault(m => string.Equals(m.Path, clip.Path, StringComparison.OrdinalIgnoreCase));
+                filters.Add(MediaSource(project, plan, clip, mask, segStart, segEnd, media?.VideoStart ?? 0) + MaskFit(media, fit, boxWidth, boxHeight) + ",format=gbrap"
                     + (personal > 1 ? ",split=" + personal : "") + string.Concat(labels.Select(l => "[" + l + "]")));
                 foreach (var label in labels)
                     masks.Enqueue(label);
@@ -421,12 +424,37 @@ namespace VideoEditor.Core
         }
 
         /// <summary>마스크를 클립 그림과 같은 자리·크기로(크기 바꾸기 한 번). 맞춤·흐린 배경은 가운데에 두고 남는 곳은 검정(사람 아님).</summary>
-        private static string MaskFit(ClipFit fit, int width, int height)
+        /// <remarks>
+        /// 마스크는 모델 크기(32의 배수)라 원본과 비율이 조금 다르다 — 마스크 자신의 비율로 맞추면 가장자리에서 어긋난다(16:9 맞춤 1080p에서 양옆 약 15px).
+        /// 그래서 원본 크기(회전을 반영한 화소 크기)로 FFmpeg의 비율 맞춤과 같은 계산을 해 클립 그림의 크기를 구하고, 마스크를 그 크기로 늘인 뒤 채우거나 자른다.
+        /// 원본 크기를 모르면 마스크 비율로 맞춘다.
+        /// </remarks>
+        private static string MaskFit(MediaInfo media, ClipFit fit, int width, int height)
         {
-            var format = fit == ClipFit.Fill ? ",scale=w={0}:h={1}:force_original_aspect_ratio=increase,crop={0}:{1}"
-                : fit == ClipFit.Stretch ? ",scale=w={0}:h={1}"
-                : ",scale=w={0}:h={1}:force_original_aspect_ratio=decrease,pad={0}:{1}:(ow-iw)/2:(oh-ih)/2";
-            return string.Format(CultureInfo.InvariantCulture, format, width, height);
+            if (fit == ClipFit.Stretch)
+                return string.Format(CultureInfo.InvariantCulture, ",scale=w={0}:h={1}", width, height);
+            if (media == null || media.Width <= 0 || media.Height <= 0)
+            {
+                var format = fit == ClipFit.Fill ? ",scale=w={0}:h={1}:force_original_aspect_ratio=increase,crop={0}:{1}"
+                    : ",scale=w={0}:h={1}:force_original_aspect_ratio=decrease,pad={0}:{1}:(ow-iw)/2:(oh-ih)/2";
+                return string.Format(CultureInfo.InvariantCulture, format, width, height);
+            }
+            var (contentWidth, contentHeight) = FitSize(media.Width, media.Height, width, height, fit == ClipFit.Fill);
+            return fit == ClipFit.Fill
+                ? string.Format(CultureInfo.InvariantCulture, ",scale={0}:{1},crop={2}:{3}", contentWidth, contentHeight, width, height)
+                : string.Format(CultureInfo.InvariantCulture, ",scale={0}:{1},pad={2}:{3}:(ow-iw)/2:(oh-ih)/2", contentWidth, contentHeight, width, height);
+        }
+
+        /// <summary>
+        /// FFmpeg scale의 force_original_aspect_ratio(decrease = 다 보이게, increase = 채우게)와 같은 크기: 틀 w×h, 원본 iw×ih에서
+        /// tw = round(h·iw/ih), th = round(w·ih/iw)(반은 0에서 먼 쪽으로)를 구해 decrease는 작은 쪽, increase는 큰 쪽.
+        /// </summary>
+        internal static (int Width, int Height) FitSize(int sourceWidth, int sourceHeight, int width, int height, bool fill)
+        {
+            long Rescale(long a, long b, long c) => (a * b + c / 2) / c;
+            var fitWidth = (int)Rescale(height, sourceWidth, sourceHeight);
+            var fitHeight = (int)Rescale(width, sourceHeight, sourceWidth);
+            return fill ? (Math.Max(fitWidth, width), Math.Max(fitHeight, height)) : (Math.Min(fitWidth, width), Math.Min(fitHeight, height));
         }
 
         /// <summary>클립 원본의 준비된 인물 마스크 경로(없으면 null — 효과는 클립 전체에).</summary>

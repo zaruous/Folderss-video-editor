@@ -112,6 +112,9 @@ namespace VideoEditor.UiTests
                 await AddToTimeline(ui, window, "red.png");
                 Assert.Contains("인물 마스크 만들기", ui.Run(() => MenuNames(ClipMenu(window, ClipNamed(window, "red.png")))));
 
+                // 다른 시험(효과 탭의 [인물 마스크 만들기])이 먼저 돌았으면 마스크 폴더가 이미 있을 수 있다 — 누르기 전후의 파일을 비교한다
+                string[] Files() => Directory.Exists(MaskRoot(plugin)) ? Directory.GetFiles(MaskRoot(plugin), "*", SearchOption.AllDirectories).OrderBy(f => f).ToArray() : new string[0];
+                var before = Files();
                 ui.Post(() => InvokeMenu(ClipMenu(window, ClipNamed(window, "red.png")), "인물 마스크 만들기"));
                 var dialog = await ui.WaitFor(() => Ui.Window("인물 분리 모델 내려받기"), Wait, "모델 내려받기 창");
                 ui.Run(() =>
@@ -130,7 +133,7 @@ namespace VideoEditor.UiTests
                 await ui.WaitUntil(() => Ui.Window("인물 분리 모델 내려받기") == null, Wait, "내려받기 창 닫힘");
                 await ui.WaitUntil(() => Status(window).StartsWith("인물 마스크를 만들지 않았습니다", StringComparison.Ordinal), Wait, "안 만듦 알림");
                 Assert.Null(ui.Run(() => Ui.Window("인물 마스크 만들기")));
-                Assert.False(Directory.Exists(MaskRoot(plugin)), "취소했는데 인물 마스크 폴더가 생겼습니다.");
+                Assert.Equal(before, Files());
                 Assert.Empty(ui.TakeErrors());
             }
             finally

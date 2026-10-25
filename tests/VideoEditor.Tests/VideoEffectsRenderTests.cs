@@ -43,6 +43,9 @@ namespace VideoEditor.Tests
             Run("-f", "lavfi", "-i", "color=c=0x303030:size=320x240,format=rgba,geq=r=48:g=48:b=48:a='if(lt(X,160),255,0)'", "-frames:v", "1", Path.Combine(folder, "half.png"));
             Run("-f", "lavfi", "-i", "color=c=black:size=160x120,format=gray,geq=lum='if(lt(X,80),255,0)'", "-frames:v", "1", Path.Combine(folder, "mask-left.png"));
             Run("-f", "lavfi", "-i", "color=c=black:size=160x120:rate=30:duration=2,format=gray,geq=lum='if(lt(X,80),255,0)'", "-c:v", "ffv1", Path.Combine(folder, "mask-left.mkv"));
+            // 16:9 어두운 사진과, 비율이 원본과 아주 다른(정사각) 흰 마스크 — 모델 크기 마스크(448×256 등)의 비율 차이를 크게 키워 본다
+            Run("-f", "lavfi", "-i", "color=c=0x101010:size=640x360", "-frames:v", "1", Path.Combine(folder, "wide.png"));
+            Run("-f", "lavfi", "-i", "color=c=white:size=256x256,format=gray", "-frames:v", "1", Path.Combine(folder, "mask-square.png"));
             return folder;
         }
 
@@ -255,6 +258,30 @@ namespace VideoEditor.Tests
             {
                 Directory.Delete(folder, true);
             }
+        }
+
+        [FfmpegFact]
+        public void PersonOnly_MaskOfAnotherAspect_StillReachesThePictureEdges_InFit()
+        {
+            // 마스크를 마스크 자신의 비율로 맞추면(정사각 → 240×240) 16:9 그림 양옆에 검은 띠가 생겨 화면 끝에 닿은 사람에게 효과가 빠진다 — 원본 비율로 늘여 끝까지 겹친다
+            var wide = Path.Combine(Folder, "wide.png");
+            var project = NewProject();
+            var clip = Add(project, project.MainTrack, wide, 0);
+            project.Media.Add(FfmpegMedia.Probe(wide));
+            clip.Fit = ClipFit.Fit;
+            var effect = AddLine(clip, personOnly: true);
+            var masks = new Masks(wide, Path.Combine(Folder, "mask-square.png"));
+            // 선이 그림 안(맞춤 320×180, 위아래 30px 빈 곳)을 지나는 프레임
+            var frame = Enumerable.Range(0, 90).First(f =>
+            {
+                var y = ScanLine.LineY(effect, f / 30.0, Width, Height, 1, 1);
+                return y > 60 && y < 180;
+            });
+            var bgra = Render(project, frame, frame + 1, masks);
+            int Peak(int x) => Enumerable.Range((int)Math.Round(ScanLine.LineY(effect, frame / 30.0, Width, Height, 1, x)) - 3, 7).Max(y => Sum(Pixel(bgra, x, y)));
+            _out.WriteLine("왼쪽 끝 " + Peak(1) + " · 가운데 " + Peak(160) + " · 오른쪽 끝 " + Peak(318));
+            Assert.True(Peak(1) > 600, "왼쪽 끝까지 선이 보여야 합니다: " + Peak(1));
+            Assert.True(Peak(318) > 600, "오른쪽 끝까지 선이 보여야 합니다: " + Peak(318));
         }
 
         [FfmpegFact]
