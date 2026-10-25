@@ -460,8 +460,13 @@ namespace VideoEditor.Ui
                         var start = playhead + copy.Start - first;
                         var partner = partners[i] >= 0 ? copies[partners[i]] : null;
                         if (partner != null && copy.AudioOnly)
+                        {
                             start += partner.Start - (playhead + clips[partners[i]].Start - first);
-                        TimelineEdits.Place(p, track, copy, start);
+                            // 0 앞으로 가면 그 부분을 잘라 싱크를 지킨다
+                            ClipLinks.PlaceInSync(p, track, copy, start);
+                        }
+                        else
+                            TimelineEdits.Place(p, track, copy, start);
                     }
                     ClipLinks.CopyLinks(originals, copies);
                 }, "붙여 넣었습니다."))

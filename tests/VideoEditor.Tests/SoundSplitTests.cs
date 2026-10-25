@@ -190,6 +190,91 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void Trim_PartnerBlockedByANeighbour_BothStopTogether()
+        {
+            // 비마그네틱: 늘이는 쪽의 짝이 옆 클립에 막히면 이끄는 쪽도 그만큼만 늘어난다(두 길이가 같게) — #31
+            var (project, video, sound) = Detached();
+            TimelineEdits.Place(project, project.AudioTracks[0], Music(30), 70);
+            Assert.Equal(70, TimelineEdits.TrimEnd(project, video, 90));
+            Assert.Equal((0L, 70L), (video.Start, video.End));
+            Assert.Equal((0L, 70L), (sound.Start, sound.End));
+
+            // 사운드 쪽에서 늘여도 막힌 영상에 맞춘다(주 트랙의 다른 영상 80~)
+            TimelineEdits.Place(project, project.MainTrack, TestProjects.VideoClip(0, 20, "b.mp4"), 80);
+            TimelineEdits.Move(project, project.AudioTracks[0].Clips.Last(), project.AudioTracks[0], 95);
+            Assert.Equal(80, TimelineEdits.TrimEnd(project, sound, 95));
+            Assert.Equal((0L, 80L), (video.Start, video.End));
+            Assert.Equal((0L, 80L), (sound.Start, sound.End));
+            Assert.Equal(0, ClipLinks.Offset(sound, video));
+        }
+
+        [Fact]
+        public void TrimStart_PartnerBlockedByANeighbour_BothStopTogether()
+        {
+            var (project, video, sound) = Detached(start: 40);
+            TimelineEdits.TrimStart(project, video, 60);
+            TimelineEdits.Place(project, project.AudioTracks[0], Music(50), 0);
+            // 영상은 45까지 늘 수 있지만 사운드는 앞 소리(0~50)에 막힌다
+            Assert.Equal(50, TimelineEdits.TrimStart(project, video, 45));
+            Assert.Equal((50L, 100L, 10L), (video.Start, video.End, video.SourceIn));
+            Assert.Equal((50L, 100L, 10L), (sound.Start, sound.End, sound.SourceIn));
+        }
+
+        [Fact]
+        public void Trim_LockedPartner_LeadTrimsAlone_AsBefore()
+        {
+            var (project, video, sound) = Detached();
+            TimelineEdits.Place(project, project.AudioTracks[0], Music(30), 70);
+            project.AudioTracks[0].Locked = true;
+            Assert.Equal(90, TimelineEdits.TrimEnd(project, video, 90));
+            Assert.Equal((0L, 60L), (sound.Start, sound.End));
+        }
+
+        [Fact]
+        public void Trim_OnMagneticMain_PartnerBlocked_BothStop_AndTheNextVideoComesBack()
+        {
+            var project = TestProjects.Empty(magnetic: true);
+            var video = TestProjects.VideoClip(0, 60);
+            TimelineEdits.Place(project, project.MainTrack, video, 0);
+            var next = TestProjects.VideoClip(0, 30, "b.mp4");
+            TimelineEdits.Place(project, project.MainTrack, next, 999);
+            var sound = TimelineEdits.DetachAudio(project, video);
+            TimelineEdits.Place(project, project.AudioTracks[0], Music(30), 70);
+            TimelineEdits.TrimEnd(project, video, 90);
+            Assert.Equal((0L, 70L), (video.Start, video.End));
+            Assert.Equal((0L, 70L), (sound.Start, sound.End));
+            // 주 트랙의 다음 영상은 빈틈 없이 붙어 있다
+            Assert.Equal((70L, 100L), (next.Start, next.End));
+        }
+
+        // ---------- 붙여 넣기 ----------
+
+        [Fact]
+        public void PlaceInSync_BeforeZero_CutsTheHead_KeepsTheAnchor()
+        {
+            // 붙여 넣은 영상이 주 트랙 경계로 당겨져 사운드가 0 앞으로 가야 할 때 — 0에 고정하면 그만큼 어긋난다(#31)
+            var project = TestProjects.Empty();
+            var sound = Music(60);
+            sound.SourceIn = 5;
+            sound.SourceOut = 65;
+            var anchor = -15 - 5.0;
+            ClipLinks.PlaceInSync(project, project.AudioTracks[0], sound, -15);
+            Assert.Equal((0L, 45L, 20L), (sound.Start, sound.End, sound.SourceIn));
+            Assert.Equal(anchor, ClipLinks.Anchor(sound));
+            Assert.Contains(sound, project.AudioTracks[0].Clips);
+
+            // 0 이후면 그대로 놓는다
+            var later = Music(30);
+            ClipLinks.PlaceInSync(project, project.AudioTracks[0], later, 100);
+            Assert.Equal((100L, 130L, 0L), (later.Start, later.End, later.SourceIn));
+
+            // 통째로 0 앞이면 거절하고 놓지 않는다
+            var gone = Music(10);
+            Assert.Throws<EditException>(() => ClipLinks.PlaceInSync(project, project.AudioTracks[0], gone, -10));
+            Assert.DoesNotContain(gone, project.AudioTracks[0].Clips);
+        }
+
+        [Fact]
         public void Trim_OnMagneticMain_SoundStaysInSync_AndDoesNotJumpTracks()
         {
             var project = TestProjects.Empty(magnetic: true);

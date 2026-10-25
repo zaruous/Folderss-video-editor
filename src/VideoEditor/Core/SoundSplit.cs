@@ -215,6 +215,22 @@ namespace VideoEditor.Core
             target.Sort();
         }
 
+        /// <summary>
+        /// 짝에 맞춘 자리(start)에 놓는다 — 붙여 넣은 영상이 주 트랙 경계로 당겨져 사운드가 0 앞으로 가야 하면 0 앞 부분을 잘라 내 싱크를 지킨다(0에 고정하면 그만큼 어긋남).
+        /// 통째로 0 앞이면 놓지 않고 거절한다.
+        /// </summary>
+        public static void PlaceInSync(Project project, Track track, Clip clip, long start)
+        {
+            if (start < 0)
+            {
+                if (clip.Duration + start <= 0)
+                    throw new EditException("링크된 '" + clip.Name + "'이(가) 타임라인 처음(0) 앞으로 나가 붙여 넣을 수 없습니다.");
+                TimelineEdits.SetStart(clip, clip.Start - start);
+                start = 0;
+            }
+            TimelineEdits.Place(project, track, clip, start);
+        }
+
         private static Track FreeTrack(Project project, Track track, Clip clip)
         {
             bool Free(Track t) => !t.Clips.Any(c => c.Start < clip.End && c.End > clip.Start);
@@ -265,7 +281,8 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// 다듬은 뒤: 링크된 짝의 같은 쪽 끝을 같은 원본 길이만큼 다듬고 밀리거나 당겨진 짝이 따라간다. 줄이는 짝은 먼저 다듬고(따라갈 자리가 비게),
-        /// 늘이는 짝은 따라간 뒤에 다듬는다(옆 클립이 비켜 준 뒤). independent면 짝은 그대로.
+        /// 늘이는 짝은 따라간 뒤에 다듬는다(옆 클립이 비켜 준 뒤). 늘이는 짝이 옆 클립에 막혀 덜 늘었으면 이 클립도 그만큼만(두 길이가 같게 — 잠긴 짝은 맞추지 않음).
+        /// independent면 짝은 그대로.
         /// </summary>
         internal static void AfterTrim(Project project, Clip clip, long sourceDelta, bool start, Dictionary<string, double> anchors, bool independent)
         {
@@ -273,8 +290,22 @@ namespace VideoEditor.Core
             if (!independent && shrink)
                 TrimPartner(project, clip, sourceDelta, start);
             Follow(project, anchors, clip, independent);
-            if (!independent && !shrink)
-                TrimPartner(project, clip, sourceDelta, start);
+            if (independent || shrink)
+                return;
+            var partner = LinkedPartner(project, clip);
+            var track = partner == null ? null : project.TrackOf(partner);
+            var edge = partner == null ? 0 : start ? partner.SourceIn : partner.SourceOut;
+            TrimPartner(project, clip, sourceDelta, start);
+            if (track == null || track.Locked)
+                return;
+            var grown = start ? edge - partner.SourceIn : partner.SourceOut - edge;
+            var excess = (long)Math.Round((Math.Abs(sourceDelta) - grown) / clip.Speed, MidpointRounding.AwayFromZero);
+            if (excess <= 0)
+                return;
+            if (start)
+                TimelineEdits.TrimStart(project, clip, clip.Start + excess, true);
+            else
+                TimelineEdits.TrimEnd(project, clip, clip.End - excess, true);
         }
 
         /// <summary>링크된 짝의 같은 쪽 끝을 같은 원본 길이만큼 다듬는다(짝의 트랙이 잠겼으면 그대로).</summary>
