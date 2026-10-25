@@ -502,5 +502,39 @@ namespace VideoEditor.UiTests
                 await CloseEditor(ui, window);
             }
         }
+
+        [EditorFact]
+        public async Task ShakeEffect_HasParamRows_ButNoPersonOnly()
+        {
+            // 흔들림·줌 효과는 그림 전체를 움직여 사람 자리만 따로 움직일 수 없다 — 속성 패널에 [사람에게만]이 없다
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                await RedAtOneSecond(ui, window);
+                ui.Run(() =>
+                {
+                    var canvas = Canvas(window);
+                    var handler = (Delegate)canvas.GetType().GetField("VideoEffectDropped", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(canvas);
+                    handler.DynamicInvoke("camera-shake", Get(Red(window), "Id"));
+                });
+                await ui.WaitUntil(() => Effects(window)?.Count == 1, Wait, "카메라 흔들림 넣기");
+                await ui.WaitFor(() => Ui.ById<TextBox>(window, "Effect0_horizontal"), Wait, "가로 세기 줄");
+                ui.Run(() =>
+                {
+                    Assert.Equal("camera-shake", Get(Effects(window)[0], "Id"));
+                    Assert.Equal("18", Ui.ById<TextBox>(window, "Effect0_horizontal").Text);
+                    Assert.NotNull(Ui.ById<TextBox>(window, "Effect0_rotate"));
+                    Assert.Null(Ui.ById<CheckBox>(window, "EffectPersonOnly"));
+                    Ui.Snap(window, plugin.ShotFolder, "video-effect-camera-shake");
+                });
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
     }
 }

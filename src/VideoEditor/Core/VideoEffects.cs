@@ -109,6 +109,11 @@ namespace VideoEditor.Core
         internal Func<EffectRender, string> Recipe { get; }
         /// <summary>썸네일에서만 바꿀 값(1.5초 띠 안에 움직임이 다 보이게 등).</summary>
         public IReadOnlyDictionary<string, double> PreviewValues { get; }
+        /// <summary>
+        /// [사람에게만]을 고를 수 있는지(기본 true). 그림 전체를 움직이는 효과(흔들림·줌)는 사람 자리만 따로 움직일 수 없어 false —
+        /// 속성 패널에 [사람에게만]이 보이지 않고, 켜진 채 저장된 값은 열 때 끄며 그릴 때도 무시한다(마스크를 읽지 않음).
+        /// </summary>
+        public bool AllowsPersonOnly { get; init; } = true;
 
         /// <summary>색 매개변수(없으면 null).</summary>
         public EffectParam ColorParam { get { return Params.FirstOrDefault(p => p.Kind == EffectParamKind.Color); } }
@@ -129,6 +134,12 @@ namespace VideoEditor.Core
         /// <summary>틀 크기(출력 픽셀) — 효과가 받는 그림은 이 크기다(맞춤의 빈 곳은 투명하게 채워 둠).</summary>
         public int Width { get; set; }
         public int Height { get; set; }
+        /// <summary>
+        /// 틀 안의 그림 크기(출력 픽셀): [화면에 맞춤]이면 그림이 틀보다 작고 가운데에 있다(남는 곳은 투명 — pad와 같이 (틀 − 그림) ÷ 2를 버림한 자리).
+        /// 0이면 틀 전체가 그림이다(채우기·늘이기·흐린 배경, 원본 크기를 모를 때, 썸네일). 그림을 움직이는 효과(흔들림·줌)가 빈 곳은 그대로 두고 그림 안에서만 움직이는 데 쓴다.
+        /// </summary>
+        public int PictureWidth { get; set; }
+        public int PictureHeight { get; set; }
         /// <summary>프로젝트 픽셀 하나가 이 틀에서 몇 출력 픽셀인지(출력 배율 × 크기 배율 ÷ 재생 축소).</summary>
         public double PixelScale { get; set; }
         /// <summary>프레임 레이트 글("30/1")과 그 값.</summary>
@@ -183,6 +194,11 @@ namespace VideoEditor.Core
             BlockGlitch.Def,
             LineSlip.Def,
             BadSignal.Def,
+            ShakeZoom.CameraShake,
+            ShakeZoom.Earthquake,
+            ShakeZoom.Heartbeat,
+            ShakeZoom.PunchZoom,
+            ShakeZoom.ZoomBounce,
         };
 
         public static VideoEffectDef Find(string id)
@@ -316,7 +332,8 @@ namespace VideoEditor.Core
                 if (raw == null || !IsValidId(raw.Id) || result.Count >= MaxPerClip)
                     continue;
                 var def = Find(raw.Id);
-                var effect = new ClipEffect { Id = raw.Id, PersonOnly = raw.PersonOnly };
+                // 사람에게만이 없는 효과(그림 전체를 움직임)는 켜진 채 저장됐어도 끈다
+                var effect = new ClipEffect { Id = raw.Id, PersonOnly = raw.PersonOnly && (def == null || def.AllowsPersonOnly) };
                 if (def != null)
                 {
                     effect.Values = new Dictionary<string, double>(StringComparer.Ordinal);

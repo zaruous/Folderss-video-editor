@@ -27,7 +27,7 @@ namespace VideoEditor.Core
         private const int DarkStart = 140;
         private const int DarkFull = 40;
 
-        public static readonly VideoEffectDef Def = new VideoEffectDef(Id, "스캔 라인", "빛",
+        public static readonly VideoEffectDef Def = new VideoEffectDef(Id, "스캔 라인", "스캔·빛",
             "가는 흰 선과 색 빛의 띠가 위에서 아래로 훑고 지나갑니다(아래로 휘고, 어두운 곳에서는 떨림). 선은 화면을 밝게만 합니다.", 1,
             new[]
             {

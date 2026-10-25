@@ -414,7 +414,7 @@ namespace VideoEditor.Ui
                     _updating = was;
                 }
                 empty.Visibility = effects.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-                var personal = effects.Any(e => e != null && e.PersonOnly && VideoEffects.Find(e.Id) != null);
+                var personal = effects.Any(e => e != null && e.PersonOnly && VideoEffects.Find(e.Id)?.AllowsPersonOnly == true);
                 maskBox.Visibility = personal ? Visibility.Visible : Visibility.Collapsed;
                 if (personal)
                     ShowMask(false);
@@ -495,6 +495,9 @@ namespace VideoEditor.Ui
                     element.ToolTip = param.Hint;
                 box.Children.Add(row);
             }
+            // 그림 전체를 움직이는 효과(흔들림·줌)는 사람 자리만 따로 움직일 수 없어 [사람에게만]이 없다
+            if (!def.AllowsPersonOnly)
+                return box;
             var person = new CheckBox { Content = "사람에게만", VerticalAlignment = VerticalAlignment.Center, ToolTip = "원본의 인물 마스크가 있으면 사람 자리에만 칠합니다(없으면 클립 전체)." };
             AutomationProperties.SetAutomationId(person, index == 0 ? "EffectPersonOnly" : "EffectPersonOnly" + index);
             person.Click += (s, e) =>
