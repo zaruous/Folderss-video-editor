@@ -29,7 +29,7 @@ namespace VideoEditor.Core
         /// 멈춘 화면 한 장과 내보내기는 원래 크기.
         /// </summary>
         public bool Playback { get; set; }
-        /// <summary>꾸민 글자를 PNG로 그릴 그리개. null이면 스타일이 있어도 drawtext로 그린다(첫 채우기 색만 반영).</summary>
+        /// <summary>꾸민 글자(글자 상자를 정한 글자도)를 PNG로 그릴 그리개. null이면 스타일이 있어도 drawtext로 그린다(첫 채우기 색만 반영, 글자 상자는 무시).</summary>
         public ITextRasterizer TextRasterizer { get; set; }
     }
 
@@ -61,7 +61,7 @@ namespace VideoEditor.Core
     /// </summary>
     public static class RenderGraph
     {
-        /// <summary>이보다 긴 글은 꾸민 경로 대신 drawtext로 그린다.</summary>
+        /// <summary>이보다 긴 글은 꾸민 경로 대신 drawtext로 그린다(글자 상자의 줄 나눔·높이도 무시).</summary>
         public const int MaxStyledTextLength = 2000;
 
         public static RenderPlan Build(Project project, RenderOptions options)
@@ -307,7 +307,9 @@ namespace VideoEditor.Core
             var segFrames = segEnd - segStart;
             if (clip.Kind == ClipKind.Text)
             {
-                if (clip.Style != null && options.TextRasterizer != null && (clip.Text ?? "").Length <= MaxStyledTextLength)
+                // 꾸민 글자, 또는 글자 상자를 정한 글자(줄 나눔·상자는 그리개만 할 수 있다 — 스타일이 없으면 처음 꾸밀 때와 같은 스타일로).
+                // 긴 글(drawtext 대체 경로)은 상자를 무시한다
+                if ((clip.Style != null || ClipLayout.HasTextBox(clip)) && options.TextRasterizer != null && (clip.Text ?? "").Length <= MaxStyledTextLength)
                     return StyledText(project, options, plan, clip, segFrames);
                 // 파일 이름에 클립 Id(프로젝트 파일 값)를 쓰지 않는다 — 조작된 Id로 다른 폴더의 파일을 덮어쓰지 못하게
                 var textFile = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "fv-text-" + Guid.NewGuid().ToString("N") + ".txt");
@@ -347,7 +349,8 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// 꾸민 글자: 그리개가 그릴 PNG(캔버스 이하, 가운데 = 글자 배치 상자 가운데)를 이미지처럼 읽어 캔버스 크기 투명 바탕 가운데에 놓는다.
-        /// 그러면 뒤의 공통 체인(맞춤 × 크기 → 회전 → 불투명도 → 가운데 + X/Y)이 drawtext 글자와 똑같이 동작한다.
+        /// 그러면 뒤의 공통 체인(맞춤 × 크기 → 회전 → 불투명도 → 가운데 + X/Y)이 drawtext 글자와 똑같이 동작한다 — 상자 가운데 = 화면 가운데 + X/Y, 상자 크기 × 크기 배율.
+        /// 글자 상자(너비·높이)는 프로젝트 픽셀이라 글자 크기처럼 출력 배율을 곱해 넘긴다.
         /// </summary>
         private static string StyledText(Project project, RenderOptions options, RenderPlan plan, Clip clip, long segFrames)
         {
@@ -357,8 +360,10 @@ namespace VideoEditor.Core
             var shrink = Math.Min(1, Math.Sqrt(StyledTextLayout.MaxPixels / ((double)options.Width * options.Height)));
             var canvasWidth = shrink < 1 ? Math.Max(2, (int)Math.Floor(options.Width * shrink)) : options.Width;
             var canvasHeight = shrink < 1 ? Math.Max(2, (int)Math.Floor(options.Height * shrink)) : options.Height;
-            var style = clip.Style.Clone();
+            var style = (clip.Style ?? TextStyle.FromLegacy(clip)).Clone();
             style.Normalize();
+            var boxWidth = ClipLayout.TextBoxLength(clip.TextBoxWidth);
+            var boxHeight = ClipLayout.TextBoxLength(clip.TextBoxHeight);
             var request = new TextImageRequest
             {
                 Text = clip.Text ?? "",
@@ -366,7 +371,11 @@ namespace VideoEditor.Core
                 FontPixelSize = clip.FontSize * k * shrink,
                 EffectScale = k * shrink,
                 CanvasWidth = canvasWidth,
-                CanvasHeight = canvasHeight
+                CanvasHeight = canvasHeight,
+                WrapWidth = boxWidth * k * shrink,
+                BoxHeight = boxHeight * k * shrink,
+                // 높이가 자동이면 세로 자리는 그림에 영향이 없다 — 같은 그림이 다른 캐시 파일이 되지 않게 기본값으로
+                VerticalAlign = boxHeight > 0 && Enum.IsDefined(clip.TextVerticalAlign) ? clip.TextVerticalAlign : TextVerticalAlign.Middle
             };
             // 파일 이름에는 해시만 쓴다 — 글·클립 Id(프로젝트 파일 값)가 경로에 섞이지 않게
             var path = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "styled-text", "st-" + request.Key(options.TextRasterizer.Version) + ".png");

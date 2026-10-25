@@ -435,11 +435,74 @@ namespace VideoEditor.Ui
             row.Children.Add(label);
             row.Children.Add(colors);
             panel.Children.Add(row);
+            panel.Children.Add(TextBoxRows(id));
             return panel;
         }
 
         /// <summary>
-        /// [꾸미기] 꾸민 글자 스타일 — 맨 위 스타일 모음(미리 만든 스타일 단추), 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬),
+        /// [글자] 글자 상자: 너비(줄 나눔)·높이(0~4000px, 0 = 자동)·세로 정렬(위·가운데·아래 — 높이를 정했을 때만)과 넘침 안내.
+        /// 클립의 값이라 스타일을 바꿔도 남는다. 미리 보기 틀의 옆 손잡이로 바꾼 값도 여기에 보인다.
+        /// </summary>
+        private UIElement TextBoxRows(string id)
+        {
+            var panel = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+            panel.Children.Add(NumberRow("상자 너비", "PropTextBoxWidth", 0, 4000, "px", id, c => c.TextBoxWidth, (c, v) => c.TextBoxWidth = ClipLayout.TextBoxLength(v)));
+            panel.Children.Add(NumberRow("상자 높이", "PropTextBoxHeight", 0, 4000, "px", id, c => c.TextBoxHeight, (c, v) => c.TextBoxHeight = ClipLayout.TextBoxLength(v)));
+            // 보이는 순서는 아래 배열(enum 순서에 기대지 않는다)
+            var verticals = new[] { TextVerticalAlign.Top, TextVerticalAlign.Middle, TextVerticalAlign.Bottom };
+            var vertical = new ComboBox();
+            AutomationProperties.SetAutomationId(vertical, "PropTextVerticalAlign");
+            AutomationProperties.SetName(vertical, "세로 정렬");
+            foreach (var name in new[] { "위", "가운데", "아래" })
+                vertical.Items.Add(name);
+            vertical.SelectionChanged += (s, e) =>
+            {
+                if (_updating || vertical.SelectedIndex < 0)
+                    return;
+                var value = verticals[vertical.SelectedIndex];
+                var current = _session.Project.FindClip(id);
+                if (current != null && current.TextVerticalAlign != value)
+                    Edit(id, c => c.TextVerticalAlign = value, null);
+            };
+            var verticalRow = Row("세로 정렬", vertical);
+            panel.Children.Add(verticalRow);
+            var overflow = UiKit.Label("글이 상자보다 깁니다", true);
+            overflow.TextWrapping = TextWrapping.Wrap;
+            overflow.Margin = new Thickness(84, 0, 0, 4);
+            AutomationProperties.SetAutomationId(overflow, "PropTextOverflow");
+            panel.Children.Add(overflow);
+            var hint = UiKit.Label("상자 0 = 자동(너비: 줄을 나누지 않음, 높이: 글 높이). 너비를 정하면 낱말 단위로 줄을 나눕니다. 미리 보기에서 글자를 누르고 틀의 옆 손잡이를 끌어도 됩니다(두 번 누르면 자동).", true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Margin = new Thickness(0, 2, 0, 4);
+            panel.Children.Add(hint);
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                // 값을 보이는 것만으로 편집이 일어나지 않게
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var index = Array.IndexOf(verticals, c.TextVerticalAlign);
+                    vertical.SelectedIndex = index >= 0 ? index : 1;
+                    verticalRow.IsEnabled = c.TextBoxHeight > 0;
+                    // 넘침: 그리개와 같은 배치로 잰 글 높이가 상자보다 높으면(긴 글은 drawtext라 상자를 쓰지 않는다)
+                    var longer = c.TextBoxHeight > 0 && (c.Text ?? "").Length <= RenderGraph.MaxStyledTextLength
+                        && StyledTextRasterizer.MeasureClip(c, c.TextBoxWidth, c.TextBoxHeight).TextHeight > c.TextBoxHeight + 0.5;
+                    overflow.Visibility = longer ? Visibility.Visible : Visibility.Collapsed;
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
+            return panel;
+        }
+
+        /// <summary>
+        /// [꾸미기] 꾸민 글자 스타일 — 맨 위 스타일 모음(미리 만든 스타일 단추)과 내 스타일(저장한 스타일 단추·[내 스타일로 저장]), 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬),
         /// 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도), 윤곽선 묶음(켜기·색·두께·이음), 그림자 묶음(켜기·색·거리·방향·흐림·불투명도),
         /// 광선 묶음(켜기·색·크기·불투명도), 반사 묶음(켜기·크기·간격·불투명도), 맨 끝에 휘기 묶음(종류·정도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
@@ -449,6 +512,7 @@ namespace VideoEditor.Ui
             var panel = new StackPanel { Margin = new Thickness(6) };
             panel.Children.Add(Section("스타일 모음"));
             panel.Children.Add(PresetGallery(id));
+            panel.Children.Add(MyStyles(id));
             var warning = UiKit.Label("이 PC에 없는 글꼴이라 맑은 고딕으로 그립니다.", true);
             warning.TextWrapping = TextWrapping.Wrap;
             warning.Margin = new Thickness(0, 2, 0, 6);
@@ -840,12 +904,13 @@ namespace VideoEditor.Ui
             return panel;
         }
 
-        // 스타일 모음 단추: 어두운 바탕(흰 글자·속 빈 글자도 보이게)에 썸네일을 반 크기로 놓는다.
-        // 썸네일 PNG의 가운데가 글자 가운데라 가운데 맞춤으로 두면 모두 같은 크기·위치로 보인다(넘치는 효과 여백은 잘림)
-        // 폭은 좁은 속성 패널(안쪽 약 200px)에도 한 줄에 둘씩 들어가게
-        private const double PresetTileWidth = 84;
-        private const double PresetTileHeight = 44;
-        private const double PresetThumbnailScale = 0.5;
+        // 스타일 모음 단추: 어두운 바탕(흰 글자·속 빈 글자도 보이게)에 썸네일을 줄여 놓는다(배율은 모두 같고, 칠한 곳이 틀보다 크면 그것만 더 줄임).
+        // 16개라 좁은 속성 패널(안쪽 약 200px)에도 한 줄에 셋씩 들어가게 — 단추 한 칸 = 틀 56 + 안쪽 여백·테두리 4 + 사이 3 = 63px
+        private const double PresetTileWidth = 56;
+        private const double PresetTileHeight = 38;
+        private const double PresetThumbnailScale = 0.34;
+        // 칠한 곳을 잴 때 이 알파 이하(옅은 흐림·광선 끝)는 빼고 잰다 — 틀 밖으로 나가면 잘린다
+        private const byte ThumbnailInkAlpha = 24;
         private static readonly System.Windows.Media.Brush PresetBackdrop = FrozenBrush(System.Windows.Media.Color.FromRgb(0x50, 0x50, 0x50));
 
         /// <summary>
@@ -861,20 +926,7 @@ namespace VideoEditor.Ui
             for (var i = 0; i < presets.Count; i++)
             {
                 var (name, style) = presets[i];
-                var fallback = new TextBlock
-                {
-                    Text = name,
-                    Foreground = System.Windows.Media.Brushes.White,
-                    FontSize = 11,
-                    TextWrapping = TextWrapping.Wrap,
-                    TextAlignment = TextAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(4, 0, 4, 0)
-                };
-                var frame = new Border { Width = PresetTileWidth, Height = PresetTileHeight, Background = PresetBackdrop, CornerRadius = new CornerRadius(3), ClipToBounds = true, Child = fallback };
-                var button = new Button { Content = frame, Padding = new Thickness(2), Margin = new Thickness(0, 0, 4, 4), ToolTip = name };
-                AutomationProperties.SetAutomationId(button, "StylePreset" + i);
-                AutomationProperties.SetName(button, name);
+                var (button, frame) = StyleTile(name, "StylePreset" + i);
                 button.Click += (s, e) => Edit(id, c =>
                 {
                     c.Style = style.Clone();
@@ -897,23 +949,30 @@ namespace VideoEditor.Ui
             return gallery;
         }
 
-        /// <summary>썸네일을 단추 틀에 넣는다(이미 그려 둔 것이면 바로, 아니면 다 그린 뒤 UI 스레드에서). 그리개가 없거나 실패하면 이름 글자를 그대로 둔다.</summary>
+        /// <summary>
+        /// 썸네일을 단추 틀(Width·Height를 정한 Border)에 넣는다(이미 그려 둔 것이면 바로, 아니면 다 그린 뒤 UI 스레드에서). 그리개가 없거나 실패하면 이름 글자를 그대로 둔다.
+        /// 썸네일 PNG의 가운데는 배치 상자 가운데라 반사·휘기는 칠한 곳이 한쪽으로 치우친다 — 칠한 곳의 가운데를 틀 가운데에 두고,
+        /// 칠한 곳이 틀(양옆 2px 남김)보다 크면 그만큼 더 줄인다(기본 배율보다 키우지는 않음).
+        /// </summary>
         private void ShowThumbnail(Border frame, TextStyle style, string automationId)
         {
             void Show(System.Windows.Media.Imaging.BitmapSource picture)
             {
+                var ink = InkBounds(picture);
+                var scale = Math.Min(PresetThumbnailScale, Math.Min((frame.Width - 4) / ink.Width, (frame.Height - 4) / ink.Height));
                 var image = new Image
                 {
                     Source = picture,
-                    Width = picture.PixelWidth * PresetThumbnailScale,
-                    Height = picture.PixelHeight * PresetThumbnailScale,
-                    Stretch = System.Windows.Media.Stretch.Fill,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
+                    Width = picture.PixelWidth * scale,
+                    Height = picture.PixelHeight * scale,
+                    Stretch = System.Windows.Media.Stretch.Fill
                 };
                 System.Windows.Media.RenderOptions.SetBitmapScalingMode(image, System.Windows.Media.BitmapScalingMode.HighQuality);
                 AutomationProperties.SetAutomationId(image, automationId);
-                frame.Child = image;
+                // Canvas는 틀보다 큰 그림을 자기 자리로 자르지 않는다 — 넘치는 곳은 틀(ClipToBounds)이 자른다
+                Canvas.SetLeft(image, frame.Width / 2 - (ink.X + ink.Width / 2) * scale);
+                Canvas.SetTop(image, frame.Height / 2 - (ink.Y + ink.Height / 2) * scale);
+                frame.Child = new Canvas { Children = { image } };
             }
             var task = _services.TextStylePreview(style);
             if (task.IsCompleted)
@@ -930,11 +989,180 @@ namespace VideoEditor.Ui
             }, System.Threading.Tasks.TaskScheduler.Default);
         }
 
+        /// <summary>썸네일에서 알파가 <see cref="ThumbnailInkAlpha"/>를 넘는 픽셀의 경계(픽셀 단위). 그런 픽셀이 없으면 그림 전체.</summary>
+        // 썸네일마다 칠한 곳은 한 번만 잰다(탭을 볼 때마다 UI 스레드에서 다시 재지 않게) — 썸네일 그림이 캐시에서 빠지면 함께 사라진다
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<System.Windows.Media.Imaging.BitmapSource, object> InkCache =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<System.Windows.Media.Imaging.BitmapSource, object>();
+
+        private static Rect InkBounds(System.Windows.Media.Imaging.BitmapSource picture)
+        {
+            return (Rect)InkCache.GetValue(picture, p => MeasureInk(p));
+        }
+
+        private static Rect MeasureInk(System.Windows.Media.Imaging.BitmapSource picture)
+        {
+            var bgra = new System.Windows.Media.Imaging.FormatConvertedBitmap(picture, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+            int width = bgra.PixelWidth, height = bgra.PixelHeight;
+            var pixels = new byte[width * height * 4];
+            bgra.CopyPixels(pixels, width * 4, 0);
+            int left = width, top = height, right = -1, bottom = -1;
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    if (pixels[(y * width + x) * 4 + 3] <= ThumbnailInkAlpha)
+                        continue;
+                    left = Math.Min(left, x);
+                    right = Math.Max(right, x);
+                    top = Math.Min(top, y);
+                    bottom = Math.Max(bottom, y);
+                }
+            }
+            return right < 0 ? new Rect(0, 0, width, height) : new Rect(left, top, right - left + 1, bottom - top + 1);
+        }
+
         private static System.Windows.Media.Brush FrozenBrush(System.Windows.Media.Color color)
         {
             var brush = new System.Windows.Media.SolidColorBrush(color);
             brush.Freeze();
             return brush;
+        }
+
+        /// <summary>
+        /// 내 스타일(스타일 모음 아래): 저장한 스타일 단추(설정 textStyles — <see cref="TextStyleLibrary"/>)와 [내 스타일로 저장]. 단추는 스타일 모음과 같은 틀·썸네일이고
+        /// 누르면 스타일 모음처럼 글자 내용·크기는 그대로 두고 스타일을 통째로 바꾼다(실행 취소 한 단계). 오른쪽 클릭 [지우기]로 지운다 —
+        /// 저장·지우기는 프로젝트가 아닌 플러그인 설정이라 실행 취소에 남지 않는다. 탭이 보일 때마다 설정을 다시 읽는다(다른 편집 창에서 저장·지운 것도 보이게).
+        /// </summary>
+        private UIElement MyStyles(string id)
+        {
+            var box = new StackPanel();
+            box.Children.Add(Section("내 스타일"));
+            var row = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
+            AutomationProperties.SetAutomationId(row, "StyleMine");
+            box.Children.Add(row);
+            var hint = UiKit.Label("지금 스타일을 [내 스타일로 저장]하면 여기에 단추로 남아 다른 글자에도 한 번에 입힐 수 있습니다.", true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Margin = new Thickness(0, 0, 0, 4);
+            AutomationProperties.SetAutomationId(hint, "StyleMineHint");
+            box.Children.Add(hint);
+            // 썸네일은 이 탭이 보인 뒤부터 그린다(스타일 모음과 같음)
+            var shown = false;
+            void Rebuild()
+            {
+                row.Children.Clear();
+                var styles = _services?.TextStyles() ?? new List<(string Name, TextStyle Style)>();
+                for (var i = 0; i < styles.Count; i++)
+                {
+                    var (name, style) = styles[i];
+                    var (button, frame) = StyleTile(name, "StyleMine" + i);
+                    button.Click += (s, e) => Edit(id, c =>
+                    {
+                        c.Style = style.Clone();
+                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
+                        c.TextColor = c.Style.Fill.Colors[0];
+                    }, null);
+                    var remove = new MenuItem { Header = new TextBlock { Text = "지우기" } };
+                    remove.Click += (s, e) => RemoveMine(name, Rebuild);
+                    button.ContextMenu = new ContextMenu();
+                    button.ContextMenu.Items.Add(remove);
+                    row.Children.Add(button);
+                    if (shown)
+                        ShowThumbnail(frame, style, "StyleMine" + i + "Image");
+                }
+                row.Visibility = styles.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                hint.Visibility = styles.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+            }
+            box.Loaded += (s, e) =>
+            {
+                shown = _services != null;
+                Rebuild();
+            };
+            Rebuild();
+            var save = UiKit.TextButton("내 스타일로 저장", "StyleSaveMine", () => SaveMine(id, Rebuild));
+            save.HorizontalAlignment = HorizontalAlignment.Left;
+            save.Margin = new Thickness(0, 0, 0, 6);
+            box.Children.Add(save);
+            return box;
+        }
+
+        /// <summary>스타일 단추 하나(스타일 모음·내 스타일 공용 — 어두운 틀 + 이름 글자, 썸네일은 <see cref="ShowThumbnail"/>로 틀에 넣는다). 화면 낭독 이름·툴팁 = 스타일 이름.</summary>
+        private static (Button Button, Border Frame) StyleTile(string name, string automationId)
+        {
+            var fallback = new TextBlock
+            {
+                Text = name,
+                Foreground = System.Windows.Media.Brushes.White,
+                FontSize = 10,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(2, 0, 2, 0)
+            };
+            var frame = new Border { Width = PresetTileWidth, Height = PresetTileHeight, Background = PresetBackdrop, CornerRadius = new CornerRadius(3), ClipToBounds = true, Child = fallback };
+            var button = new Button { Content = frame, Padding = new Thickness(1), Margin = new Thickness(0, 0, 3, 3), ToolTip = name };
+            AutomationProperties.SetAutomationId(button, automationId);
+            AutomationProperties.SetName(button, name);
+            return (button, frame);
+        }
+
+        /// <summary>
+        /// [내 스타일로 저장]: 이름을 묻고(같은 이름이면 덮어쓸지 묻는다) 누른 때의 스타일 사본을 설정에 넣는다 — 스타일이 없는 글자는 지금 색을 이어받은 스타일로.
+        /// 이름이 규칙에 맞지 않거나 50개가 찼으면 알리고 저장하지 않는다. 설정을 쓰지 못하면 상태 줄에 알린다.
+        /// </summary>
+        private void SaveMine(string id, Action saved)
+        {
+            var clip = _session.Project.FindClip(id);
+            if (clip == null || _services == null)
+                return;
+            // 클립의 스타일을 같이 쓰지 않게 사본. 저장은 편집이 아니므로 스타일이 없는 글자에도 스타일을 만들어 넣지 않는다
+            var style = clip.Style?.Clone() ?? TextStyle.FromLegacy(clip);
+            var name = Dialogs.Input(this, "내 스타일로 저장", "스타일 이름(1~40자)", TextStyleLibrary.NewName(_services.TextStyles()));
+            if (name == null)
+                return;
+            var clean = TextStyleLibrary.CleanName(name);
+            if (clean == null)
+            {
+                UiKit.Inform(this, "내 스타일", TextStyleLibrary.NameRule);
+                return;
+            }
+            // 이름을 묻는 동안 다른 편집 창에서 고쳤을 수 있어 다시 읽는다
+            var styles = _services.TextStyles();
+            var index = TextStyleLibrary.IndexOf(styles, clean);
+            if (index >= 0 && UiKit.Ask(this, "내 스타일 덮어쓰기", "'" + styles[index].Name + "' 스타일이 이미 있습니다. 지금 스타일로 덮어쓸까요?", "덮어쓰기", "취소") != 0)
+                return;
+            var error = TextStyleLibrary.AddOrReplace(styles, clean, style);
+            if (error != null)
+            {
+                UiKit.Inform(this, "내 스타일", error);
+                return;
+            }
+            if (!_services.SaveTextStyles(styles))
+            {
+                _commands.Status("내 스타일을 설정에 저장하지 못했습니다.");
+                return;
+            }
+            _commands.Status("내 스타일에 저장했습니다: " + clean);
+            saved();
+        }
+
+        /// <summary>내 스타일 [지우기]: 설정에서 뺀다. 묻지 않는다 — 설정이라 실행 취소로 되돌릴 수 없음을 상태 줄에 알린다.</summary>
+        private void RemoveMine(string name, Action removed)
+        {
+            var styles = _services.TextStyles();
+            if (!TextStyleLibrary.Remove(styles, name))
+            {
+                // 다른 편집 창에서 이미 지웠다 — 줄만 다시 그린다
+                _commands.Status("내 스타일에 없습니다(이미 지웠습니다): " + name);
+                removed();
+                return;
+            }
+            if (!_services.SaveTextStyles(styles))
+            {
+                _commands.Status("내 스타일을 설정에서 지우지 못했습니다.");
+                return;
+            }
+            _commands.Status("내 스타일에서 지웠습니다: " + name + " (설정이라 실행 취소로 되돌릴 수 없습니다)");
+            removed();
         }
 
         /// <summary>고칠 클립의 스타일(없으면 지금 색을 이어받아 만든다).</summary>

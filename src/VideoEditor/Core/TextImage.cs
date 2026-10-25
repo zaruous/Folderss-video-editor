@@ -14,7 +14,10 @@ namespace VideoEditor.Core
         /// <summary>그리는 방식이 바뀌면 올린다 — 캐시 키에 들어가므로 예전 PNG를 다시 쓰지 않는다.</summary>
         int Version { get; }
 
-        /// <summary>request를 pngPath에 투명 배경 PNG로 그린다. PNG 크기는 캔버스 이하, 가운데 = 글자 배치 상자 가운데(<see cref="StyledTextLayout"/>).</summary>
+        /// <summary>
+        /// request를 pngPath에 투명 배경 PNG로 그린다. PNG 크기는 캔버스 이하, 가운데 = 글자 배치 상자 가운데(<see cref="StyledTextLayout"/>) —
+        /// 글자 상자(WrapWidth·BoxHeight)를 정했으면 그 상자, 아니면 글을 감싼 상자.
+        /// </summary>
         void Render(TextImageRequest request, string pngPath, CancellationToken cancellation);
     }
 
@@ -31,6 +34,12 @@ namespace VideoEditor.Core
         /// <summary>출력 크기. PNG가 이보다 크면 그래프에서 잘린다.</summary>
         public int CanvasWidth { get; set; }
         public int CanvasHeight { get; set; }
+        /// <summary>글자 상자 너비(출력 픽셀 = Clip.TextBoxWidth × 출력 배율). 0이면 줄을 나누지 않고 상자 폭 = 가장 긴 줄.</summary>
+        public double WrapWidth { get; set; }
+        /// <summary>글자 상자 높이(출력 픽셀 = Clip.TextBoxHeight × 출력 배율). 0이면 상자 높이 = 글 높이.</summary>
+        public double BoxHeight { get; set; }
+        /// <summary>상자가 글보다 높을 때 글을 놓는 자리.</summary>
+        public TextVerticalAlign VerticalAlign { get; set; }
 
         /// <summary>
         /// 캐시 키: 픽셀에 영향을 주는 값을 정해진 순서의 JSON으로 적고 SHA-256(소문자 16진 64자)으로.
@@ -48,6 +57,9 @@ namespace VideoEditor.Core
             Number(json, "effectScale", EffectScale);
             Number(json, "canvasWidth", CanvasWidth);
             Number(json, "canvasHeight", CanvasHeight);
+            Number(json, "wrapWidth", WrapWidth);
+            Number(json, "boxHeight", BoxHeight);
+            Quoted(json, "verticalAlign", VerticalAlign.ToString());
             Quoted(json, "fontFamily", style.FontFamily);
             Flag(json, "bold", style.Bold);
             Flag(json, "italic", style.Italic);

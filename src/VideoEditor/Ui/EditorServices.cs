@@ -29,6 +29,7 @@ namespace VideoEditor.Ui
         public const string RecentSearchesKey = "youtubeRecentSearches";
         public const string DownloadFolderKey = "downloadFolder";
         public const string ProjectTreeHiddenKey = "projectTreeHidden";
+        public const string TextStylesKey = "textStyles";
 
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
@@ -38,6 +39,10 @@ namespace VideoEditor.Ui
         private Task<YtDlpTool> _locatingYtDlp;
         // 썸네일·파형 FFmpeg를 한꺼번에 수십 개 띄우지 않게
         private static readonly SemaphoreSlim PictureGate = new SemaphoreSlim(3);
+        // 스타일 썸네일은 하나씩 그린다(TextStylePreview)
+        private static readonly SemaphoreSlim StylePreviewGate = new SemaphoreSlim(1);
+        // 스타일 썸네일 캐시 상한: 스타일 모음 16개 + 내 스타일 50개에 여유
+        private const int MaxStylePreviews = 96;
 
         private readonly Lazy<StyledTextRasterizer> _textRasterizer = new Lazy<StyledTextRasterizer>(() => new StyledTextRasterizer());
 
@@ -433,13 +438,21 @@ namespace VideoEditor.Ui
             if (rasterizer == null)
                 return Task.FromResult<BitmapSource>(null);
             var request = StylePreviewRequest(style);
-            return _stylePreviews.GetOrAdd(request.Key(rasterizer.Version), key => Task.Run(() =>
+            // 내 스타일(최대 50개)이 바뀔 때마다 새 키가 생기므로 오래 쌓이지 않게 넘치면 비운다(썸네일은 다시 그리면 된다)
+            if (_stylePreviews.Count > MaxStylePreviews)
+                _stylePreviews.Clear();
+            return _stylePreviews.GetOrAdd(request.Key(rasterizer.Version), key => Task.Run(async () =>
             {
-                var path = Path.Combine(RenderEnvironment.TempFolder(), TextImageCache.FolderName, "st-" + key + ".png");
-                // 미리 보기·내보내기가 같은 그림을 이미 캐시에 둔 것이면 지우지 않는다
-                var drawn = !File.Exists(path);
+                // 썸네일은 하나씩 — 그리기는 어차피 그리개 스레드 하나라, 기다리는 동안 스레드 풀 스레드를 붙잡지 않게 비동기로 줄 세운다
+                // (수십 개를 한꺼번에 동기로 기다리면 스레드 풀이 막혀 미리 보기·파형까지 멈추고 일부는 시간 초과로 빠진다)
+                await StylePreviewGate.WaitAsync().ConfigureAwait(false);
+                string path = null;
+                var drawn = false;
                 try
                 {
+                    path = Path.Combine(RenderEnvironment.TempFolder(), TextImageCache.FolderName, "st-" + key + ".png");
+                    // 미리 보기·내보내기가 같은 그림을 이미 캐시에 둔 것이면 지우지 않는다
+                    drawn = !File.Exists(path);
                     TextImageCache.Ensure(rasterizer, path, request, CancellationToken.None);
                     var picture = Decode(File.ReadAllBytes(path));
                     if (picture == null)
@@ -455,8 +468,23 @@ namespace VideoEditor.Ui
                 {
                     if (drawn)
                         RenderCommand.TryDelete(path);
+                    StylePreviewGate.Release();
                 }
             }));
+        }
+
+        // ---------- 내 스타일 ----------
+
+        /// <summary>내 스타일(설정 textStyles, <see cref="TextStyleLibrary"/>의 규칙으로 읽음 — 없거나 깨졌으면 빈 목록). 부를 때마다 설정을 새로 읽은 새 목록.</summary>
+        public List<(string Name, TextStyle Style)> TextStyles()
+        {
+            return TextStyleLibrary.Read(Setting(TextStylesKey));
+        }
+
+        /// <summary>내 스타일을 설정에 쓴다(비면 키를 지운다). 실패하면 false.</summary>
+        public bool SaveTextStyles(List<(string Name, TextStyle Style)> styles)
+        {
+            return SaveSetting(TextStylesKey, styles.Count == 0 ? null : TextStyleLibrary.Write(styles));
         }
 
         public static BitmapSource Decode(byte[] png)

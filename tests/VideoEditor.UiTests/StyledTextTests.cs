@@ -20,7 +20,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 namespace VideoEditor.UiTests
 {
     /// <summary>
-    /// 꾸민 글자(이슈 #3·#13·#14·#15·#16·#17·#18·#19·#21): WPF 그리개의 픽셀, 꾸미기 탭(스타일 모음·글꼴·채우기·윤곽선·그림자·광선·반사·휘기), 미리 보기 = 내보내기.
+    /// 꾸민 글자(이슈 #3·#13·#14·#15·#16·#17·#18·#19·#21·#22): WPF 그리개의 픽셀, 꾸미기 탭(스타일 모음·내 스타일·글꼴·채우기·윤곽선·그림자·광선·반사·휘기), 미리 보기 = 내보내기.
     /// 그리개·요청은 플러그인 형식이라 리플렉션으로 만들고, 요청은 JSON을 플러그인의 TextImageRequest로 역직렬화해 만든다.
     /// </summary>
     public class StyledTextTests
@@ -1119,14 +1119,32 @@ namespace VideoEditor.UiTests
             return JsonSerializer.Serialize(style, style.GetType(), options);
         }
 
+        /// <summary>스타일 객체의 묶음(Glow·Reflection·Warp 등) 속성 하나를 바꾼다 — enum 속성은 이름(string)으로 준다.</summary>
+        private static void SetPart(object style, string part, string property, object value)
+        {
+            var target = Get(style, part);
+            var info = target.GetType().GetProperty(property);
+            info.SetValue(target, value is string name && info.PropertyType.IsEnum ? Enum.Parse(info.PropertyType, name) : value);
+        }
+
+        /// <summary>칠한 폭의 fraction 위치 열(폭의 2% 띠)에서 칠한 픽셀의 무게중심 y.</summary>
+        private static double CenterAt(Png png, double fraction)
+        {
+            var (left, right) = png.Extent(0, png.Height);
+            var span = right - left;
+            var band = Math.Max(2, span / 50);
+            var x = left + (int)(span * fraction) - band / 2;
+            return png.CenterY(x, x + band);
+        }
+
         [UiFact]
         public async Task Rasterizer_StylePresets_EachDrawsItsThumbnail()
         {
-            // 갤러리와 같은 요청(EditorServices.StylePreviewRequest: "가나Ab" 48px)으로 8개를 그린다
+            // 갤러리와 같은 요청(EditorServices.StylePreviewRequest: "가나Ab" 48px)으로 16개를 그린다
             var rasterizer = NewRasterizer();
             var services = rasterizer.GetType().Assembly.GetType("VideoEditor.Ui.EditorServices", true);
             var presets = Presets();
-            Assert.Equal(8, presets.Count);
+            Assert.Equal(16, presets.Count);
             var drawn = new System.Collections.Generic.List<Png>();
             for (var i = 0; i < presets.Count; i++)
             {
@@ -1165,7 +1183,284 @@ namespace VideoEditor.UiTests
             // 속 빈 글자: 칠한 픽셀은 흰 윤곽선뿐이다
             var hollow = drawn[presets.FindIndex(p => p.Name == "속 빈 글자")];
             Assert.Equal(0, Count(hollow, p => p.A > 128 && (p.R < 200 || p.G < 200 || p.B < 200)));
+
+            // 2단계의 8개(#22): 썸네일에 이름이 말하는 효과가 보인다 — 같은 스타일에서 그 효과만 끄고 그린 것과 견준다(PNG 가운데 = 배치 상자 가운데)
+            Png Drawn(string name) => drawn[presets.FindIndex(p => p.Name == name)];
+            async Task<Png> Without(string name, string part, string property, object value)
+            {
+                var index = presets.FindIndex(p => p.Name == name);
+                var style = Presets()[index].Style;
+                SetPart(style, part, property, value);
+                return await Render(rasterizer, services.GetMethod("StylePreviewRequest").Invoke(null, new[] { style }), "preset-" + index + "-without-" + part);
+            }
+
+            // 네온: 광선 색(#0EA5E9 — 윤곽선 #BAE6FD보다 빨강이 훨씬 적다) 픽셀이 광선을 끈 그림에서 비어 있는 곳(글자 윤곽선 밖)에 있다
+            var neon = Drawn("네온");
+            var unlit = await Without("네온", "Glow", "Enabled", false);
+            var glowOutside = 0;
+            for (var y = 0; y < neon.Height; y++)
+            {
+                for (var x = 0; x < neon.Width; x++)
+                {
+                    var p = neon.Pixel(x, y);
+                    if (p.A < 64 || p.R > 100 || p.B < 150)
+                        continue;
+                    var ux = x - (neon.Width - unlit.Width) / 2;
+                    var uy = y - (neon.Height - unlit.Height) / 2;
+                    if (ux < 0 || uy < 0 || ux >= unlit.Width || uy >= unlit.Height || unlit.Alpha(ux, uy) == 0)
+                        glowOutside++;
+                }
+            }
+            _out.WriteLine("네온: 윤곽선 밖 광선 색 픽셀 " + glowOutside + " · 광선 끔 " + Count(unlit, p => p.A >= 64 && p.R <= 100 && p.B >= 150));
+            Assert.True(glowOutside > 300, "네온 광선 " + glowOutside);
+            Assert.Equal(0, Count(unlit, p => p.A >= 64 && p.R <= 100 && p.B >= 150));
+
+            // 유리 반사·금빛 반사: 반사를 끈 그림의 글자 아래 끝보다 아래(간격·가장자리 줄은 건너뜀)에 칠한 줄이 이어진다
+            foreach (var name in new[] { "유리 반사", "금빛 반사" })
+            {
+                var mirrored = Drawn(name);
+                var plain = await Without(name, "Reflection", "Enabled", false);
+                var start = mirrored.Height / 2 + (plain.Rows().Bottom - plain.Height / 2) + 4;
+                var below = 0;
+                for (var y = start; y < mirrored.Height; y++)
+                {
+                    for (var x = 0; x < mirrored.Width; x++)
+                        below += mirrored.Alpha(x, y) > 0 ? 1 : 0;
+                }
+                var last = InkBands(mirrored).Last().Bottom;
+                _out.WriteLine(name + ": 글자 아래 칠한 픽셀 " + below + " · " + (last - start) + "줄 더");
+                Assert.True(below > 300, name + " 반사 픽셀 " + below);
+                Assert.True(last - start >= 8, name + " 반사 높이 " + (last - start));
+            }
+
+            // 아치·원·물결·계단: 휘기를 끄고 그린 것과 견준 열 무게중심 y의 차이 — 이 차이를 열끼리 견주므로 글자 모양과 PNG 높이 차이는 빠진다(화면 y는 아래가 +)
+            async Task<double[]> Shift(string name, params double[] fractions)
+            {
+                var bent = Drawn(name);
+                var flat = await Without(name, "Warp", "Kind", "None");
+                var shift = fractions.Select(f => CenterAt(bent, f) - CenterAt(flat, f)).ToArray();
+                _out.WriteLine(name + ": 열 " + string.Join("/", fractions) + " 높이 차이 " + string.Join(", ", shift.Select(s => s.ToString("F1"))));
+                return shift;
+            }
+            var arch = await Shift("아치 제목", 0.05, 0.5, 0.95);
+            Assert.True(arch[1] < arch[0] - 6 && arch[1] < arch[2] - 6, "아치: 가운데가 양 끝보다 올라가야 한다");
+            // 원은 양 끝 글자가 기울어 맨 끝 열에는 기운 글자의 위아래가 함께 잡힌다 — 조금 안쪽 열로 본다
+            var circle = await Shift("원형 배지", 0.15, 0.5, 0.85);
+            Assert.True(circle[1] < circle[0] - 6 && circle[1] < circle[2] - 6, "원: 가운데가 양 끝보다 올라가야 한다");
+            var wave = await Shift("물결 글자", 0.25, 0.75);
+            Assert.True(wave[0] > wave[1] + 6, "물결: 왼쪽 ¼은 내려가고 오른쪽 ¼은 올라가야 한다");
+            var stairs = await Shift("계단 글자", 0.05, 0.5, 0.95);
+            Assert.True(stairs[0] > stairs[1] + 6 && stairs[1] > stairs[2] + 6, "계단: 오른쪽으로 갈수록 올라가야 한다");
+
+            // 무지개 그라데이션: 왼쪽 빨강부터 오른쪽 파랑까지(0° 선형 4색)
+            var rainbow = Drawn("무지개 그라데이션");
+            Assert.True(Count(rainbow, p => p.A == 255 && p.R > 180 && p.G < 120 && p.B < 120) > 30, "빨간 픽셀");
+            Assert.True(Count(rainbow, p => p.A == 255 && p.B > 180 && p.R < 120) > 30, "파란 픽셀");
             ((IDisposable)rasterizer).Dispose();
+        }
+
+        // ---------- 글자 상자(줄 나눔·세로 정렬) ----------
+
+        /// <summary>글자 상자를 정한 요청: <see cref="Request"/>에 상자 너비(WrapWidth)·높이(BoxHeight)·세로 정렬(VerticalAlign — 이름)을 더한다.</summary>
+        private static object BoxRequest(object rasterizer, string text, double wrapWidth, double boxHeight = 0, string align = null, double fontSize = 80, string style = null,
+            int canvasWidth = 1920, int canvasHeight = 1080)
+        {
+            var request = Request(rasterizer, text, canvasWidth, canvasHeight, fontSize, style);
+            var type = request.GetType();
+            type.GetProperty("WrapWidth").SetValue(request, wrapWidth);
+            type.GetProperty("BoxHeight").SetValue(request, boxHeight);
+            if (align != null)
+                type.GetProperty("VerticalAlign").SetValue(request, Enum.Parse(type.GetProperty("VerticalAlign").PropertyType, align));
+            return request;
+        }
+
+        /// <summary>그리개의 재기(<c>MeasureBox</c>): 상자 너비·높이와 글 높이(fontSize와 같은 단위).</summary>
+        private static (double Width, double Height, double TextHeight) MeasureBox(object rasterizer, string text, object style, double fontSize, double boxWidth, double boxHeight)
+        {
+            var result = rasterizer.GetType().GetMethod("MeasureBox").Invoke(null, new[] { text, style, fontSize, boxWidth, (object)boxHeight });
+            var type = result.GetType();
+            return ((double)type.GetField("Item1").GetValue(result), (double)type.GetField("Item2").GetValue(result), (double)type.GetField("Item3").GetValue(result));
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WrapWidth_WrapsAtSpacesInsideTheBox()
+        {
+            var rasterizer = NewRasterizer();
+            const string text = "가나다라 마바사 아자차카 타파하 가나다라 마바사 아자차카 타파하";
+            var single = await Render(rasterizer, Request(rasterizer, text, 1920, 1080), "box-none");
+            var wrapped = await Render(rasterizer, BoxRequest(rasterizer, text, 600), "box-wrap-600");
+            var singleBands = InkBands(single);
+            var bands = InkBands(wrapped);
+            _out.WriteLine("상자 없음 " + single.Width + "×" + single.Height + " · 토막 " + singleBands.Count + " / 너비 600 " + wrapped.Width + "×" + wrapped.Height + " · 토막 " + string.Join(" ", bands.Select(b => b.Top + "~" + b.Bottom)));
+            Assert.Single(singleBands);
+            // 여덟 낱말(한 줄에 둘)이 네 줄로, PNG 폭 = 상자 + 가장자리 여백(1px씩), 칠한 곳은 상자 안
+            Assert.Equal(4, bands.Count);
+            Assert.Equal(602, wrapped.Width);
+            var (left, right) = wrapped.Extent(0, wrapped.Height);
+            Assert.True(left >= 1 && right <= 600, "칠한 폭 " + left + "~" + right);
+            Assert.Equal(0, wrapped.BorderInk());
+
+            // 한국어는 빈칸에서 나눈다: "가나다라마바 사아"(480 + 빈칸 + 160 > 600)는 첫 줄이 "가나다라마바"뿐이다 —
+            // 글자 단위로 나눴다면 첫 줄에 "사"까지 들어가(약 585px) 더 넓다
+            var words = await Render(rasterizer, BoxRequest(rasterizer, "가나다라마바 사아", 600, style: "\"Align\":\"Left\""), "box-wrap-words");
+            var wordBands = InkBands(words);
+            Assert.Equal(2, wordBands.Count);
+            var first = words.Extent(wordBands[0].Top, wordBands[0].Bottom + 1);
+            var second = words.Extent(wordBands[1].Top, wordBands[1].Bottom + 1);
+            _out.WriteLine("첫 줄 " + first + " · 둘째 줄 " + second);
+            Assert.InRange(first.Right - first.Left, 440, 500);
+            Assert.InRange(second.Right - second.Left, 130, 175);
+            // 나눈 자리의 빈칸은 둘째 줄 앞에 남지 않는다(왼쪽 맞춤 — 두 줄의 왼쪽 끝이 같다)
+            Assert.InRange(second.Left - first.Left, -3, 3);
+
+            // 자간이 있어도(글자 단위 조각) 상자 안에서 나눈다 — 줄이 더 많아진다
+            var spaced = await Render(rasterizer, BoxRequest(rasterizer, text, 600, style: "\"LetterSpacing\":200"), "box-wrap-spaced");
+            var spacedBands = InkBands(spaced);
+            var spacedExtent = spaced.Extent(0, spaced.Height);
+            _out.WriteLine("자간 200 토막 " + spacedBands.Count + " · 칠한 폭 " + spacedExtent);
+            Assert.True(spacedBands.Count > bands.Count);
+            Assert.True(spacedExtent.Left >= 1 && spacedExtent.Right <= 600);
+            Assert.Equal(0, spaced.BorderInk());
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WrapWidth_AlignsInsideTheBox()
+        {
+            var rasterizer = NewRasterizer();
+            // 두 줄 "가나다라마바" / "사아" — 상자(600)는 두 줄보다 넓다
+            const string text = "가나다라마바 사아";
+            var pngs = new System.Collections.Generic.Dictionary<string, Png>();
+            foreach (var align in new[] { "Left", "Center", "Right" })
+                pngs[align] = await Render(rasterizer, BoxRequest(rasterizer, text, 600, style: "\"Align\":\"" + align + "\""), "box-align-" + align);
+            (int Left, int Right) Line(Png png, int index)
+            {
+                var band = InkBands(png)[index];
+                return png.Extent(band.Top, band.Bottom + 1);
+            }
+            foreach (var pair in pngs)
+                _out.WriteLine(pair.Key + " " + pair.Value.Width + " · " + Line(pair.Value, 0) + " / " + Line(pair.Value, 1));
+            // 상자가 PNG 폭(602)을 정한다 — 정렬은 그 상자 안에서
+            Assert.All(pngs.Values, p => Assert.Equal(602, p.Width));
+            var left = pngs["Left"];
+            Assert.InRange(Line(left, 0).Left, 1, 15);
+            Assert.InRange(Line(left, 1).Left - Line(left, 0).Left, -3, 3);
+            var right = pngs["Right"];
+            Assert.InRange(Line(right, 0).Right, 586, 600);
+            Assert.InRange(Line(right, 1).Right - Line(right, 0).Right, -3, 3);
+            var center = pngs["Center"];
+            foreach (var index in new[] { 0, 1 })
+            {
+                var line = Line(center, index);
+                Assert.InRange(line.Left + line.Right - center.Width, -6, 6);
+            }
+        }
+
+        [UiFact]
+        public async Task Rasterizer_ZeroBox_ByteIdenticalToNoBoxFields()
+        {
+            var rasterizer = NewRasterizer();
+            const string text = "가나다 ABC\n두 번째 줄  ";
+            foreach (var (name, style) in new[] { ("plain", (string)null), ("effects", Outline(6, "Miter") + "," + Shadow(10, 45, 6) + ",\"Align\":\"Right\""), ("warp", Warp("ArchUp", 60)), ("spaced", "\"LetterSpacing\":300") })
+            {
+                await Render(rasterizer, Request(rasterizer, text, style: style), "box-zero-base-" + name);
+                await Render(rasterizer, BoxRequest(rasterizer, text, 0, 0, "Bottom", style: style, canvasWidth: 1280, canvasHeight: 720), "box-zero-" + name);
+                var expected = File.ReadAllBytes(Path.Combine(Folder(), "box-zero-base-" + name + ".png"));
+                Assert.True(expected.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "box-zero-" + name + ".png"))), name + ": 상자 0/0이 그림을 바꿨다");
+            }
+            // 상자를 정하면 다르다(비교가 헛돌지 않는지)
+            await Render(rasterizer, BoxRequest(rasterizer, text, 300, canvasWidth: 1280, canvasHeight: 720), "box-zero-on");
+            Assert.False(File.ReadAllBytes(Path.Combine(Folder(), "box-zero-base-plain.png")).AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "box-zero-on.png"))));
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WordWiderThanTheBox_BreaksInside()
+        {
+            var rasterizer = NewRasterizer();
+            // 빈칸 없는 14글자(약 1,120px)를 500px 상자에: 글자 단위로 들어가는 만큼씩(6·6·2) 세 줄, 모두 상자 안
+            var png = await Render(rasterizer, BoxRequest(rasterizer, "가나다라마바사아자차카타파하", 500, style: "\"Align\":\"Left\""), "box-long-word");
+            var bands = InkBands(png);
+            _out.WriteLine(png.Width + "×" + png.Height + " · 토막 " + string.Join(" ", bands.Select(b => b.Top + "~" + b.Bottom + " " + png.Extent(b.Top, b.Bottom + 1))));
+            Assert.Equal(3, bands.Count);
+            Assert.Equal(502, png.Width);
+            Assert.True(png.Extent(0, png.Height).Right <= 500);
+            var last = png.Extent(bands[2].Top, bands[2].Bottom + 1);
+            Assert.InRange(last.Right - last.Left, 130, 175);
+            // 오른쪽→왼쪽 글자가 든 줄도 빈칸에서 나눠 그린다(줄마다 통째로)
+            var rtl = await Render(rasterizer, BoxRequest(rasterizer, "שלום עולם שלום עולם مرحبا بالعالم", 400), "box-rtl");
+            Assert.True(InkBands(rtl).Count >= 2);
+            Assert.True(rtl.Extent(0, rtl.Height).Right <= 400);
+            Assert.Equal(0, rtl.BorderInk());
+        }
+
+        [UiFact]
+        public async Task Rasterizer_BoxHeight_PlacesTheTextTopMiddleBottom()
+        {
+            var rasterizer = NewRasterizer();
+            // 흰 "■"(100px, 줄 높이 120) 하나를 높이 500 상자에: 위·가운데·아래가 (500 - 120) / 2 = 190px씩 내려간다
+            var tops = new System.Collections.Generic.Dictionary<string, int>();
+            foreach (var align in new[] { "Top", "Middle", "Bottom" })
+            {
+                var png = await Render(rasterizer, BoxRequest(rasterizer, "■", 0, 500, align, 100, WhiteFill), "box-height-" + align);
+                Assert.Equal(502, png.Height);
+                tops[align] = Assert.Single(InkBands(png)).Top;
+            }
+            _out.WriteLine("위 " + tops["Top"] + " · 가운데 " + tops["Middle"] + " · 아래 " + tops["Bottom"]);
+            Assert.InRange(tops["Middle"] - tops["Top"], 189, 191);
+            Assert.InRange(tops["Bottom"] - tops["Middle"], 189, 191);
+            // 위 정렬은 상자 위 끝(PNG 1px 여백) 가까이에서 시작한다
+            Assert.InRange(tops["Top"], 1, 60);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_TextTallerThanTheBox_OverflowsFullyDrawn()
+        {
+            var rasterizer = NewRasterizer();
+            // 다섯 줄(600px)을 높이 150 상자에: 가운데는 위아래로, 위는 아래로 넘쳐 모두 그린다(잘리지 않음)
+            const string text = "가\n나\n다\n라\n마";
+            var middle = await Render(rasterizer, BoxRequest(rasterizer, text, 0, 150, "Middle", 100, WhiteFill), "box-overflow-middle");
+            var top = await Render(rasterizer, BoxRequest(rasterizer, text, 0, 150, "Top", 100, WhiteFill), "box-overflow-top");
+            _out.WriteLine("가운데 " + middle.Width + "×" + middle.Height + " · 위 " + top.Width + "×" + top.Height);
+            Assert.Equal(5, InkBands(middle).Count);
+            Assert.Equal(5, InkBands(top).Count);
+            Assert.Equal(0, middle.BorderInk());
+            Assert.Equal(0, top.BorderInk());
+            // PNG 가운데 = 상자 가운데: 위 정렬의 첫 줄은 상자 위 끝(가운데 - 75) 바로 아래, 아래로 넘친 만큼 PNG가 위아래로 커진다
+            var first = InkBands(top)[0].Top;
+            Assert.InRange(first - (top.Height / 2 - 75), 0, 30);
+            Assert.True(top.Height > middle.Height);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_MeasureBox_EqualsTheBoxDrawUses()
+        {
+            var rasterizer = NewRasterizer();
+            const string text = "가나다라 마바사 아자차카 타파하 가나다라 마바사 아자차카 타파하";
+            var request = BoxRequest(rasterizer, text, 600);
+            var style = Get(request, "Style");
+            // 재기: 너비 = 상자, 높이 = 네 줄 × 80 × 1.2. 그린 PNG는 그 상자 + 가장자리 여백(1px씩, 짝수로 올림) — 칠한 곳이 상자 안이라 상자가 PNG 크기를 정한다
+            var box = MeasureBox(rasterizer, text, style, 80, 600, 0);
+            _out.WriteLine("잰 상자 " + box);
+            Assert.Equal(600, box.Width, 6);
+            Assert.Equal(4 * 80 * 1.2, box.Height, 6);
+            Assert.Equal(box.Height, box.TextHeight, 6);
+            var png = await Render(rasterizer, request, "box-measure");
+            Assert.Equal(602, png.Width);
+            Assert.Equal((int)Math.Ceiling(box.Height + 2) + (int)Math.Ceiling(box.Height + 2) % 2, png.Height);
+            // 높이를 정하면 상자 높이 = 그 값, 글 높이는 그대로(넘침 안내에 씀)
+            var tall = MeasureBox(rasterizer, text, style, 80, 600, 500);
+            Assert.Equal((600.0, 500.0), (tall.Width, tall.Height));
+            Assert.Equal(box.TextHeight, tall.TextHeight, 6);
+            Assert.Equal(502, (await Render(rasterizer, BoxRequest(rasterizer, text, 600, 500), "box-measure-tall")).Height);
+            var low = MeasureBox(rasterizer, text, style, 80, 600, 100);
+            Assert.True(low.TextHeight > low.Height, "넘침");
+            // 프로젝트 픽셀로 재도(글자 크기·상자 절반) 같은 줄 나눔 — 상자도 절반
+            var half = MeasureBox(rasterizer, text, style, 40, 300, 0);
+            Assert.Equal(box.Width / 2, half.Width, 6);
+            Assert.Equal(box.Height / 2, half.Height, 6);
+            // 상자가 없으면 글을 감싼 크기 — 한 줄
+            var auto = MeasureBox(rasterizer, text, style, 80, 0, 0);
+            Assert.True(auto.Width > 1500);
+            Assert.Equal(80 * 1.2, auto.Height, 6);
         }
 
         // ---------- 화면 ----------
@@ -1867,8 +2162,8 @@ namespace VideoEditor.UiTests
                 var id = await AddStyledText(ui, window, "모음 ABC");
                 await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
                 var presets = Presets();
-                Assert.Equal(8, presets.Count);
-                // 꾸미기 탭 맨 위에 단추 8개 — 화면 낭독·글자로 찾기는 스타일 이름으로
+                Assert.Equal(16, presets.Count);
+                // 꾸미기 탭 맨 위에 단추 16개 — 화면 낭독·글자로 찾기는 스타일 이름으로
                 await ui.WaitFor(() => Ui.ById<Button>(window, "StylePreset" + (presets.Count - 1)), Wait, "스타일 모음 단추");
                 ui.Run(() =>
                 {
@@ -1882,6 +2177,25 @@ namespace VideoEditor.UiTests
                 });
                 // 썸네일이 시간 안에 채워진다(배경에서 그림)
                 await ui.WaitUntil(() => Enumerable.Range(0, presets.Count).All(i => Ui.ById<Image>(window, "StylePreset" + i + "Image")?.Source != null), Wait, "썸네일");
+                ui.Run(() =>
+                {
+                    // 16개라 좁은 속성 패널(시험 창 1280px에서 안쪽 약 200px)에도 한 줄에 셋 이상
+                    var gallery = Ui.ById<WrapPanel>(window, "StylePresets");
+                    gallery.UpdateLayout();
+                    double Top(int i) => Ui.ById<Button>(window, "StylePreset" + i).TranslatePoint(new Point(0, 0), gallery).Y;
+                    Assert.True(Math.Abs(Top(2) - Top(0)) < 1, "갤러리 폭 " + gallery.ActualWidth + "px — 한 줄에 셋이 들어가야 한다");
+                    // 썸네일은 틀 안 가운데: 반사·휘기처럼 칠한 곳이 치우친 것도 그림 가운데가 틀 밖으로 크게 벗어나지 않는다
+                    foreach (var name in new[] { "유리 반사", "원형 배지", "계단 글자" })
+                    {
+                        var image = Ui.ById<Image>(window, "StylePreset" + presets.FindIndex(p => p.Name == name) + "Image");
+                        var frame = (FrameworkElement)VisualTreeHelper.GetParent(VisualTreeHelper.GetParent(image));
+                        var center = image.TranslatePoint(new Point(image.ActualWidth / 2, image.ActualHeight / 2), frame);
+                        _out.WriteLine(name + ": 그림 " + image.ActualWidth.ToString("F1") + "×" + image.ActualHeight.ToString("F1") + " · 가운데 " + center + " · 틀 " + frame.ActualWidth + "×" + frame.ActualHeight);
+                        Assert.InRange(center.X, 0, frame.ActualWidth);
+                        Assert.InRange(center.Y, 0, frame.ActualHeight);
+                        Assert.True(image.ActualWidth > frame.ActualWidth * 0.6, name + " 썸네일이 너무 작다");
+                    }
+                });
                 ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-presets"));
                 // 썸네일을 보이는 것만으로 스타일이 생기지 않는다
                 Assert.Null(ui.Run(() => StyleOf(window, id)));
@@ -1928,6 +2242,79 @@ namespace VideoEditor.UiTests
                 await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
                 Assert.Equal("#FFFFFF", ui.Run(() => (string)Get(ProjectClips(window).First(c => Equals(Get(c, "Id"), id)), "TextColor")));
                 await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        [EditorFact]
+        public async Task StylePresets_GlowReflectionWarp_FillTheirSections_UndoOneByOne()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                var id = await AddStyledText(ui, window, "모음 둘째");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                var presets = Presets();
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StylePreset" + (presets.Count - 1)), Wait, "스타일 모음 단추");
+                var shown = ui.Run(() => PreviewPixels(window));
+                var steps = new System.Collections.Generic.List<(int Index, byte[] Pixels)>();
+
+                // 2단계 스타일을 차례로 누른다: 스타일이 통째로 바뀌고 미리 보기가 바뀌며, 그 효과의 묶음 칸이 켜진다(검정 미리 보기 바탕에서도 보이는 색들)
+                foreach (var name in new[] { "네온", "유리 반사", "아치 제목" })
+                {
+                    var index = presets.FindIndex(p => p.Name == name);
+                    ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StylePreset" + index)));
+                    await ui.WaitUntil(() => StyleJson(StyleOf(window, id)) == StyleJson(presets[index].Style), Wait, name);
+                    var previous = shown;
+                    await ui.WaitUntil(() => Differs(previous, PreviewPixels(window)), Wait, name + " 미리 보기");
+                    await Task.Delay(500);
+                    shown = ui.Run(() => PreviewPixels(window));
+                    steps.Add((index, shown));
+                    ui.Run(() =>
+                    {
+                        Assert.Equal(name == "네온", Ui.ById<CheckBox>(window, "StyleGlowOn").IsChecked == true);
+                        Assert.Equal(name == "유리 반사", Ui.ById<CheckBox>(window, "StyleReflectionOn").IsChecked == true);
+                        Assert.Equal(name == "아치 제목" ? "아치 위" : "없음", Ui.ById<ComboBox>(window, "StyleWarpKind").SelectedItem);
+                        Assert.Equal(name == "아치 제목", Ui.ById<TextBox>(window, "StyleWarpAmount").IsEnabled);
+                        // [글자] 탭 글자 색 = 채우기 색 1(네온은 채우기 없음이어도 색 1을 남겨 둔다)
+                        var clip = ProjectClips(window).First(c => Equals(Get(c, "Id"), id));
+                        Assert.Equal((string)((System.Collections.IList)Get(Get(presets[index].Style, "Fill"), "Colors"))[0], (string)Get(clip, "TextColor"));
+                    });
+                    if (name == "네온")
+                        Assert.Equal("#0EA5E9", ui.Run(() => Ui.ById<TextBox>(window, "StyleGlowColor").Text));
+                    if (name == "아치 제목")
+                        Assert.Equal("60", ui.Run(() => Ui.ById<TextBox>(window, "StyleWarpAmount").Text));
+                }
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-presets-arch"));
+
+                // 실행 취소 한 번에 한 스타일씩 거꾸로(아치 → 유리 반사 → 네온 → 스타일 없음)
+                for (var k = steps.Count - 2; k >= -1; k--)
+                {
+                    ui.Run(() =>
+                    {
+                        Ui.Focus(Canvas(window));
+                        Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control);
+                    });
+                    if (k < 0)
+                    {
+                        await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
+                        break;
+                    }
+                    var (index, pixels) = steps[k];
+                    await ui.WaitUntil(() => StyleJson(StyleOf(window, id)) == StyleJson(presets[index].Style), Wait, "실행 취소 → " + presets[index].Name);
+                    await ui.WaitUntil(() => !Differs(pixels, PreviewPixels(window)), Wait, presets[index].Name + " 미리 보기로 돌아옴");
+                }
+                ui.Run(() =>
+                {
+                    Assert.False(Ui.ById<CheckBox>(window, "StyleGlowOn").IsChecked == true);
+                    Assert.Equal("없음", Ui.ById<ComboBox>(window, "StyleWarpKind").SelectedItem);
+                });
                 Assert.Empty(ui.TakeErrors());
             }
             finally
@@ -2008,6 +2395,274 @@ namespace VideoEditor.UiTests
             finally
             {
                 await CloseEditor(ui, window);
+            }
+        }
+
+        // ---------- 내 스타일(이슈 #22) ----------
+
+        // 플러그인 설정 키(EditorServices.TextStylesKey). 시험용 설정은 프로세스 안에서 남으므로 시험 앞뒤로 비운다(다른 시험으로 새지 않게)
+        private const string MyStylesKey = "textStyles";
+
+        /// <summary>제목이 정확히 이것인 보이는 창(UI 스레드, 없으면 null) — "내 스타일"은 "내 스타일로 저장"·"내 스타일 덮어쓰기"와 앞이 같아 Ui.Window로는 가를 수 없다.</summary>
+        private static Window DialogTitled(string title)
+        {
+            return Ui.Windows().FirstOrDefault(w => w.IsVisible && w.Title == title);
+        }
+
+        /// <summary>설정 textStyles에 저장된 이름들(없으면 빈 목록).</summary>
+        private static System.Collections.Generic.List<string> SavedNames(PluginUnderTest plugin)
+        {
+            var json = plugin.Manager.GetSetting(MyStylesKey);
+            if (json == null)
+                return new System.Collections.Generic.List<string>();
+            using (var document = JsonDocument.Parse(json))
+                return document.RootElement.EnumerateArray().Select(e => e.GetProperty("Name").GetString()).ToList();
+        }
+
+        /// <summary>설정 textStyles에 저장된 이름의 스타일 JSON.</summary>
+        private static JsonElement SavedStyle(PluginUnderTest plugin, string name)
+        {
+            using (var document = JsonDocument.Parse(plugin.Manager.GetSetting(MyStylesKey)))
+                return document.RootElement.EnumerateArray().First(e => e.GetProperty("Name").GetString() == name).GetProperty("Style").Clone();
+        }
+
+        /// <summary>[내 스타일로 저장]을 누르고 이름 창에 name을 적어 [확인]한다. 이름 창에 먼저 적혀 있던 글을 돌려준다(덮어쓰기·알림 창은 부른 쪽이 처리).</summary>
+        private static async Task<string> SaveMine(UiThread ui, Window window, string name)
+        {
+            // 이름 창은 모달이라 Post로 누르고 뜬 창을 찾는다
+            ui.Post(() => Ui.Click(Ui.ById<Button>(window, "StyleSaveMine")));
+            var input = await ui.WaitFor(() => DialogTitled("내 스타일로 저장"), Wait, "이름 창");
+            var initial = ui.Run(() =>
+            {
+                var box = Ui.ById<TextBox>(input, "DialogInputBox");
+                var text = box.Text;
+                box.Text = name;
+                Ui.Click(Ui.ById<Button>(input, "DialogOkButton"));
+                return text;
+            });
+            await ui.WaitUntil(() => DialogTitled("내 스타일로 저장") == null, Wait, "이름 창 닫힘");
+            return initial;
+        }
+
+        /// <summary>확인 창(UiKit.Ask)이 뜨기를 기다려 글을 읽고 index번 단추를 누른다. 창의 글을 돌려준다.</summary>
+        private static async Task<string> Answer(UiThread ui, string title, int index)
+        {
+            var dialog = await ui.WaitFor(() => DialogTitled(title), Wait, title + " 창");
+            var message = ui.Run(() =>
+            {
+                var text = string.Join(" ", Ui.Texts(dialog));
+                Ui.Click(Ui.ById<Button>(dialog, "AskButton" + index));
+                return text;
+            });
+            await ui.WaitUntil(() => DialogTitled(title) == null, Wait, title + " 창 닫힘");
+            return message;
+        }
+
+        [EditorFact]
+        public async Task MyStyles_SaveShowsButton_SurvivesReopen_RemoveDeletes()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            plugin.Manager.SetSetting(MyStylesKey, null);
+            Window window = null;
+            try
+            {
+                window = await Open(ui, plugin);
+                var id = await AddStyledText(ui, window, "내 스타일 ABC");
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleSaveMine"), Wait, "[내 스타일로 저장]");
+                ui.Run(() =>
+                {
+                    // 비어 있으면 빈 줄 대신 안내
+                    Assert.Null(Ui.ById<Button>(window, "StyleMine0"));
+                    Assert.Equal(Visibility.Visible, Ui.ById<TextBlock>(window, "StyleMineHint").Visibility);
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<WrapPanel>(window, "StyleMine").Visibility);
+                });
+
+                // 스타일이 없는 글자: 지금 색을 이어받은 스타일(왼쪽 맞춤)을 저장 — 저장은 편집이 아니라 클립에는 스타일이 생기지 않는다. 이름은 앞뒤 공백을 다듬는다
+                Assert.Equal("내 스타일 1", await SaveMine(ui, window, "  흰 바탕  "));
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine0"), Wait, "내 스타일 단추");
+                Assert.Equal(new[] { "흰 바탕" }, SavedNames(plugin));
+                var plain = SavedStyle(plugin, "흰 바탕");
+                Assert.Equal("Left", plain.GetProperty("Align").GetString());
+                Assert.Equal("#FFFFFF", plain.GetProperty("Fill").GetProperty("Colors")[0].GetString());
+                await ui.WaitUntil(() => Status(window) == "내 스타일에 저장했습니다: 흰 바탕", Wait, "저장 알림");
+                ui.Run(() =>
+                {
+                    Assert.Null(StyleOf(window, id));
+                    var button = Ui.ById<Button>(window, "StyleMine0");
+                    Assert.Equal("흰 바탕", System.Windows.Automation.AutomationProperties.GetName(button));
+                    Assert.Equal("흰 바탕", button.ToolTip);
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<TextBlock>(window, "StyleMineHint").Visibility);
+                });
+
+                // "노란 자막"을 입힌 뒤 저장 → 둘째 단추. 저장한 것은 사본이라 클립을 고쳐도 설정은 그대로
+                var presets = Presets();
+                var yellow = presets.FindIndex(p => p.Name == "노란 자막");
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StylePreset" + yellow)));
+                await ui.WaitUntil(() => StyleOf(window, id) != null, Wait, "노란 자막");
+                Assert.Equal("내 스타일 2", await SaveMine(ui, window, "노랑 제목"));
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine1"), Wait, "둘째 단추");
+                Assert.Equal(new[] { "흰 바탕", "노랑 제목" }, SavedNames(plugin));
+                Assert.True(SavedStyle(plugin, "노랑 제목").GetProperty("Bold").GetBoolean());
+                Assert.Equal("#FACC15", SavedStyle(plugin, "노랑 제목").GetProperty("Fill").GetProperty("Colors")[0].GetString());
+                ui.Run(() => Ui.ClickToggle(Ui.ById<CheckBox>(window, "StyleBold")));
+                await ui.WaitUntil(() => !(bool)Get(StyleOf(window, id), "Bold"), Wait, "굵게 끔");
+                Assert.True(SavedStyle(plugin, "노랑 제목").GetProperty("Bold").GetBoolean());
+                // 썸네일은 스타일 모음과 같이 그린다
+                await ui.WaitUntil(() => Ui.ById<Image>(window, "StyleMine0Image")?.Source != null && Ui.ById<Image>(window, "StyleMine1Image")?.Source != null, Wait, "내 스타일 썸네일");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "my-styles"));
+
+                // 편집 창을 닫았다 열어도 남아 있다
+                await CloseEditor(ui, window);
+                window = null;
+                window = await Open(ui, plugin);
+                await AddStyledText(ui, window, "다시 연 창");
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine1"), Wait, "다시 연 창의 내 스타일");
+                ui.Run(() =>
+                {
+                    Assert.Equal("흰 바탕", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine0")));
+                    Assert.Equal("노랑 제목", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine1")));
+                    Assert.Null(Ui.ById<Button>(window, "StyleMine2"));
+                });
+
+                // 오른쪽 클릭 [지우기] — 설정이라 실행 취소에 남지 않음을 알린다
+                ui.Run(() => Ui.ContextMenu(Ui.ById<Button>(window, "StyleMine0"), "지우기"));
+                await ui.WaitUntil(() => Ui.ById<Button>(window, "StyleMine1") == null, Wait, "지우기");
+                Assert.Equal(new[] { "노랑 제목" }, SavedNames(plugin));
+                await ui.WaitUntil(() => Status(window).StartsWith("내 스타일에서 지웠습니다: 흰 바탕", StringComparison.Ordinal) && Status(window).Contains("실행 취소"), Wait, "지우기 알림");
+                Assert.Equal("노랑 제목", ui.Run(() => System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine0"))));
+                ui.Run(() => Ui.ContextMenu(Ui.ById<Button>(window, "StyleMine0"), "지우기"));
+                await ui.WaitUntil(() => Ui.ById<Button>(window, "StyleMine0") == null, Wait, "모두 지움");
+                Assert.Null(plugin.Manager.GetSetting(MyStylesKey));
+                Assert.Equal(Visibility.Visible, ui.Run(() => Ui.ById<TextBlock>(window, "StyleMineHint").Visibility));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+                plugin.Manager.SetSetting(MyStylesKey, null);
+            }
+        }
+
+        [EditorFact]
+        public async Task MyStyles_ClickAppliesInOneUndoStep_OverwriteAsks_51stAndBadNameRefused()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            // 악성·넘치는 설정: 제어 문자 이름·겹친 이름·형식이 틀린 스타일·쓰레기 항목은 건너뛰고 앞에서부터 50개
+            var entries = new System.Collections.Generic.List<object>
+            {
+                new { Name = "하늘 광선", Style = new { Bold = true, Fill = new { Kind = "Solid", Colors = new[] { "#38BDF8" } }, Glow = new { Enabled = true, Color = "#38BDF8", Size = 12.0, Opacity = 0.8 } } },
+                new { Name = "줄\n바꿈", Style = new { } },
+                new { Name = " 하늘 광선 ", Style = new { } },
+                new { Name = "굵게 자리에 글", Style = new { Bold = "yes" } },
+                "쓰레기"
+            };
+            // 채움 스타일은 모두 달라야 썸네일도 따로 그린다(같으면 캐시 키 하나 — 많은 썸네일이 스레드 풀을 막던 문제를 못 잡는다)
+            for (var i = 1; i <= 49; i++)
+                entries.Add(new { Name = "채움 " + i, Style = new { Outline = new { Enabled = true, Color = "#EF4444", Width = (double)i } } });
+            entries.Add(new { Name = "넘침", Style = new { } });
+            var seeded = JsonSerializer.Serialize(entries);
+            plugin.Manager.SetSetting(MyStylesKey, seeded);
+            Window window = null;
+            try
+            {
+                window = await Open(ui, plugin);
+                var id = await AddStyledText(ui, window, "광선 ABC");
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine49"), Wait, "내 스타일 50개");
+                ui.Run(() =>
+                {
+                    Assert.Null(Ui.ById<Button>(window, "StyleMine50"));
+                    Assert.Equal("하늘 광선", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine0")));
+                    Assert.Equal("채움 1", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine1")));
+                    Assert.Equal("채움 49", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine49")));
+                });
+                // 썸네일 66개(스타일 모음 16 + 내 스타일 50)가 시간 안에 모두 뜨고, 그동안 스레드 풀이 막히지 않는다
+                var thumbnails = Stopwatch.StartNew();
+                long slowest = 0;
+                await ui.WaitUntil(() =>
+                {
+                    var probe = Stopwatch.StartNew();
+                    Task.Run(() => 0).Wait();
+                    slowest = Math.Max(slowest, probe.ElapsedMilliseconds);
+                    return Enumerable.Range(0, 50).All(i => Ui.ById<Image>(window, "StyleMine" + i + "Image") != null)
+                        && Enumerable.Range(0, 16).All(i => Ui.ById<Image>(window, "StylePreset" + i + "Image") != null);
+                }, TimeSpan.FromSeconds(20), "썸네일 66개");
+                _out.WriteLine("썸네일 66개 " + thumbnails.ElapsedMilliseconds + "ms · 스레드 풀 응답 최대 " + slowest + "ms");
+                Assert.True(slowest < 1000, "스레드 풀 응답 " + slowest + "ms");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                Assert.Null(ui.Run(() => StyleOf(window, id)));
+                var fontSize = ui.Run(() => (double)Get(ProjectClips(window).First(c => Equals(Get(c, "Id"), id)), "FontSize"));
+                var before = ui.Run(() => PreviewPixels(window));
+
+                // 누르면 스타일이 통째로 그 스타일(하늘색 채우기 + 광선), 글자 내용·크기는 그대로, [글자] 탭 글자 색 = 채우기 색 1 — 하늘색은 검정 미리 보기 바탕에서 보인다
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StyleMine0")));
+                await ui.WaitUntil(() => StyleOf(window, id) != null, Wait, "하늘 광선");
+                ui.Run(() =>
+                {
+                    var style = StyleOf(window, id);
+                    Assert.True((bool)Get(style, "Bold"));
+                    Assert.Equal("#38BDF8", (string)((System.Collections.IList)Get(Get(style, "Fill"), "Colors"))[0]);
+                    Assert.True((bool)Get(Get(style, "Glow"), "Enabled"));
+                    var clip = ProjectClips(window).First(c => Equals(Get(c, "Id"), id));
+                    Assert.Equal("광선 ABC", (string)Get(clip, "Text"));
+                    Assert.Equal(fontSize, (double)Get(clip, "FontSize"));
+                    Assert.Equal("#38BDF8", (string)Get(clip, "TextColor"));
+                    Assert.True(Ui.ById<CheckBox>(window, "StyleGlowOn").IsChecked == true);
+                });
+                await ui.WaitUntil(() => Differs(before, PreviewPixels(window)), Wait, "하늘 광선 미리 보기");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "my-styles-applied"));
+
+                // 실행 취소 한 번에 스타일 없던 처음으로
+                ui.Run(() =>
+                {
+                    Ui.Focus(Canvas(window));
+                    Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control);
+                });
+                await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "실행 취소 한 번에 처음으로");
+                Assert.Equal("#FFFFFF", ui.Run(() => (string)Get(ProjectClips(window).First(c => Equals(Get(c, "Id"), id)), "TextColor")));
+                await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+
+                // 50개가 찼으면 새 이름은 알리고 저장하지 않는다(조용히 버리지 않음) — 설정은 넣어 둔 글 그대로
+                Assert.Equal("내 스타일 51", await SaveMine(ui, window, "내 스타일 51"));
+                Assert.Contains("50개까지", await Answer(ui, "내 스타일", 0));
+                Assert.Equal(seeded, plugin.Manager.GetSetting(MyStylesKey));
+                ui.Run(() =>
+                {
+                    Assert.NotNull(Ui.ById<Button>(window, "StyleMine49"));
+                    Assert.Null(Ui.ById<Button>(window, "StyleMine50"));
+                });
+
+                // 같은 이름은 덮어쓸지 묻는다: [취소]면 그대로, [덮어쓰기]면 그 자리에서 바뀐다(50개가 차도 됨)
+                var presets = Presets();
+                var yellow = presets.FindIndex(p => p.Name == "노란 자막");
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StylePreset" + yellow)));
+                await ui.WaitUntil(() => StyleOf(window, id) != null, Wait, "노란 자막");
+                await SaveMine(ui, window, "하늘 광선");
+                Assert.Contains("하늘 광선", await Answer(ui, "내 스타일 덮어쓰기", 1));
+                Assert.Equal(seeded, plugin.Manager.GetSetting(MyStylesKey));
+                await SaveMine(ui, window, "하늘 광선");
+                await Answer(ui, "내 스타일 덮어쓰기", 0);
+                await ui.WaitUntil(() => plugin.Manager.GetSetting(MyStylesKey) != seeded, Wait, "덮어씀");
+                // 다시 쓴 설정에는 규칙에 맞는 50개만 남는다(악성 항목은 빠짐)
+                var names = SavedNames(plugin);
+                Assert.Equal(50, names.Count);
+                Assert.Equal("하늘 광선", names[0]);
+                Assert.Equal("채움 49", names[49]);
+                Assert.Equal("#FACC15", SavedStyle(plugin, "하늘 광선").GetProperty("Fill").GetProperty("Colors")[0].GetString());
+                Assert.False(SavedStyle(plugin, "하늘 광선").GetProperty("Glow").GetProperty("Enabled").GetBoolean());
+
+                // 빈 이름은 알리고 저장하지 않는다
+                var stored = plugin.Manager.GetSetting(MyStylesKey);
+                await SaveMine(ui, window, "   ");
+                Assert.Contains("1~40자", await Answer(ui, "내 스타일", 0));
+                Assert.Equal(stored, plugin.Manager.GetSetting(MyStylesKey));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+                plugin.Manager.SetSetting(MyStylesKey, null);
             }
         }
     }
