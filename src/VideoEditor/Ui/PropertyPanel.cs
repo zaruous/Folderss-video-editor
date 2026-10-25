@@ -17,15 +17,17 @@ namespace VideoEditor.Ui
     internal sealed class PropertyPanel : DockPanel
     {
         private readonly EditorSession _session;
+        private readonly EditorServices _services;
         private readonly EditorCommands _commands;
         private readonly ContentControl _body = new ContentControl();
         private readonly List<Action> _refreshers = new List<Action>();
         private string _shownKey;
         private bool _updating;
 
-        public PropertyPanel(EditorSession session, EditorCommands commands)
+        public PropertyPanel(EditorSession session, EditorServices services, EditorCommands commands)
         {
             _session = session;
+            _services = services;
             _commands = commands;
             var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _body };
             Children.Add(scroll);
@@ -437,13 +439,16 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
-        /// [꾸미기] 꾸민 글자 스타일 — 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬), 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도),
-        /// 윤곽선 묶음(켜기·색·두께·이음), 그림자 묶음(켜기·색·거리·방향·흐림·불투명도), 맨 끝에 휘기 묶음(종류·정도).
+        /// [꾸미기] 꾸민 글자 스타일 — 맨 위 스타일 모음(미리 만든 스타일 단추), 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬),
+        /// 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도), 윤곽선 묶음(켜기·색·두께·이음), 그림자 묶음(켜기·색·거리·방향·흐림·불투명도),
+        /// 맨 끝에 휘기 묶음(종류·정도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
         /// </summary>
         private UIElement StyleTab(string id)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
+            panel.Children.Add(Section("스타일 모음"));
+            panel.Children.Add(PresetGallery(id));
             var warning = UiKit.Label("이 PC에 없는 글꼴이라 맑은 고딕으로 그립니다.", true);
             warning.TextWrapping = TextWrapping.Wrap;
             warning.Margin = new Thickness(0, 2, 0, 6);
@@ -755,6 +760,102 @@ namespace VideoEditor.Ui
                 }
             });
             return panel;
+        }
+
+        // 스타일 모음 단추: 어두운 바탕(흰 글자·속 빈 글자도 보이게)에 썸네일을 반 크기로 놓는다.
+        // 썸네일 PNG의 가운데가 글자 가운데라 가운데 맞춤으로 두면 모두 같은 크기·위치로 보인다(넘치는 효과 여백은 잘림)
+        private const double PresetTileWidth = 96;
+        private const double PresetTileHeight = 44;
+        private const double PresetThumbnailScale = 0.5;
+        private static readonly System.Windows.Media.Brush PresetBackdrop = FrozenBrush(System.Windows.Media.Color.FromRgb(0x50, 0x50, 0x50));
+
+        /// <summary>
+        /// 스타일 모음: 미리 만든 스타일 단추(<see cref="TextStylePresets"/>). 누르면 글자 내용·크기는 그대로 두고 스타일을 통째로 바꾼다(실행 취소 한 단계).
+        /// 단추 그림은 그리개로 그린 썸네일 — 탭이 처음 보일 때 배경에서 그리고, 다 그리기 전이나 실패하면 이름 글자만 보인다.
+        /// </summary>
+        private UIElement PresetGallery(string id)
+        {
+            var gallery = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
+            AutomationProperties.SetAutomationId(gallery, "StylePresets");
+            var tiles = new List<(Border Frame, TextStyle Style, string ImageId)>();
+            var presets = TextStylePresets.All;
+            for (var i = 0; i < presets.Count; i++)
+            {
+                var (name, style) = presets[i];
+                var fallback = new TextBlock
+                {
+                    Text = name,
+                    Foreground = System.Windows.Media.Brushes.White,
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(4, 0, 4, 0)
+                };
+                var frame = new Border { Width = PresetTileWidth, Height = PresetTileHeight, Background = PresetBackdrop, CornerRadius = new CornerRadius(3), ClipToBounds = true, Child = fallback };
+                var button = new Button { Content = frame, Padding = new Thickness(2), Margin = new Thickness(0, 0, 4, 4), ToolTip = name };
+                AutomationProperties.SetAutomationId(button, "StylePreset" + i);
+                AutomationProperties.SetName(button, name);
+                button.Click += (s, e) => Edit(id, c =>
+                {
+                    c.Style = style.Clone();
+                    // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
+                    c.TextColor = c.Style.Fill.Colors[0];
+                }, null);
+                tiles.Add((frame, style, "StylePreset" + i + "Image"));
+                gallery.Children.Add(button);
+            }
+            // 썸네일은 이 탭이 처음 보일 때 그린다(클립을 고르기만 하거나 다른 탭을 볼 때는 그리기 스레드를 쓰지 않게)
+            var requested = false;
+            gallery.Loaded += (s, e) =>
+            {
+                if (requested || _services == null)
+                    return;
+                requested = true;
+                foreach (var tile in tiles)
+                    ShowThumbnail(tile.Frame, tile.Style, tile.ImageId);
+            };
+            return gallery;
+        }
+
+        /// <summary>썸네일을 단추 틀에 넣는다(이미 그려 둔 것이면 바로, 아니면 다 그린 뒤 UI 스레드에서). 그리개가 없거나 실패하면 이름 글자를 그대로 둔다.</summary>
+        private void ShowThumbnail(Border frame, TextStyle style, string automationId)
+        {
+            void Show(System.Windows.Media.Imaging.BitmapSource picture)
+            {
+                var image = new Image
+                {
+                    Source = picture,
+                    Width = picture.PixelWidth * PresetThumbnailScale,
+                    Height = picture.PixelHeight * PresetThumbnailScale,
+                    Stretch = System.Windows.Media.Stretch.Fill,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                System.Windows.Media.RenderOptions.SetBitmapScalingMode(image, System.Windows.Media.BitmapScalingMode.HighQuality);
+                AutomationProperties.SetAutomationId(image, automationId);
+                frame.Child = image;
+            }
+            var task = _services.TextStylePreview(style);
+            if (task.IsCompleted)
+            {
+                if (task.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && task.Result != null)
+                    Show(task.Result);
+                return;
+            }
+            task.ContinueWith(t =>
+            {
+                if (t.Status != System.Threading.Tasks.TaskStatus.RanToCompletion || t.Result == null)
+                    return;
+                Dispatcher.BeginInvoke(new Action(() => Show(t.Result)));
+            }, System.Threading.Tasks.TaskScheduler.Default);
+        }
+
+        private static System.Windows.Media.Brush FrozenBrush(System.Windows.Media.Color color)
+        {
+            var brush = new System.Windows.Media.SolidColorBrush(color);
+            brush.Freeze();
+            return brush;
         }
 
         /// <summary>고칠 클립의 스타일(없으면 지금 색을 이어받아 만든다).</summary>

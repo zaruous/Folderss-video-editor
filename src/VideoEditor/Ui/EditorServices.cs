@@ -33,6 +33,7 @@ namespace VideoEditor.Ui
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _transitionPreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, Task<BitmapSource>> _stylePreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
         private Task<FfmpegTool> _locating;
         private Task<YtDlpTool> _locatingYtDlp;
         // 썸네일·파형 FFmpeg를 한꺼번에 수십 개 띄우지 않게
@@ -393,6 +394,67 @@ namespace VideoEditor.Ui
                 {
                     _transitionPreviews.TryRemove(k, out _);
                     return null;
+                }
+            }));
+        }
+
+        // ---------- 스타일 모음 ----------
+
+        /// <summary>스타일 모음 썸네일에 그리는 글과 글자 크기(픽셀).</summary>
+        public const string StylePreviewText = "가나Ab";
+        public const double StylePreviewFontSize = 48;
+        // 글자 클립의 기본 크기(Clip.FontSize) — 효과 길이를 이 크기 클립을 썸네일 크기로 줄인 비율로 줄인다(기본 크기 클립에서 보이는 모양 그대로)
+        private const double DefaultClipFontSize = 72;
+
+        /// <summary>스타일 모음 썸네일 한 장의 그리기 요청. 캔버스는 효과가 잘리지 않을 만큼 넉넉히 — PNG는 글자와 효과 크기만큼만 나온다.</summary>
+        public static TextImageRequest StylePreviewRequest(TextStyle style)
+        {
+            var copy = style?.Clone() ?? new TextStyle();
+            copy.Normalize();
+            return new TextImageRequest
+            {
+                Text = StylePreviewText,
+                Style = copy,
+                FontPixelSize = StylePreviewFontSize,
+                EffectScale = StylePreviewFontSize / DefaultClipFontSize,
+                CanvasWidth = 640,
+                CanvasHeight = 360
+            };
+        }
+
+        /// <summary>
+        /// 스타일 모음 썸네일(투명 PNG를 배경에서 그림). 같은 요청(해시 키)은 한 번만 그려 메모리에 둔다.
+        /// 그리기는 꾸민 글자 캐시(30초 제한·.part에 쓰고 옮기기)를 그대로 거치고, 썸네일 때문에 새로 그린 파일은 읽은 뒤 지운다(임시 폴더에 쌓이지 않게).
+        /// 그리개가 없거나 실패하면 null(다음에 다시 시도).
+        /// </summary>
+        public Task<BitmapSource> TextStylePreview(TextStyle style)
+        {
+            var rasterizer = TextRasterizer;
+            if (rasterizer == null)
+                return Task.FromResult<BitmapSource>(null);
+            var request = StylePreviewRequest(style);
+            return _stylePreviews.GetOrAdd(request.Key(rasterizer.Version), key => Task.Run(() =>
+            {
+                var path = Path.Combine(RenderEnvironment.TempFolder(), TextImageCache.FolderName, "st-" + key + ".png");
+                // 미리 보기·내보내기가 같은 그림을 이미 캐시에 둔 것이면 지우지 않는다
+                var drawn = !File.Exists(path);
+                try
+                {
+                    TextImageCache.Ensure(rasterizer, path, request, CancellationToken.None);
+                    var picture = Decode(File.ReadAllBytes(path));
+                    if (picture == null)
+                        _stylePreviews.TryRemove(key, out _);
+                    return picture;
+                }
+                catch (Exception)
+                {
+                    _stylePreviews.TryRemove(key, out _);
+                    return null;
+                }
+                finally
+                {
+                    if (drawn)
+                        RenderCommand.TryDelete(path);
                 }
             }));
         }
