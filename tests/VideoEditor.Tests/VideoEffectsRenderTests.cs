@@ -451,6 +451,33 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
+        public void PreviewSource_IsTexturedHighContrastAndStill()
+        {
+            // 썸네일 바탕: 15장이 모두 같고(정지 — 움직임은 효과만), 어두운 사람 실루엣·밝은 해·흑백 바둑판·격자·왼쪽이 어두운 하늘이 있다
+            int w = VideoEffects.PreviewWidth, h = VideoEffects.PreviewHeight, size = w * h * 3;
+            var bytes = FfmpegRunner.RunBytes(FfmpegMedia.Tool.FfmpegPath,
+                new[] { "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", VideoEffects.PreviewSource, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1" },
+                TimeSpan.FromSeconds(30), CancellationToken.None).GetAwaiter().GetResult();
+            Assert.Equal(VideoEffects.PreviewFrames * size, bytes.Length);
+            for (var frame = 1; frame < VideoEffects.PreviewFrames; frame++)
+                Assert.True(bytes.AsSpan(frame * size, size).SequenceEqual(bytes.AsSpan(0, size)), "장 " + frame);
+            int Luma(int x, int y)
+            {
+                var i = (y * w + x) * 3;
+                return (bytes[i] * 3 + bytes[i + 1] * 6 + bytes[i + 2]) / 10;
+            }
+            // 실루엣(머리·어깨)은 거의 검고, 해는 아주 밝다
+            Assert.True(Luma((int)(0.4 * w), (int)(0.35 * h)) < 20, "머리 " + Luma((int)(0.4 * w), (int)(0.35 * h)));
+            Assert.True(Luma((int)(0.4 * w), h - 3) < 20, "어깨 " + Luma((int)(0.4 * w), h - 3));
+            Assert.True(Luma((int)(0.79 * w), (int)(0.3 * h)) > 220, "해 " + Luma((int)(0.79 * w), (int)(0.3 * h)));
+            // 바닥 바둑판: 이웃 칸의 밝기 차가 크다(흔들림·글리치가 잘 보이게)
+            Assert.True(Math.Abs(Luma(w - 12, h - 4) - Luma(w - 4, h - 4)) > 80, "바둑판 " + Luma(w - 12, h - 4) + " / " + Luma(w - 4, h - 4));
+            // 하늘의 격자 줄은 바로 옆보다 밝고, 하늘은 왼쪽이 오른쪽보다 어둡다(어둠에 반응하는 효과용)
+            Assert.True(Luma(12, 30) > Luma(14, 30) + 15, "격자 " + Luma(12, 30) + " / " + Luma(14, 30));
+            Assert.True(Luma(4, 40) + 30 < Luma(w - 6, 40), "하늘 " + Luma(4, 40) + " / " + Luma(w - 6, 40));
+        }
+
+        [FfmpegFact]
         public void Cost_At1080p_StaysWithinBudget()
         {
             // 1080p 내보내기 그래프 2초(60장)를 -f null로: 효과 없이 / 스캔 라인(기본값, 떨림 포함) / 떨림 없이 — 장당 늘어난 시간
