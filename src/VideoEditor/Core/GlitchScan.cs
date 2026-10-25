@@ -32,7 +32,8 @@ namespace VideoEditor.Core
             },
             Render,
             // 썸네일 띠(1.5초)에 한 번 훑고 쉬는 것까지, 작은 그림에서도 밀림과 색 어긋남이 보이게
-            new Dictionary<string, double> { ["period"] = 1.5, ["band"] = 45, ["amount"] = 100, ["split"] = 40 });
+            new Dictionary<string, double> { ["period"] = 1.5, ["band"] = 45, ["amount"] = 100, ["split"] = 40 })
+        { Since = 2 };
 
         /// <summary>띠 모양(출력 픽셀): 띠 높이, 밀리는 최대 거리(0 = 밀지 않음), 색 어긋남 거리, 조각 높이.</summary>
         public readonly struct Shape

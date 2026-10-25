@@ -632,5 +632,101 @@ namespace VideoEditor.Tests
             var firstSeen = VideoEffects.All.Select(d => d.Group).Distinct().ToList();
             Assert.Equal(firstSeen, groups);
         }
+
+        // ---------- 새 효과("새로" 표시) ----------
+
+        /// <summary>처음 판 뒤에 더한 13개(스캔 계열 넷·글리치 넷·흔들림·줌 다섯).</summary>
+        private static readonly string[] SecondRelease =
+        {
+            "shockwave-scan", "scifi-scan", "ray-scan", "glitch-scan",
+            "rgb-split", "block-glitch", "line-slip", "bad-tv",
+            "camera-shake", "earthquake", "heartbeat", "punch-zoom", "zoom-bounce"
+        };
+
+        [Fact]
+        public void Since_ScanLineIsTheFirstRelease_TheThirteenOthersTheSecond()
+        {
+            // 모든 효과가 판을 정해 둔다(0 = 정하지 않음 — 효과를 더할 때 잊지 않게)
+            Assert.All(VideoEffects.All, d => Assert.True(d.Since > 0, d.Id + "의 Since가 정해지지 않았습니다."));
+            Assert.Equal(1, ScanLine.Def.Since);
+            Assert.Equal(VideoEffectNews.FirstRelease, ScanLine.Def.Since);
+            Assert.Equal(SecondRelease.OrderBy(i => i), VideoEffects.All.Where(d => d.Since == 2).Select(d => d.Id).OrderBy(i => i));
+            Assert.Equal(new[] { "scan-line" }.Concat(SecondRelease).OrderBy(i => i), VideoEffects.All.Select(d => d.Id).OrderBy(i => i));
+        }
+
+        [Fact]
+        public void NewEffects_WithoutASetting_AreAllButTheFirstRelease()
+        {
+            // 설정이 없거나 비었거나 깨졌으면 처음 판(스캔 라인)만 본 것 — 예전부터 쓰던 사람에게 13개가 새로 보인다
+            foreach (var setting in new[] { null, "", "   ", "not json", "{\"a\":1}", "\"scan-line\"", "[\"scan-line\"", "12", "null", "[[\"rgb-split\"]]" })
+            {
+                var seen = VideoEffectNews.ReadSeen(setting);
+                Assert.Equal(new[] { "scan-line" }, seen);
+                Assert.Equal(SecondRelease, VideoEffectNews.New(seen).Select(d => d.Id));
+            }
+            Assert.Equal(SecondRelease, VideoEffectNews.New(null).Select(d => d.Id));
+        }
+
+        [Fact]
+        public void NewEffects_FollowTheSeenSetting_KeepingOtherReleasesIds_IgnoringJunk()
+        {
+            // 본 것만 빠진다(목록 차례 그대로). 모르는 id(다른 판의 효과)는 형식이 맞으면 남기고, 글이 아닌 항목·형식이 틀린 글은 버린다
+            var seen = VideoEffectNews.ReadSeen("[\"rgb-split\", \"future-effect\", 42, null, {\"id\":\"heartbeat\"}, \"BAD TV\", \"camera-shake\"]");
+            Assert.Equal(new[] { "camera-shake", "future-effect", "rgb-split", "scan-line" }, seen.OrderBy(i => i, StringComparer.Ordinal));
+            Assert.Equal(SecondRelease.Except(new[] { "rgb-split", "camera-shake" }), VideoEffectNews.New(seen).Select(d => d.Id));
+            // 모두 보면 새 효과 없음, 처음 판의 효과는 모음에 없어도 새로가 아니다
+            Assert.Empty(VideoEffectNews.New(new HashSet<string>(SecondRelease)));
+            Assert.Empty(VideoEffectNews.New(VideoEffectNews.ReadSeen(VideoEffectNews.WriteSeen(VideoEffects.All.Select(d => d.Id)))));
+            // 빈 배열 = 처음 판만 본 것
+            Assert.Equal(SecondRelease, VideoEffectNews.New(VideoEffectNews.ReadSeen("[]")).Select(d => d.Id));
+        }
+
+        [Fact]
+        public void SeenSetting_WritesKnownIdsInCatalogOrder_AndRoundTrips()
+        {
+            // 아는 효과는 목록 차례로, 형식이 맞는 모르는 id(다른 판의 효과)는 그 뒤에, 형식이 틀린 것은 버린다
+            var written = VideoEffectNews.WriteSeen(new[] { "zoom-bounce", "unknown", "scan-line", "rgb-split", "rgb-split", null, "BAD TV" });
+            Assert.Equal("[\"scan-line\",\"rgb-split\",\"zoom-bounce\",\"unknown\"]", written);
+            Assert.Equal(new[] { "rgb-split", "scan-line", "unknown", "zoom-bounce" }, VideoEffectNews.ReadSeen(written).OrderBy(i => i, StringComparer.Ordinal));
+            Assert.Equal("[]", VideoEffectNews.WriteSeen(null));
+        }
+
+        [Fact]
+        public void SeenSetting_IsCapped()
+        {
+            // 너무 긴 설정은 깨진 것으로(처음 판만), 항목은 앞의 MaxIds개까지만 읽는다
+            var huge = "[" + string.Join(",", Enumerable.Repeat("\"rgb-split\"", VideoEffectNews.MaxSettingLength / 10)) + "]";
+            Assert.True(huge.Length > VideoEffectNews.MaxSettingLength);
+            Assert.Equal(new[] { "scan-line" }, VideoEffectNews.ReadSeen(huge));
+            var late = "[" + string.Join(",", Enumerable.Repeat("\"x\"", VideoEffectNews.MaxIds)) + ",\"rgb-split\"]";
+            Assert.True(late.Length <= VideoEffectNews.MaxSettingLength);
+            Assert.DoesNotContain("rgb-split", VideoEffectNews.ReadSeen(late));
+            var early = "[" + string.Join(",", Enumerable.Repeat("\"x\"", VideoEffectNews.MaxIds - 1)) + ",\"rgb-split\"]";
+            Assert.Contains("rgb-split", VideoEffectNews.ReadSeen(early));
+
+            // 쓸 때도 MaxIds개까지(효과가 아주 많아져도 설정이 끝없이 늘지 않게)
+            var many = Enumerable.Range(0, VideoEffectNews.MaxIds + 20)
+                .Select(i => new VideoEffectDef("fx-" + i, "효과 " + i, "묶음", "", 1, Array.Empty<EffectParam>(), r => "") { Since = 2 }).ToList();
+            var all = VideoEffectNews.WriteSeen(many.Select(d => d.Id), many);
+            Assert.Equal(VideoEffectNews.MaxIds, System.Text.Json.JsonSerializer.Deserialize<List<string>>(all).Count);
+            Assert.Equal(VideoEffectNews.MaxIds, VideoEffectNews.ReadSeen(all, many).Count);
+            Assert.Equal(20, VideoEffectNews.New(VideoEffectNews.ReadSeen(all, many), many).Count);
+        }
+
+        [Fact]
+        public void NewEffects_AFutureReleaseShowsAsNewEvenAfterTheUserDismissedEverything()
+        {
+            // 다음 판에 효과를 더하면(Since = 3): [확인]으로 지금 것을 모두 본 사람에게도, 설정이 없는 사람에게도 새로 보인다
+            var future = new VideoEffectDef("future-effect", "다음 효과", "묶음", "", 1, Array.Empty<EffectParam>(), r => "") { Since = 3 };
+            var catalog = VideoEffects.All.Concat(new[] { future }).ToList();
+            var dismissed = VideoEffectNews.WriteSeen(VideoEffects.All.Select(d => d.Id));
+            Assert.Equal(new[] { "future-effect" }, VideoEffectNews.New(VideoEffectNews.ReadSeen(dismissed, catalog), catalog).Select(d => d.Id));
+            Assert.Equal(SecondRelease.Concat(new[] { "future-effect" }), VideoEffectNews.New(VideoEffectNews.ReadSeen(null, catalog), catalog).Select(d => d.Id));
+            // 다음 판에서 그 효과를 본 기록은 지금 판이 읽고 다시 써도 남는다 — 지금 판으로 돌아왔다 다음 판을 열어도 다시 "새로"가 되지 않게
+            var fromNext = VideoEffectNews.WriteSeen(new[] { "future-effect", "rgb-split" }, catalog);
+            var rewritten = VideoEffectNews.WriteSeen(VideoEffectNews.ReadSeen(fromNext));
+            Assert.Contains("future-effect", VideoEffectNews.ReadSeen(rewritten, catalog));
+            Assert.DoesNotContain(VideoEffectNews.New(VideoEffectNews.ReadSeen(rewritten, catalog), catalog), d => d.Id == "future-effect");
+        }
     }
 }

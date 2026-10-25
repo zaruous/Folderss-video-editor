@@ -35,9 +35,13 @@ namespace VideoEditor.Ui
             _services = services;
             _player = player;
             _owner = owner;
+            EffectHover = new EffectHoverPreview(session, services, player, owner.Dispatcher);
         }
 
         public TimelineView Timeline { get; set; }
+
+        /// <summary>효과 칸에 마우스를 올려 둔 동안 고른 클립에 그 효과를 얹어 미리 보기 화면에 보이기(효과 탭이 부르고 플레이어 패널이 보인다).</summary>
+        public EffectHoverPreview EffectHover { get; }
 
         /// <summary>상태 줄 글.</summary>
         public event Action<string> StatusChanged;
@@ -506,7 +510,7 @@ namespace VideoEditor.Ui
             ApplyTransition(id, seconds, ids);
         }
 
-        /// <summary>효과 탭에서 끈 전환을 클립에 놓음 — 데이터는 "효과 id|초".</summary>
+        /// <summary>[전환] 탭에서 끈 전환을 클립에 놓음 — 데이터는 "효과 id|초".</summary>
         public void DropTransition(string data, string clipId)
         {
             var parts = (data ?? "").Split('|');
@@ -613,6 +617,8 @@ namespace VideoEditor.Ui
                 }, "'" + def.Name + "' 효과를 " + (ids.Count == 1 ? "클립" : ids.Count + "개 클립") + "에 넣었습니다(속성 패널 [효과] 탭에서 조절)."))
             {
                 _session.Select(ids.Select(Project.FindClip).Where(c => c != null));
+                // 넣은 효과는 본 것(효과 탭의 "새로" 표시가 사라짐) — 넣기 단추·두 번 누르기·끌어 놓기 모두 여기로 온다
+                _services.MarkEffectsSeen(new[] { def.Id });
                 VideoEffectsApplied?.Invoke(ids);
             }
         }
@@ -628,7 +634,7 @@ namespace VideoEditor.Ui
                 if (!File.Exists(readme))
                     File.WriteAllText(readme, TransitionFolderReadme.Replace("\r\n", "\n").Replace("\n", Environment.NewLine), new System.Text.UTF8Encoding(true));
                 Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { folder }, UseShellExecute = false });
-                Status("효과 폴더: *.json에 효과를 적고 [효과] 탭의 [다시 읽기]를 누르세요(쓰는 법은 README.txt).");
+                Status("효과 폴더: *.json에 전환 효과를 적고 [전환] 탭의 [다시 읽기]를 누르세요(쓰는 법은 README.txt).");
             }
             catch (Exception ex)
             {
@@ -639,7 +645,7 @@ namespace VideoEditor.Ui
         private const string TransitionFolderReadme =
 @"전환 효과 폴더
 
-이 폴더의 *.json 파일에 효과를 적고 [효과] 탭의 [다시 읽기]를 누르면 효과가 더해집니다.
+이 폴더의 *.json 파일에 전환 효과를 적고 [전환] 탭의 [다시 읽기]를 누르면 효과가 더해집니다.
 
 {
   ""transitions"": [
@@ -649,7 +655,7 @@ namespace VideoEditor.Ui
 }
 
 - id: 영문으로 시작하는 영문·숫자·_·- (프로젝트에 저장되는 이름, 기본 효과와 겹치면 안 됨)
-- name: 효과 탭에 보일 이름(40자까지), group: 묶음(없으면 ""내 효과"")
+- name: [전환] 탭에 보일 이름(40자까지), group: 묶음(없으면 ""내 효과"")
 - xfade: FFmpeg xfade 효과 이름(wipeleft, circleopen, pixelize 등) — 또는
 - expr: 수식. X·Y 픽셀 위치, W·H 화면 크기, P 진행(1에서 0으로), A 앞 화면 값, B 새 화면 값, PLANE 색 평면,
   a0~a3(x,y)·b0~b3(x,y) 다른 위치의 값.

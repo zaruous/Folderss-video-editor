@@ -128,7 +128,8 @@ namespace VideoEditor.Core
             },
             Render,
             // 썸네일(작은 그림)에서도 갈라짐과 튀는 것이 보이게 멀리, 많이 흔들리게
-            new Dictionary<string, double> { ["amount"] = 40, ["jitter"] = 60, ["glow"] = 50 });
+            new Dictionary<string, double> { ["amount"] = 40, ["jitter"] = 60, ["glow"] = 50 })
+        { Since = 2 };
 
         /// <summary>
         /// 프레임 번호 frame(클립 안, 초당 fps장)에서 빨강이 밀리는 거리(출력 px)와 방향(라디안) — 파랑은 반대로. 그리는 식과 같은 계산.
@@ -230,7 +231,8 @@ namespace VideoEditor.Core
             },
             Render,
             // 썸네일 띠(1.5초) 내내 글리치가 보이게 늘, 작은 그림에서도 조각이 보이게 크게
-            new Dictionary<string, double> { ["rate"] = 100, ["amount"] = 100, ["block"] = 120, ["color"] = 80 });
+            new Dictionary<string, double> { ["rate"] = 100, ["amount"] = 100, ["block"] = 120, ["color"] = 80 })
+        { Since = 2 };
 
         /// <summary>프레임 번호 frame(클립 안, 초당 fps장)에 글리치가 일어나는지 — 그리는 식과 같은 계산. 경계에서 멀면(margin) 확실하다.</summary>
         public static bool IsBurst(ClipEffect effect, long frame, double fps, double margin = 0)
@@ -333,7 +335,8 @@ namespace VideoEditor.Core
                 EffectParam.Number("fringe", "색 번짐", 0, 100, 40, "%", "밀린 줄에서 빨강·파랑이 갈라지는 정도(0 = 없음)")
             },
             Render,
-            new Dictionary<string, double> { ["rate"] = 100, ["amount"] = 100, ["thick"] = 48, ["fringe"] = 80 });
+            new Dictionary<string, double> { ["rate"] = 100, ["amount"] = 100, ["thick"] = 48, ["fringe"] = 80 })
+        { Since = 2 };
 
         public static bool IsBurst(ClipEffect effect, long frame, double fps, double margin = 0)
         {
@@ -417,7 +420,8 @@ namespace VideoEditor.Core
             },
             Render,
             // 썸네일 띠(1.5초)에 롤링이 한 번 보이게 늘, 잡음·주사선도 작은 그림에서 보이게 세게
-            new Dictionary<string, double> { ["rate"] = 100, ["roll"] = 100, ["noise"] = 60, ["jitter"] = 60, ["scan"] = 100 });
+            new Dictionary<string, double> { ["rate"] = 100, ["roll"] = 100, ["noise"] = 60, ["jitter"] = 60, ["scan"] = 100 })
+        { Since = 2 };
 
         /// <summary>프레임 번호 frame(클립 안, 초당 fps장)이 롤링 칸에 드는지와 그 칸에서 말려 올라간 몫(0~1, 롤링 100%면 1 = 한 바퀴).</summary>
         public static (bool Rolling, double Progress) Roll(ClipEffect effect, long frame, double fps)

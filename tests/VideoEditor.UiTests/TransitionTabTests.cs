@@ -14,7 +14,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 
 namespace VideoEditor.UiTests
 {
-    /// <summary>[효과] 탭: 전환 효과를 클립 사이에 넣고(모두·고른 클립·끌어 놓기) 빼며, 타임라인 위치는 그대로다.</summary>
+    /// <summary>[전환] 탭: 전환 효과를 클립 사이에 넣고(모두·고른 클립·끌어 놓기) 빼며, 타임라인 위치는 그대로다.</summary>
     public class TransitionTabTests
     {
         private static async Task Import(UiThread ui, Window window, string name)
@@ -65,7 +65,7 @@ namespace VideoEditor.UiTests
         }
 
         [EditorFact]
-        public async Task EffectsTab_AddsTransitionsWithoutMovingClips()
+        public async Task TransitionsTab_AddsTransitionsWithoutMovingClips()
         {
             var ui = UiThread.Instance;
             var plugin = PluginUnderTest.Load(ui);
@@ -80,12 +80,21 @@ namespace VideoEditor.UiTests
                 // 사진은 기본으로 화면을 꽉 채운다(설정 [사진을 타임라인에 놓을 때])
                 Assert.Equal("Fill", ui.Run(() => Get(Red(window), "Fit").ToString()));
 
-                // [효과] 탭: 닦아내기 1초를 모든 클립 사이에
+                // [전환] 탭(동영상 효과는 [효과] 탭에 따로 있다): 닦아내기 1초를 모든 클립 사이에
                 ui.Run(() =>
                 {
-                    Ui.ById<TabControl>(window, "MediaTabs").SelectedItem = Ui.ById<TabItem>(window, "EffectsTab");
+                    Ui.ById<TabControl>(window, "MediaTabs").SelectedItem = Ui.ById<TabItem>(window, "TransitionsTab");
                 });
                 await ui.WaitFor(() => Ui.ById<ListBox>(window, "TransitionList"), Wait, "효과 목록");
+                ui.Run(() =>
+                {
+                    // 전환 목록은 [전환] 탭 안에만 있고(탭 전체가 스크롤), 동영상 효과 목록은 없다
+                    var tab = Ui.ById<TabItem>(window, "TransitionsTab");
+                    Assert.True(tab.IsSelected);
+                    Assert.Same(tab.Content, Ui.ById<ScrollViewer>(window, "TransitionsTabScroll"));
+                    Assert.NotNull(Ui.ById<ListBox>((DependencyObject)tab.Content, "TransitionList"));
+                    Assert.Null(Ui.ById<ListBox>((DependencyObject)tab.Content, "VideoEffectList"));
+                });
 
                 // 효과마다 실제로 그린 썸네일(미리 보기 띠의 가운데 칸)이 붙고, 마우스를 올리면 칸이 바뀌며 움직인다
                 await ui.WaitUntil(() => Thumbnail(window, "WipeLeft") != null && Thumbnail(window, "Heart") != null, Wait, "효과 썸네일");
@@ -106,7 +115,7 @@ namespace VideoEditor.UiTests
                 await ui.WaitUntil(() => Thumbnail(window, "Diamond") != null, Wait, "모양 썸네일");
                 ui.Run(() =>
                 {
-                    // 효과 탭은 동영상 효과 아래에 전환 효과가 있다 — 전환 목록이 보이게 스크롤해 찍는다
+                    // 전환 목록이 보이게(길이·묶음·단추 줄 아래) 스크롤해 찍는다
                     Ui.ById<ListBox>(window, "TransitionList").BringIntoView();
                     Ui.Snap(window, plugin.ShotFolder, "transition-thumbnails-shapes");
                 });

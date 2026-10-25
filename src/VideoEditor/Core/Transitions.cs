@@ -16,9 +16,9 @@ namespace VideoEditor.Core
     {
         /// <summary>프로젝트에 저장되는 이름(영문으로 시작, 영문·숫자·_·-).</summary>
         public string Id { get; set; }
-        /// <summary>효과 탭·타임라인에 보일 이름.</summary>
+        /// <summary>[전환] 탭·타임라인에 보일 이름.</summary>
         public string Name { get; set; }
-        /// <summary>효과 탭의 묶음(페이드·닦아내기·모양…).</summary>
+        /// <summary>[전환] 탭의 묶음(페이드·닦아내기·모양…).</summary>
         public string Group { get; set; }
         /// <summary>xfade 내장 효과 이름(wipeleft 등).</summary>
         public string Xfade { get; set; }
@@ -87,7 +87,7 @@ namespace VideoEditor.Core
         private static readonly IReadOnlyList<TransitionDef> BuiltIns = LoadBuiltIns();
         private static IReadOnlyList<TransitionDef> _all = BuiltIns;
 
-        /// <summary>효과 탭에 보일 순서(기본 효과 → 사용자 효과).</summary>
+        /// <summary>[전환] 탭에 보일 순서(기본 효과 → 사용자 효과).</summary>
         public static IReadOnlyList<TransitionDef> All { get { return _all; } }
 
         /// <summary>디졸브.</summary>

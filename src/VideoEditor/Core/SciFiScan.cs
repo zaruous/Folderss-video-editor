@@ -39,7 +39,8 @@ namespace VideoEditor.Core
             },
             Render,
             // 썸네일 띠(1.5초)에 한 번 훑고 쉬는 것까지, 작은 그림에서도 격자와 빛이 보이게
-            new Dictionary<string, double> { ["period"] = 1.5, ["band"] = 45, ["grid"] = 80, ["lines"] = 70, ["glow"] = 40 });
+            new Dictionary<string, double> { ["period"] = 1.5, ["band"] = 45, ["grid"] = 80, ["lines"] = 70, ["glow"] = 40 })
+        { Since = 2 };
 
         /// <summary>띠 모양(출력 픽셀): 홀로그램 띠 높이, 창 높이(띠 + 앞머리 빛 여백), 앞머리 선 반폭, 빛 번짐 폭, 주사선 간격, 격자 간격.</summary>
         public readonly struct Shape

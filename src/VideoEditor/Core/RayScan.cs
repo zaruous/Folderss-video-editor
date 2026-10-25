@@ -37,7 +37,8 @@ namespace VideoEditor.Core
             },
             Render,
             // 썸네일 띠(1.5초)에 한 번 훑고 쉬는 것까지, 작은 그림에서도 빛과 빛줄기가 보이게 굵고 넓게
-            new Dictionary<string, double> { ["period"] = 1.5, ["core"] = 10, ["glow"] = 80, ["trail"] = 260, ["rays"] = 100 });
+            new Dictionary<string, double> { ["period"] = 1.5, ["core"] = 10, ["glow"] = 80, ["trail"] = 260, ["rays"] = 100 })
+        { Since = 2 };
 
         /// <summary>
         /// 빛 모양(출력 픽셀): 방향(0~3), 흰 선 반폭, 빛 번짐 폭, 꼬리 길이, 빛줄기 길이(0 = 없음), 띠 두께(움직이는 쪽으로), 띠 안 빛 가운데까지(지나온 쪽 끝에서),

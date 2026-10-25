@@ -77,7 +77,7 @@ namespace VideoEditor.Core
 
     /// <summary>
     /// 동영상 효과 하나(코드에 든 정의): 보일 이름·묶음·설명, 매개변수, 그리는 방법(필터 조각을 만드는 함수).
-    /// 효과를 더하려면 이 정의와 그리는 함수를 만들어 <see cref="VideoEffects"/>의 목록에 한 줄 더한다(<see cref="ScanLine"/>가 본보기).
+    /// 효과를 더하려면 이 정의(<see cref="Since"/>는 다음 판 번호)와 그리는 함수를 만들어 <see cref="VideoEffects"/>의 목록에 한 줄 더한다(<see cref="ScanLine"/>가 본보기).
     /// </summary>
     public sealed class VideoEffectDef
     {
@@ -114,6 +114,11 @@ namespace VideoEditor.Core
         /// 속성 패널에 [사람에게만]이 보이지 않고, 켜진 채 저장된 값은 열 때 끄며 그릴 때도 무시한다(마스크를 읽지 않음).
         /// </summary>
         public bool AllowsPersonOnly { get; init; } = true;
+        /// <summary>
+        /// 이 효과가 처음 나온 판(1 = 스캔 라인과 함께 처음부터, 2 = 스캔 계열·글리치·흔들림·줌 13개). 효과를 더할 때는 지금 가장 큰 값 + 1로 정한다(같이 나오는 효과는 같은 값).
+        /// 효과 탭의 "새로" 표시가 이 값을 본다(<see cref="VideoEffectNews"/> — 본 기록이 없는 사용자에게는 1보다 큰 효과가 새로 보인다). 0(정하지 않음)이면 시험이 막는다.
+        /// </summary>
+        public int Since { get; init; }
 
         /// <summary>색 매개변수(없으면 null).</summary>
         public EffectParam ColorParam { get { return Params.FirstOrDefault(p => p.Kind == EffectParamKind.Color); } }
@@ -182,7 +187,7 @@ namespace VideoEditor.Core
         private static readonly Regex IdPattern = new Regex("^[a-z][a-z0-9-]{0,47}$", RegexOptions.CultureInvariant);
         private static readonly Regex KeyPattern = new Regex("^[a-z][a-z0-9]{0,23}$", RegexOptions.CultureInvariant);
 
-        /// <summary>효과 탭에 보일 순서. 효과를 더하려면 여기에 한 줄.</summary>
+        /// <summary>효과 탭에 보일 순서. 효과를 더하려면 여기에 한 줄(정의의 <see cref="VideoEffectDef.Since"/>는 다음 판 번호로 — 효과 탭에 "새로"로 보인다).</summary>
         public static IReadOnlyList<VideoEffectDef> All { get; } = new[]
         {
             ScanLine.Def,
@@ -450,6 +455,76 @@ namespace VideoEditor.Core
                 + "|" + string.Join(",", def.PreviewValues.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => v.Key + "=" + RenderGraph.N(v.Value)));
             using (var sha = System.Security.Cryptography.SHA256.Create())
                 return BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(recipe))).Replace("-", "").Substring(0, 24).ToLowerInvariant();
+        }
+    }
+
+    /// <summary>
+    /// 효과 탭의 "새로" 표시: 사용자가 이미 본 효과 id 모음(플러그인 설정에 JSON 글 배열로)과 아직 보지 않은 새 효과.
+    /// - 본 효과: 클립에 넣은 효과(넣기 단추·두 번 누르기·끌어 놓기), 고른 클립에 얹어 1초 넘게 미리 본 효과, 알림 줄의 [확인]을 누를 때 있던 모든 효과.
+    /// - 처음 판의 효과(<see cref="VideoEffectDef.Since"/> ≤ <see cref="FirstRelease"/>)는 늘 본 것이다. 설정이 없거나 깨졌으면 그것만 본 것으로 —
+    ///   예전부터 쓰던 사람에게 나중에 더한 효과가 새로 보인다.
+    /// - 너그럽게 읽는다: 배열이 아니거나 너무 길면 없는 것으로, 글이 아닌 항목·모르는 id(다른 판의 효과·잘못된 글)는 버리고 앞의 <see cref="MaxIds"/>개만 본다.
+    ///   쓸 때도 아는 효과만 목록 차례로 쓴다(<see cref="MaxIds"/>개까지).
+    /// </summary>
+    public static class VideoEffectNews
+    {
+        /// <summary>처음 판(이 판까지의 효과는 "새로"가 아니다).</summary>
+        public const int FirstRelease = 1;
+        /// <summary>설정 글이 이보다 길면 깨진 것으로 본다.</summary>
+        public const int MaxSettingLength = 16384;
+        /// <summary>읽고 쓰는 id 수 상한.</summary>
+        public const int MaxIds = 256;
+
+        /// <summary>
+        /// 설정 글에서 본 효과 id(처음 판의 효과는 늘 들어 있다). all이 없으면 <see cref="VideoEffects.All"/>.
+        /// 모르는 id라도 형식이 맞으면 남긴다 — 다른 판(새 판·예전 판)과 설정을 같이 쓸 때 그 판의 효과를 본 기록이 지워져 다시 "새로"가 되지 않게.
+        /// </summary>
+        public static HashSet<string> ReadSeen(string setting, IReadOnlyList<VideoEffectDef> all = null)
+        {
+            all ??= VideoEffects.All;
+            var seen = new HashSet<string>(all.Where(d => d.Since <= FirstRelease).Select(d => d.Id), StringComparer.Ordinal);
+            if (string.IsNullOrWhiteSpace(setting) || setting.Length > MaxSettingLength)
+                return seen;
+            var known = new HashSet<string>(all.Select(d => d.Id), StringComparer.Ordinal);
+            try
+            {
+                using (var document = JsonDocument.Parse(setting))
+                {
+                    if (document.RootElement.ValueKind != JsonValueKind.Array)
+                        return seen;
+                    foreach (var element in document.RootElement.EnumerateArray().Take(MaxIds))
+                    {
+                        var id = element.ValueKind == JsonValueKind.String ? element.GetString() : null;
+                        if (id != null && (known.Contains(id) || VideoEffects.IsValidId(id)))
+                            seen.Add(id);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is JsonException || ex is ArgumentException)
+            {
+                // 깨진 설정 — 처음 판의 효과만 본 것으로
+            }
+            return seen;
+        }
+
+        /// <summary>
+        /// 본 효과 id를 설정 글로: 아는 효과를 목록 차례로, 그 뒤에 형식이 맞는 모르는 id(다른 판의 효과)를 이름 차례로 — 모두 <see cref="MaxIds"/>개까지.
+        /// </summary>
+        public static string WriteSeen(IEnumerable<string> seen, IReadOnlyList<VideoEffectDef> all = null)
+        {
+            all ??= VideoEffects.All;
+            var set = new HashSet<string>((seen ?? Enumerable.Empty<string>()).Where(id => id != null), StringComparer.Ordinal);
+            var known = all.Where(d => set.Contains(d.Id)).Select(d => d.Id).ToList();
+            var knownIds = new HashSet<string>(all.Select(d => d.Id), StringComparer.Ordinal);
+            var others = set.Where(id => !knownIds.Contains(id) && VideoEffects.IsValidId(id)).OrderBy(id => id, StringComparer.Ordinal);
+            return JsonSerializer.Serialize(known.Concat(others).Take(MaxIds).ToList());
+        }
+
+        /// <summary>아직 보지 않은 새 효과(목록 차례). 처음 판의 효과는 seen에 없어도 새로가 아니다.</summary>
+        public static List<VideoEffectDef> New(ISet<string> seen, IReadOnlyList<VideoEffectDef> all = null)
+        {
+            all ??= VideoEffects.All;
+            return all.Where(d => d.Since > FirstRelease && (seen == null || !seen.Contains(d.Id))).ToList();
         }
     }
 

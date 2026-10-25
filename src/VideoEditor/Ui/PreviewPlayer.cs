@@ -57,7 +57,8 @@ namespace VideoEditor.Ui
         /// <summary>마지막으로 그린 프레임 위치(-1이면 아직 없음).</summary>
         public long ShownFrame { get; private set; } = -1;
 
-        private (int Width, int Height) OutputSize(Project project)
+        /// <summary>미리 보기 화면 크기(프로젝트 크기 × <see cref="Scale"/>, 짝수, 너비 1920까지).</summary>
+        public (int Width, int Height) OutputSize(Project project)
         {
             var width = Math.Max(16, (int)Math.Round(project.Width * Scale / 2) * 2);
             width = Math.Min(width, 1920);

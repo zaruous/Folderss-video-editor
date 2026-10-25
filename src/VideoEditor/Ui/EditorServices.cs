@@ -30,6 +30,7 @@ namespace VideoEditor.Ui
         public const string DownloadFolderKey = "downloadFolder";
         public const string ProjectTreeHiddenKey = "projectTreeHidden";
         public const string TextStylesKey = "textStyles";
+        public const string SeenVideoEffectsKey = "seenVideoEffects";
 
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
@@ -342,7 +343,7 @@ namespace VideoEditor.Ui
 
         // ---------- 전환 효과 ----------
 
-        /// <summary>사용자 전환 효과 폴더(데이터 폴더\transitions) — *.json을 넣고 [다시 읽기]를 누르면 효과 탭에 더해진다.</summary>
+        /// <summary>사용자 전환 효과 폴더(데이터 폴더\transitions) — *.json을 넣고 [다시 읽기]를 누르면 [전환] 탭에 더해진다.</summary>
         public string TransitionFolder { get { return Path.Combine(Manager.DataDirectory, "transitions"); } }
 
         /// <summary>마지막으로 사용자 효과 폴더를 읽을 때 건너뛴 정의·파일과 그 까닭.</summary>
@@ -510,6 +511,61 @@ namespace VideoEditor.Ui
         public bool SaveTextStyles(List<(string Name, TextStyle Style)> styles)
         {
             return SaveSetting(TextStylesKey, styles.Count == 0 ? null : TextStyleLibrary.Write(styles));
+        }
+
+        // ---------- 새 동영상 효과 ----------
+
+        // 설정에 쓰지 못한 본 효과(디스크 오류 등) — 이 실행 동안은 본 것으로 둔다
+        private readonly HashSet<string> _seenUnsaved = new HashSet<string>(StringComparer.Ordinal);
+
+        /// <summary>본 동영상 효과가 늘었다(효과 탭의 "새로" 표시·알림 줄·탭 머리글을 다시) — 효과를 본 것으로 적은 스레드(UI 스레드)에서.</summary>
+        public event EventHandler SeenEffectsChanged;
+
+        /// <summary>이미 본 동영상 효과 id(설정 seenVideoEffects를 <see cref="VideoEffectNews"/>의 규칙으로 — 없거나 깨졌으면 처음 판의 효과만). 부를 때마다 새로 읽은 새 모음.</summary>
+        public HashSet<string> SeenEffects()
+        {
+            var seen = VideoEffectNews.ReadSeen(Setting(SeenVideoEffectsKey));
+            seen.UnionWith(_seenUnsaved);
+            return seen;
+        }
+
+        /// <summary>아직 보지 않은 새 동영상 효과(목록 차례).</summary>
+        public List<VideoEffectDef> NewEffects()
+        {
+            return VideoEffectNews.New(SeenEffects());
+        }
+
+        /// <summary>
+        /// 효과를 본 것으로 적는다(클립에 넣었거나, 고른 클립에 얹어 1초 넘게 미리 봤거나, 알림 줄의 [확인]). 새로 적은 효과가 있을 때만 설정에 쓰고 <see cref="SeenEffectsChanged"/>.
+        /// 설정을 쓰지 못해도 예외를 내지 않고 이 실행 동안은 본 것으로 둔다.
+        /// </summary>
+        public void MarkEffectsSeen(IEnumerable<string> ids)
+        {
+            var seen = SeenEffects();
+            var added = new List<string>();
+            foreach (var id in ids ?? Array.Empty<string>())
+            {
+                if (VideoEffects.Find(id) != null && seen.Add(id))
+                    added.Add(id);
+            }
+            if (added.Count == 0)
+                return;
+            if (!SaveSetting(SeenVideoEffectsKey, VideoEffectNews.WriteSeen(seen)))
+                _seenUnsaved.UnionWith(added);
+            var handlers = SeenEffectsChanged;
+            if (handlers == null)
+                return;
+            foreach (EventHandler handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler(this, EventArgs.Empty);
+                }
+                catch (Exception)
+                {
+                    // 창 하나의 처리 오류가 다른 창·넣기 명령을 막지 않게
+                }
+            }
         }
 
         public static BitmapSource Decode(byte[] png)
