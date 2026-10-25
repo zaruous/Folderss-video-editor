@@ -36,14 +36,14 @@ namespace VideoEditor.Ui
 
         private Clip Selected()
         {
-            var clips = _session.SelectedClips;
-            return clips.Count == 1 ? clips[0] : null;
+            return _session.PrimaryClip;
         }
 
         private void Update()
         {
             var clips = _session.SelectedClips;
-            var clip = clips.Count == 1 ? clips[0] : null;
+            // 하나, 또는 링크된 영상·사운드 짝이면 누른 쪽
+            var clip = _session.PrimaryClip;
             var key = clip != null ? "clip:" + clip.Id : clips.Count > 1 ? "many:" + clips.Count : "project";
             if (key == _shownKey)
             {
@@ -156,7 +156,7 @@ namespace VideoEditor.Ui
             if (clip.Kind == ClipKind.Text)
                 return "글자";
             if (clip.AudioOnly)
-                return "분리한 오디오";
+                return "분리한 사운드";
             switch (clip.MediaKind)
             {
                 case MediaKind.Image: return "사진·이미지";
@@ -293,7 +293,9 @@ namespace VideoEditor.Ui
             _refreshers.Add(() =>
             {
                 var c = _session.Project.FindClip(id);
-                detached.Text = c != null && c.AudioDetached ? "이 클립의 소리는 오디오 트랙으로 분리되어 여기서는 나지 않습니다." : "";
+                detached.Text = c != null && c.AudioDetached
+                    ? "사운드를 분리해 오디오 트랙에 두었습니다 — 이 클립에서는 소리가 나지 않습니다. 다시 합치려면 영상과 사운드를 함께 고르고 오른쪽 클릭 [사운드 합치기]."
+                    : "";
             });
             panel.Children.Add(detached);
             return panel;

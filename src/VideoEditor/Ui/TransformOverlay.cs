@@ -65,8 +65,8 @@ namespace VideoEditor.Ui
         {
             if (_drag != 0)
                 return;
-            var selected = _session.SelectedClips;
-            var clip = selected.Count == 1 ? selected[0] : null;
+            // 하나, 또는 링크된 영상·사운드 짝이면 누른 쪽(사운드면 틀이 없다)
+            var clip = _session.PrimaryClip;
             var track = clip == null ? null : _session.Project.TrackOf(clip);
             if (clip == null || track == null || clip.Kind != ClipKind.Media || !clip.IsVisual || track.Kind != TrackKind.Video || track.Hidden || track.Locked
                 || !clip.Contains(_session.Playhead) || _playing())

@@ -26,6 +26,7 @@ namespace VideoEditor.Ui
         private Point _dragStart;
         private bool _dragFromItem;
         private bool _folderLoaded;
+        private bool _menuFilled;
 
         public MediaPanel(EditorSession session, EditorServices services, EditorCommands commands)
         {
@@ -120,7 +121,18 @@ namespace VideoEditor.Ui
                 }
             };
             _list.ContextMenu = new ContextMenu();
-            _list.ContextMenuOpening += (s, e) => FillMenu(_list.ContextMenu);
+            _list.ContextMenuOpening += (s, e) =>
+            {
+                FillMenu(_list.ContextMenu);
+                _menuFilled = true;
+            };
+            // 오른쪽 클릭이 아닌 길로 열려도(자동화·화면 시험의 IsOpen) 지금 고른 미디어로 채운다
+            _list.ContextMenu.Opened += (s, e) =>
+            {
+                if (!_menuFilled)
+                    FillMenu(_list.ContextMenu);
+                _menuFilled = false;
+            };
             _list.AllowDrop = true;
             _list.Drop += (s, e) =>
             {
@@ -163,6 +175,11 @@ namespace VideoEditor.Ui
                 return;
             }
             menu.Items.Add(Item("타임라인에 추가", AddSelected));
+            // 사운드 분리: 소리가 있는 동영상에서만
+            if (selected.Any(ClipLinks.CanSplit))
+                menu.Items.Add(Item("사운드 분리해서 배치", () => _commands.PlaceSoundSplit(selected)));
+            if (selected.Length == 1 && ClipLinks.CanSplit(selected[0]))
+                menu.Items.Add(Item("사운드를 파일로 저장…", () => _ = _commands.SaveSound(selected[0])));
             menu.Items.Add(Item("탐색기에서 보기", () => _commands.Reveal(selected[0].Path)));
             menu.Items.Add(new Separator());
             menu.Items.Add(Item("미디어에서 빼기", () => _commands.RemoveMedia(selected.Select(m => m.Path).ToArray())));

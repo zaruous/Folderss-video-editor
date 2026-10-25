@@ -57,20 +57,62 @@ namespace VideoEditor.Core
             return _selection.Contains(clip.Id);
         }
 
+        /// <summary>클립을 고른다. 링크된 짝(사운드 분리)도 함께 고르고, 처음 클립을 <see cref="PrimaryClip"/>으로.</summary>
         public void Select(IEnumerable<Clip> clips, bool add = false)
         {
             if (!add)
                 _selection.Clear();
-            foreach (var clip in clips)
+            var list = clips.Where(c => c != null).ToList();
+            foreach (var clip in ClipLinks.WithLinked(Project, list))
                 _selection.Add(clip.Id);
+            if (list.Count > 0)
+                _primary = list[0].Id;
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
 
+        /// <summary>고르기를 켜고 끈다(Ctrl+누르기) — 링크된 짝도 함께.</summary>
         public void ToggleSelect(Clip clip)
         {
-            if (!_selection.Remove(clip.Id))
-                _selection.Add(clip.Id);
+            var clips = ClipLinks.WithLinked(Project, new[] { clip });
+            if (_selection.Contains(clip.Id))
+            {
+                foreach (var c in clips)
+                    _selection.Remove(c.Id);
+            }
+            else
+            {
+                foreach (var c in clips)
+                    _selection.Add(c.Id);
+                _primary = clip.Id;
+            }
             SelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private string _primary;
+
+        /// <summary>이미 고른 클립을 다시 눌렀다: 속성 패널이 그 클립을 보이게(링크된 짝 가운데 누른 쪽).</summary>
+        public void SetPrimary(Clip clip)
+        {
+            if (clip == null || !_selection.Contains(clip.Id) || clip.Id == _primary)
+                return;
+            _primary = clip.Id;
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>
+        /// 속성 패널·변형 틀이 보일 클립: 하나만 골랐으면 그것, 링크된 짝 둘만 골랐으면 마지막으로 누른 쪽(모르면 영상). 아니면 null.
+        /// </summary>
+        public Clip PrimaryClip
+        {
+            get
+            {
+                var clips = SelectedClips;
+                if (clips.Count == 1)
+                    return clips[0];
+                if (clips.Count != 2 || clips[0].LinkId == null || clips[0].LinkId != clips[1].LinkId || clips[0].Unlinked)
+                    return null;
+                return clips.FirstOrDefault(c => c.Id == _primary) ?? clips.FirstOrDefault(c => !c.AudioOnly) ?? clips[0];
+            }
         }
 
         public void ClearSelection()

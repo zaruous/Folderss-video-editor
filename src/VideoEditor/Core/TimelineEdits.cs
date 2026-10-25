@@ -116,9 +116,9 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// 클립을 트랙에 놓는다. 마그네틱 주 트랙이면 start에 가장 가까운 클립 경계에 끼워 넣고 뒤를 민다.
-        /// 아니면 start에 놓고 겹치는 부분을 덮어쓴다.
+        /// 아니면 start에 놓고 겹치는 부분을 덮어쓴다. follow면 밀린 클립의 링크된 짝이 따라간다(스스로 따라가게 하는 옮기기는 false).
         /// </summary>
-        public static void Place(Project project, Track track, Clip clip, long start)
+        public static void Place(Project project, Track track, Clip clip, long start, bool follow = true)
         {
             EnsureEditable(track);
             if (!Accepts(track, clip))
@@ -126,18 +126,23 @@ namespace VideoEditor.Core
             start = Math.Max(0, start);
             if (IsMagnetic(project, track))
             {
+                // 밀린 클립의 링크된 짝(사운드)이 따라간다
+                var anchors = follow ? ClipLinks.Anchors(project) : null;
                 track.Sort();
                 var index = track.Clips.FindIndex(c => c.Start + c.Duration / 2.0 > start);
                 if (index < 0)
                     index = track.Clips.Count;
                 track.Clips.Insert(index, clip);
                 Compact(track);
+                ClipLinks.Follow(project, anchors, clip);
                 return;
             }
             clip.Start = start;
             ClearRange(track, start, clip.End);
             track.Clips.Add(clip);
             track.Sort();
+            // 덮어써서 지운 클립의 짝은 링크를 푼다
+            ClipLinks.Clean(project);
         }
 
         /// <summary>트랙 끝에 붙인다(미디어 패널의 "타임라인에 추가").</summary>
@@ -147,7 +152,8 @@ namespace VideoEditor.Core
             Place(project, track, clip, end);
         }
 
-        public static void Move(Project project, Clip clip, Track target, long newStart)
+        /// <summary>클립을 옮긴다. 링크된 짝도 같은 만큼 따라간다 — independent(끌기 시작할 때 Alt)면 그 한 번만 이 클립만.</summary>
+        public static void Move(Project project, Clip clip, Track target, long newStart, bool independent = false)
         {
             var source = project.TrackOf(clip);
             if (source == null)
@@ -156,10 +162,15 @@ namespace VideoEditor.Core
             EnsureEditable(target);
             if (!Accepts(target, clip))
                 throw new EditException(target.Subtitles ? SubtitleOnly : target.Kind == TrackKind.Audio ? "오디오 트랙에는 소리 클립만 놓을 수 있습니다." : "동영상 트랙에는 오디오 클립을 놓을 수 없습니다.");
+            // 링크된 짝이 마그네틱 주 트랙에 있으면 짝이 자리를 정하고 이 클립이 따라간다
+            if (!independent && ClipLinks.MoveWithMagneticPartner(project, clip, source, target, newStart))
+                return;
+            var anchors = ClipLinks.Anchors(project);
             source.Clips.Remove(clip);
             if (IsMagnetic(project, source))
                 Compact(source);
-            Place(project, target, clip, newStart);
+            Place(project, target, clip, newStart, false);
+            ClipLinks.Follow(project, anchors, clip, independent);
         }
 
         /// <summary>목록 순서대로 0부터 빈틈 없이 붙인다.</summary>
@@ -270,7 +281,9 @@ namespace VideoEditor.Core
         public static List<Clip> Split(Project project, IEnumerable<Clip> clips, long frame)
         {
             var made = new List<Clip>();
-            foreach (var clip in clips.ToList())
+            var pieces = new Dictionary<Clip, Clip>();
+            // 링크된 짝도 함께 나눈다(오른쪽 조각 둘은 새 짝)
+            foreach (var clip in ClipLinks.WithLinked(project, clips))
             {
                 if (frame <= clip.Start || frame >= clip.End)
                     continue;
@@ -280,16 +293,29 @@ namespace VideoEditor.Core
                 var right = SplitAt(clip, frame);
                 track.Clips.Insert(track.Clips.IndexOf(clip) + 1, right);
                 made.Add(right);
+                pieces[clip] = right;
             }
+            ClipLinks.LinkPieces(pieces);
             return made;
         }
 
-        /// <summary>앞을 다듬는다(newStart로). 실제로 적용된 시작을 돌려준다. 마그네틱 주 트랙이면 다듬은 만큼 당겨진다.</summary>
-        public static long TrimStart(Project project, Clip clip, long newStart)
+        /// <summary>
+        /// 앞을 다듬는다(newStart로). 실제로 적용된 시작을 돌려준다. 마그네틱 주 트랙이면 다듬은 만큼 당겨진다.
+        /// 링크된 짝도 같은 원본 길이만큼 다듬는다(independent면 이 클립만).
+        /// </summary>
+        public static long TrimStart(Project project, Clip clip, long newStart, bool independent = false)
         {
             RequireClip(clip);
             var track = project.TrackOf(clip);
             EnsureEditable(track);
+            // 링크된 짝이 마그네틱 주 트랙에 있으면 짝을 다듬는다(이 클립이 따라감)
+            if (!independent && ClipLinks.MagneticPartner(project, clip) is Clip lead)
+            {
+                TrimStart(project, lead, lead.Start + (newStart - clip.Start));
+                return clip.Start;
+            }
+            var anchors = ClipLinks.Anchors(project);
+            var sourceIn = clip.SourceIn;
             newStart = Math.Min(newStart, clip.End - 1);
             newStart = Math.Max(newStart, 0);
             if (clip.HasSourceLimit)
@@ -303,15 +329,23 @@ namespace VideoEditor.Core
             SetStart(clip, newStart);
             if (magnetic)
                 Compact(track);
+            ClipLinks.AfterTrim(project, clip, clip.SourceIn - sourceIn, true, anchors, independent);
             return clip.Start;
         }
 
-        /// <summary>뒤를 다듬는다(newEnd로). 실제로 적용된 끝을 돌려준다.</summary>
-        public static long TrimEnd(Project project, Clip clip, long newEnd)
+        /// <summary>뒤를 다듬는다(newEnd로). 실제로 적용된 끝을 돌려준다. 링크된 짝도 같은 원본 길이만큼 다듬는다(independent면 이 클립만).</summary>
+        public static long TrimEnd(Project project, Clip clip, long newEnd, bool independent = false)
         {
             RequireClip(clip);
             var track = project.TrackOf(clip);
             EnsureEditable(track);
+            if (!independent && ClipLinks.MagneticPartner(project, clip) is Clip lead)
+            {
+                TrimEnd(project, lead, lead.End + (newEnd - clip.End));
+                return clip.End;
+            }
+            var anchors = ClipLinks.Anchors(project);
+            var sourceOut = clip.SourceOut;
             newEnd = Math.Max(newEnd, clip.Start + 1);
             if (clip.HasSourceLimit)
                 newEnd = Math.Min(newEnd, clip.Start + (long)Math.Floor((clip.SourceLength - clip.SourceIn) / clip.Speed));
@@ -324,6 +358,7 @@ namespace VideoEditor.Core
             SetEnd(clip, newEnd);
             if (magnetic)
                 Compact(track);
+            ClipLinks.AfterTrim(project, clip, clip.SourceOut - sourceOut, false, anchors, independent);
             return clip.End;
         }
 
@@ -341,12 +376,13 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// 클립을 지운다. ripple이면(또는 마그네틱 주 트랙이면) 지운 길이만큼 같은 트랙의 뒤 클립을 당긴다.
-        /// 잠긴 트랙의 클립은 건너뛴다. 지운 개수를 돌려준다.
+        /// 잠긴 트랙의 클립은 건너뛴다. 링크된 짝도 함께 지운다. 지운 개수를 돌려준다.
         /// </summary>
         public static int Delete(Project project, IEnumerable<Clip> clips, bool ripple)
         {
+            var anchors = ClipLinks.Anchors(project);
             var deleted = 0;
-            foreach (var group in clips.ToList().GroupBy(project.TrackOf).Where(g => g.Key != null && !g.Key.Locked))
+            foreach (var group in ClipLinks.WithLinked(project, clips).GroupBy(project.TrackOf).Where(g => g.Key != null && !g.Key.Locked))
             {
                 var track = group.Key;
                 foreach (var clip in group.OrderByDescending(c => c.Start))
@@ -363,6 +399,9 @@ namespace VideoEditor.Core
                 if (IsMagnetic(project, track))
                     Compact(track);
             }
+            // 짝이 잠긴 트랙에 있어 남았으면 링크를 풀고, 당겨진 클립의 짝은 따라간다
+            ClipLinks.Clean(project);
+            ClipLinks.Follow(project, anchors);
             return deleted;
         }
 
@@ -379,8 +418,10 @@ namespace VideoEditor.Core
             var gap = nextClip.Start - gapStart;
             if (gap <= 0)
                 return false;
+            var anchors = ClipLinks.Anchors(project);
             foreach (var clip in track.Clips.Where(c => c.Start >= nextClip.Start))
                 clip.Start -= gap;
+            ClipLinks.Follow(project, anchors);
             return true;
         }
 
@@ -393,12 +434,20 @@ namespace VideoEditor.Core
             if (!clip.HasSourceLimit)
                 throw new EditException("이미지·글자 클립은 속도를 바꿀 수 없습니다. 길이를 늘이거나 줄이세요.");
             speed = Math.Max(MinSpeed, Math.Min(MaxSpeed, speed));
+            // 링크된 짝도 같은 속도로 — 짝이 마그네틱 주 트랙에 있으면 짝의 속도를 바꾸고 이 클립이 따라간다
+            if (ClipLinks.MagneticPartner(project, clip) is Clip lead)
+            {
+                SetSpeed(project, lead, speed);
+                return;
+            }
+            var anchors = ClipLinks.Anchors(project);
             var oldEnd = clip.End;
             var oldSpeed = clip.Speed;
             clip.Speed = speed;
             if (IsMagnetic(project, track))
             {
                 Compact(track);
+                ClipLinks.SpeedPartner(project, clip, anchors);
                 return;
             }
             var next = track.Clips.Where(c => c != clip && c.Start >= oldEnd).Select(c => c.Start).DefaultIfEmpty(long.MaxValue).Min();
@@ -407,16 +456,20 @@ namespace VideoEditor.Core
                 clip.Speed = oldSpeed;
                 throw new EditException("뒤 클립과 겹쳐서 속도를 바꿀 수 없습니다. 뒤 클립을 옮긴 뒤 다시 하세요.");
             }
+            ClipLinks.SpeedPartner(project, clip, anchors);
         }
 
-        /// <summary>동영상 클립의 소리를 오디오 트랙으로 분리한다(Ctrl+Alt+D). 빈 오디오 트랙이 없으면 새로 만든다.</summary>
+        /// <summary>
+        /// 동영상 클립의 소리를 오디오 트랙으로 분리한다(사운드 분리, Ctrl+Alt+D). 빈 오디오 트랙이 없으면 새로 만든다.
+        /// 영상과 사운드는 링크되어 함께 움직인다(<see cref="ClipLinks"/>).
+        /// </summary>
         public static Clip DetachAudio(Project project, Clip clip)
         {
             RequireClip(clip);
             var track = project.TrackOf(clip);
             EnsureEditable(track);
             if (clip.Kind != ClipKind.Media || !clip.HasVideo || !clip.HasAudio || clip.AudioDetached || clip.AudioOnly)
-                throw new EditException("소리가 있는 동영상 클립에서만 오디오를 분리할 수 있습니다.");
+                throw new EditException("소리가 있는 동영상 클립에서만 사운드를 분리할 수 있습니다.");
             var audio = clip.CloneWithNewId();
             MakeAudioOnly(audio);
             var target = project.AudioTracks.FirstOrDefault(t => !t.Locked && !t.Clips.Any(c => c.Start < audio.End && c.End > audio.Start));
@@ -425,6 +478,7 @@ namespace VideoEditor.Core
             target.Clips.Add(audio);
             target.Sort();
             clip.AudioDetached = true;
+            ClipLinks.Link(clip, audio);
             return audio;
         }
 
@@ -576,6 +630,7 @@ namespace VideoEditor.Core
             EnsureEditable(track);
             if (!project.VideoTracks.Remove(track))
                 project.AudioTracks.Remove(track);
+            ClipLinks.Clean(project);
             project.RenameTracks();
         }
 

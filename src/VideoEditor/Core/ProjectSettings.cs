@@ -28,6 +28,8 @@ namespace VideoEditor.Core
             if (project.MarkOut.HasValue)
                 project.MarkOut = Convert(project.MarkOut.Value);
             project.Rate = rate;
+            // 반올림으로 밀린 클립의 링크된 짝이 따라간다
+            var anchors = ClipLinks.Anchors(project);
             foreach (var track in project.AllTracks)
             {
                 track.Sort();
@@ -42,6 +44,7 @@ namespace VideoEditor.Core
                         track.Clips[i].Start = track.Clips[i - 1].End;
                 }
             }
+            ClipLinks.Follow(project, anchors);
         }
 
         /// <summary>클립 하나의 프레임 값을 from 레이트에서 to 레이트로(초 기준). 다른 프로젝트에 붙여 넣을 때도 쓴다.</summary>

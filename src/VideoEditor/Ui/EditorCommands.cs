@@ -159,7 +159,8 @@ namespace VideoEditor.Ui
         public void TrimToPlayhead(bool start)
         {
             var playhead = _session.Playhead;
-            var ids = Targets().Select(c => c.Id).ToList();
+            // 링크된 짝은 함께 다듬어지므로 하나만
+            var ids = ClipLinks.OnePerPair(Project, Targets()).Select(c => c.Id).ToList();
             Run(p =>
             {
                 var trimmed = ids.Select(p.FindClip).Where(c => c != null).Count(c => TimelineEdits.TrimToPlayhead(p, c, playhead, start));
@@ -210,19 +211,139 @@ namespace VideoEditor.Ui
             }
         }
 
+        /// <summary>[사운드 분리](Ctrl+Alt+D): 고른 동영상 클립의 소리를 오디오 트랙으로 나누고 영상과 링크한다.</summary>
         public void DetachAudio()
         {
-            var ids = Targets().Select(c => c.Id).ToList();
+            var ids = Targets().Where(c => c.Kind == ClipKind.Media && c.HasVideo && c.HasAudio && !c.AudioDetached && !c.AudioOnly).Select(c => c.Id).ToList();
             if (ids.Count == 0)
             {
-                Status("오디오를 분리할 동영상 클립을 고르세요.");
+                Status("사운드를 분리할 동영상 클립(소리가 있는 것)을 고르세요.");
                 return;
             }
-            Run(p =>
+            if (Run(p =>
+                {
+                    foreach (var id in ids)
+                        TimelineEdits.DetachAudio(p, p.FindClip(id));
+                }, "사운드를 분리했습니다(오디오 트랙) — 영상과 사운드는 링크되어 함께 움직입니다. 따로 옮기려면 Alt를 누른 채 끌거나 [링크 해제]."))
+                _session.Select(ids.Select(Project.FindClip).Where(c => c != null));
+        }
+
+        // ---------- 사운드 분리 ----------
+
+        /// <summary>
+        /// 미디어 패널 [사운드 분리해서 배치]: 소리가 있는 동영상마다 영상은 주 트랙(마그네틱 규칙), 사운드는 오디오 트랙에 재생 헤드부터 차례로 놓는다.
+        /// 실행 취소 한 번에 모두 사라진다.
+        /// </summary>
+        public void PlaceSoundSplit(IReadOnlyList<MediaInfo> media)
+        {
+            var eligible = media.Where(ClipLinks.CanSplit).ToList();
+            if (eligible.Count == 0)
             {
-                foreach (var id in ids)
-                    TimelineEdits.DetachAudio(p, p.FindClip(id));
-            }, "오디오를 분리했습니다(오디오 트랙).");
+                Status("소리가 있는 동영상을 고르세요.");
+                return;
+            }
+            var playhead = _session.Playhead;
+            var placed = new List<string>();
+            if (Run(p =>
+                {
+                    var position = playhead;
+                    foreach (var item in eligible)
+                    {
+                        var video = ClipLinks.PlaceSeparated(p, item, position);
+                        placed.Add(video.Id);
+                        position = video.End;
+                    }
+                }, (eligible.Count == 1 ? eligible[0].Name + "을(를)" : eligible.Count + "개를") + " 영상·사운드로 나눠 놓았습니다(링크됨)."
+                   + (eligible.Count < media.Count ? " 소리가 있는 동영상이 아닌 " + (media.Count - eligible.Count) + "개는 건너뛰었습니다." : "")))
+                _session.Select(placed.Select(Project.FindClip).Where(c => c != null));
+        }
+
+        /// <summary>[사운드 합치기]: 고른 영상·사운드 짝(링크된 것 또는 같은 원본·같은 구간)의 사운드를 지우고 영상의 소리를 다시 켠다.</summary>
+        public void RejoinSound()
+        {
+            var ids = _session.SelectedClips.Select(c => c.Id).ToList();
+            var count = 0;
+            if (Run(p => count = ClipLinks.Rejoin(p, ids.Select(p.FindClip).Where(c => c != null).ToList())))
+                Status("사운드를 합쳤습니다" + (count > 1 ? "(" + count + "쌍)" : "") + " — 영상 클립에서 다시 소리가 납니다.");
+        }
+
+        /// <summary>[링크 해제]: 고른 클립의 영상·사운드를 따로 움직이게 한다(어긋나면 어긋남을 보인다).</summary>
+        public void UnlinkSound()
+        {
+            var ids = _session.SelectedClips.Select(c => c.Id).ToList();
+            Run(p => ClipLinks.Unlink(p, ids.Select(p.FindClip).ToList()), "링크를 풀었습니다 — 영상과 사운드가 따로 움직입니다. 어긋나면 클립에 어긋남이 보이고 [싱크 맞추기]로 되돌립니다.");
+        }
+
+        /// <summary>[다시 링크]: 링크를 푼 짝을 지금 자리 그대로 다시 묶는다.</summary>
+        public void RelinkSound()
+        {
+            var ids = _session.SelectedClips.Select(c => c.Id).ToList();
+            Run(p => ClipLinks.Relink(p, ids.Select(p.FindClip).ToList()), "다시 링크했습니다 — 영상과 사운드가 함께 움직입니다.");
+        }
+
+        /// <summary>[싱크 맞추기]: 어긋난 짝의 사운드를 영상에 맞춰 옮긴다. clipId를 주면 그 클립의 짝(오른쪽 메뉴).</summary>
+        public void SyncSound(string clipId = null)
+        {
+            var ids = _session.SelectedClips.Select(c => c.Id).ToList();
+            if (clipId != null && !ids.Contains(clipId))
+                ids = new List<string> { clipId };
+            Run(p => ClipLinks.Sync(p, ids.Select(p.FindClip).ToList()), "싱크를 맞췄습니다(사운드를 영상에 맞춰 옮김).");
+        }
+
+        /// <summary>[사운드를 파일로 저장…] 미디어 패널: 파일 전체의 소리를 다시 인코딩하지 않고 꺼낸다(안 되면 WAV).</summary>
+        public Task SaveSound(MediaInfo media)
+        {
+            return SaveSound(media.Path, media.AudioCodec, 0, 0, 1, Path.GetFileNameWithoutExtension(media.Path) + " 사운드");
+        }
+
+        /// <summary>[사운드를 파일로 저장…] 타임라인: 그 클립 구간(In~Out)만, 속도를 바꿨으면 속도대로(WAV).</summary>
+        public Task SaveClipSound(string clipId)
+        {
+            var clip = Project.FindClip(clipId);
+            if (clip == null || clip.Kind != ClipKind.Media || !clip.HasAudio)
+            {
+                Status("소리가 있는 클립을 고르세요.");
+                return Task.CompletedTask;
+            }
+            var rate = Project.Rate;
+            var name = Path.GetFileNameWithoutExtension(clip.Path) + " 사운드 " + rate.Timecode(clip.SourceIn).Replace(':', '-');
+            return SaveSound(clip.Path, Project.FindMedia(clip.Path)?.AudioCodec, rate.ToSeconds(clip.SourceIn), rate.ToSeconds(clip.SourceOut - clip.SourceIn), clip.Speed, name);
+        }
+
+        private async Task SaveSound(string source, string codec, double from, double seconds, double speed, string name)
+        {
+            try
+            {
+                _player.Stop();
+                var tool = await NeedTool();
+                if (tool == null)
+                    return;
+                // 원본 그대로 꺼낼 수 있으면 코덱에 맞는 그릇(.m4a 등), 속도를 바꿨으면 WAV
+                var copy = Math.Abs(speed - 1) < 1e-9;
+                var extension = copy ? SoundExtract.ExtensionFor(codec) : ".wav";
+                var filter = extension == ".wav" ? "WAV (*.wav)|*.wav" : "원본 그대로 (*" + extension + ")|*" + extension + "|WAV (*.wav)|*.wav";
+                var folder = _session.FilePath != null ? Path.GetDirectoryName(_session.FilePath) : Path.GetDirectoryName(source);
+                var dialog = new Microsoft.Win32.SaveFileDialog
+                {
+                    Title = "사운드를 파일로 저장",
+                    Filter = filter,
+                    DefaultExt = extension,
+                    FileName = name + extension,
+                    InitialDirectory = SafeFolder(folder, Environment.SpecialFolder.MyMusic)
+                };
+                if (dialog.ShowDialog(UiKit.OwnerOf(_owner)) != true)
+                    return;
+                Status("사운드를 꺼내는 중… " + Path.GetFileName(dialog.FileName));
+                var saved = await SoundExtractor.Extract(tool, source, codec, dialog.FileName, from, seconds, speed, CancellationToken.None);
+                var fallback = !string.Equals(saved, dialog.FileName, StringComparison.OrdinalIgnoreCase);
+                await ImportPaths(new[] { saved }, null, -1);
+                Status("사운드를 저장하고 미디어에 더했습니다: " + saved
+                       + (fallback ? " (원본 그대로 담을 수 없어 WAV로 저장)" : copy && !saved.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ? " (원본 그대로)" : ""));
+            }
+            catch (Exception ex)
+            {
+                Status("사운드를 저장하지 못했습니다: " + ex.Message);
+            }
         }
 
         /// <summary>고른 클립 소리 끄기/켜기(Ctrl+Shift+M).</summary>
@@ -258,7 +379,12 @@ namespace VideoEditor.Ui
             {
                 p.Magnetic = on;
                 if (on)
+                {
+                    // 당겨진 영상의 링크된 사운드가 따라간다
+                    var anchors = ClipLinks.Anchors(p);
                     TimelineEdits.Compact(p.MainTrack);
+                    ClipLinks.Follow(p, anchors);
+                }
             }, on ? "마그네틱 주 트랙: 켬(빈틈 없이 붙음)" : "마그네틱 주 트랙: 끔");
         }
 
@@ -299,6 +425,7 @@ namespace VideoEditor.Ui
             var subtitles = _clipboardSubtitles;
             // 다른 프레임 레이트의 프로젝트(다른 편집 창)에서 복사했으면 초 기준으로 바꾼다
             var rate = _clipboardRate;
+            var originals = _clipboard;
             var clips = _clipboard.Select(c =>
             {
                 var copy = c.CloneWithNewId();
@@ -307,11 +434,16 @@ namespace VideoEditor.Ui
             }).ToList();
             first = clips.Min(c => c.Start);
             var pasted = new List<string>();
+            // 함께 복사한 영상·사운드 짝: 영상을 먼저 놓고, 사운드는 영상이 실제로 놓인 자리(주 트랙 경계로 밀렸으면 그만큼)에 맞춘 뒤 사본끼리 새로 링크한다
+            var partners = ClipLinks.PartnerIndexes(originals);
+            var order = Enumerable.Range(0, clips.Count).OrderBy(i => partners[i] >= 0 && clips[i].AudioOnly ? 1 : 0).ToList();
             if (Run(p =>
                 {
-                    for (var i = 0; i < clips.Count; i++)
+                    var copies = new Clip[clips.Count];
+                    foreach (var i in order)
                     {
                         var copy = clips[i].CloneWithNewId();
+                        copies[i] = copy;
                         pasted.Add(copy.Id);
                         var index = tracks[i];
                         var track = index >= 0
@@ -321,8 +453,13 @@ namespace VideoEditor.Ui
                         var subtitle = i < subtitles.Count && subtitles[i];
                         if (track.Kind == TrackKind.Video && track.Subtitles != subtitle)
                             track = subtitle ? p.VideoTracks.FirstOrDefault(t => t.Subtitles) ?? track : p.MainTrack;
-                        TimelineEdits.Place(p, track, copy, playhead + copy.Start - first);
+                        var start = playhead + copy.Start - first;
+                        var partner = partners[i] >= 0 ? copies[partners[i]] : null;
+                        if (partner != null && copy.AudioOnly)
+                            start += partner.Start - (playhead + clips[partners[i]].Start - first);
+                        TimelineEdits.Place(p, track, copy, start);
                     }
+                    ClipLinks.CopyLinks(originals, copies);
                 }, "붙여 넣었습니다."))
                 _session.Select(pasted.Select(Project.FindClip).Where(c => c != null));
         }

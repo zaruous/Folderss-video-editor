@@ -138,6 +138,12 @@ namespace VideoEditor.Core
         public bool AudioDetached { get; set; }
         /// <summary>오디오 트랙에 놓인 클립인데 원본이 동영상 파일(분리한 오디오).</summary>
         public bool AudioOnly { get; set; }
+        /// <summary>사운드 분리로 나눈 영상·사운드 짝(두 클립이 같은 값 — <see cref="ClipLinks"/>). null = 짝 없음(예전 프로젝트).</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string LinkId { get; set; }
+        /// <summary>링크 해제: 짝(LinkId)은 남기고 따로 움직인다 — 어긋남 표시·싱크 맞추기에 쓴다.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Unlinked { get; set; }
         public long FadeIn { get; set; }
         public long FadeOut { get; set; }
 
@@ -215,6 +221,9 @@ namespace VideoEditor.Core
         {
             var copy = (Clip)MemberwiseClone();
             copy.Id = Track.NewId();
+            // 짝은 사본에 넘기지 않는다(나눈 조각·붙여 넣은 사본은 짝을 따로 정한다)
+            copy.LinkId = null;
+            copy.Unlinked = false;
             copy.Style = Style?.Clone();
             copy.Words = Words?.Select(w => new ClipWord { Text = w.Text, Start = w.Start, End = w.End }).ToList();
             return copy;
