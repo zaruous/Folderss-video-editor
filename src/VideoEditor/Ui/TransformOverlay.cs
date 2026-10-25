@@ -39,6 +39,8 @@ namespace VideoEditor.Ui
         private int _drag;
         private BoxEdge _edge;
         private Point _dragFrom;
+        // 누른 뒤 포인터가 실제로 움직였는지
+        private bool _pointerMoved;
         // 지금 값(끄는 동안 바뀜)과 끌기 시작 때 값. 상자 너비·높이 0 = 자동
         private double _x, _y, _scale, _boxWidth, _boxHeight;
         private double _startX, _startY, _startScale, _startDistance, _startBoxWidth, _startBoxHeight;
@@ -114,13 +116,15 @@ namespace VideoEditor.Ui
         public bool HasFrame { get { return _clip != null; } }
 
         private bool IsText { get { return _clip != null && _clip.Kind == ClipKind.Text; } }
+        // 옆 손잡이(상자 너비·높이)는 상자를 쓰는 글자만 — 긴 글(drawtext 대체 경로)은 상자를 무시하므로 끌어도 크기가 바뀌지 않고 위치만 밀린다
+        private bool HasBoxHandles { get { return IsText && (_clip.Text ?? "").Length <= RenderGraph.MaxStyledTextLength; } }
 
         private void Show(bool visible)
         {
             var state = visible ? Visibility.Visible : Visibility.Collapsed;
             _frame.Visibility = state;
             for (var i = 0; i < _handles.Length; i++)
-                _handles[i].Visibility = visible && (i < 4 || IsText) ? Visibility.Visible : Visibility.Collapsed;
+                _handles[i].Visibility = visible && (i < 4 || HasBoxHandles) ? Visibility.Visible : Visibility.Collapsed;
             if (!visible)
                 _guideX.Visibility = _guideY.Visibility = Visibility.Collapsed;
             Cursor = null;
@@ -204,7 +208,7 @@ namespace VideoEditor.Ui
             var corners = Corners(frame);
             // 가장 가까운 손잡이(같으면 모서리). 틀이 작으면 잡는 거리를 줄여 안쪽(옮기기)이 손잡이에 가리지 않게 한다
             var reach = Math.Min(Handle, Math.Max(3, Math.Min(frame.Width, frame.Height) / 3));
-            var points = IsText ? corners.Concat(Edges(corners)).ToArray() : corners;
+            var points = HasBoxHandles ? corners.Concat(Edges(corners)).ToArray() : corners;
             var best = -1;
             var nearest = double.MaxValue;
             for (var i = 0; i < points.Length; i++)
@@ -273,6 +277,9 @@ namespace VideoEditor.Ui
             if (_playing())
                 return false;
             var hit = Hit(point);
+            // 틀 안이라도 그 자리에 고른 클립보다 위에 보이는 클립이 있으면 그것을 고른다 — 화면 전체 배경을 고른 뒤에도 위의 글자를 누를 수 있게
+            if (hit == Inside && Pick(point) is Clip above && above.Id != _clip.Id)
+                hit = -1;
             if (hit < 0)
             {
                 var picked = Pick(point);
@@ -286,6 +293,7 @@ namespace VideoEditor.Ui
             }
             _drag = hit == Inside ? 1 : hit < 4 ? 2 : 3;
             _dragFrom = point;
+            _pointerMoved = false;
             _startX = _x;
             _startY = _y;
             _startScale = _scale;
@@ -324,6 +332,8 @@ namespace VideoEditor.Ui
                 Cursor = CursorFor(Hit(point));
                 return;
             }
+            if (point != _dragFrom)
+                _pointerMoved = true;
             var (zoom, _, _) = Screen();
             if (_drag == 1)
             {
@@ -362,7 +372,8 @@ namespace VideoEditor.Ui
         {
             if (_drag == 0)
                 return false;
-            var moved = _x != _startX || _y != _startY || _scale != _startScale || _boxWidth != _startBoxWidth || _boxHeight != _startBoxHeight;
+            // 누르고 움직이지 않았으면 편집하지 않는다(자동 크기가 상한보다 커서 옆 손잡이를 누르기만 해도 값이 바뀌는 경우 등)
+            var moved = _pointerMoved && (_x != _startX || _y != _startY || _scale != _startScale || _boxWidth != _startBoxWidth || _boxHeight != _startBoxHeight);
             var horizontal = _drag == 3 && (_edge == BoxEdge.Left || _edge == BoxEdge.Right);
             var vertical = _drag == 3 && !horizontal;
             var (id, x, y, scale, boxWidth, boxHeight) = (_clip.Id, _x, _y, _scale, _boxWidth, _boxHeight);
@@ -387,7 +398,7 @@ namespace VideoEditor.Ui
         /// <summary>두 번 누름: 글자의 옆 손잡이면 그 방향 상자 크기를 자동(0)으로(실행 취소 한 번). 옆 손잡이가 아니면 false.</summary>
         private bool PointerDoubleClick(Point point)
         {
-            if (!IsText || _drag != 0 || _playing())
+            if (!HasBoxHandles || _drag != 0 || _playing())
                 return false;
             var hit = Hit(point);
             if (hit < FirstEdge)
@@ -440,7 +451,7 @@ namespace VideoEditor.Ui
         /// <summary>옆 손잡이 자리(화면 픽셀, 위·오른쪽·아래·왼쪽 — 글자만) — 시험용.</summary>
         internal Point[] EdgePoints()
         {
-            return !IsText ? new Point[0] : Edges(Corners(Frame()));
+            return !HasBoxHandles ? new Point[0] : Edges(Corners(Frame()));
         }
 
         /// <summary>프로젝트 픽셀 → 이 틀(화면) 픽셀 — 시험용.</summary>

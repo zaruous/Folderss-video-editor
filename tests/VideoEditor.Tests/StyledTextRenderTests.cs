@@ -99,7 +99,7 @@ namespace VideoEditor.Tests
         // ---------- 그래프 ----------
 
         [Fact]
-        public void Styled_ReadsPngAndPads_WithoutDrawtext()
+        public void Styled_ReadsPngAndScalesOnce_WithoutDrawtext()
         {
             var (project, _) = StyledProject();
             var rasterizer = new FakeTextRasterizer();
@@ -107,13 +107,14 @@ namespace VideoEditor.Tests
             var path = ImagePath(plan);
             Assert.Matches(CacheName, Path.GetFileName(path));
             Assert.Equal(new[] { "-loop", "1", "-framerate", "30/1", "-t", "1", "-f", "image2", "-pattern_type", "none", "-i", path }, Assert.Single(plan.Inputs));
-            Assert.Contains("[0:v]setpts=PTS-STARTPTS,format=rgba,crop=w='min(iw,640)':h='min(ih,360)',pad=w=640:h=360:x=(ow-iw)/2:y=(oh-ih)/2:color=black@0.0", plan.Filter);
+            // 화면 크기로 자르거나 채우지 않고(화면보다 큰 상자도 다 쓴다) 크기 배율로 한 번만 줄여 가운데에 얹는다
+            Assert.Contains("[0:v]setpts=PTS-STARTPTS,format=rgba,scale=w='max(1,iw*1)':h='max(1,ih*1)',format=rgba", plan.Filter);
+            Assert.DoesNotContain("pad=", plan.Filter);
+            Assert.DoesNotContain("crop=", plan.Filter);
             Assert.DoesNotContain("drawtext", plan.Filter);
             Assert.Empty(plan.TextFiles);
             Assert.Same(rasterizer, plan.TextRasterizer);
-            // 이미지 클립과 같은 공통 체인(맞춤 × 크기 → overlay)을 탄다
-            Assert.Contains("scale=w=640:h=360:force_original_aspect_ratio=decrease", plan.Filter);
-            Assert.Contains("[base][c0]overlay=", plan.Filter);
+            Assert.Contains("[base][c0]overlay=x='(main_w-overlay_w)/2+0':y='(main_h-overlay_h)/2+0'", plan.Filter);
         }
 
         [Fact]
@@ -127,8 +128,9 @@ namespace VideoEditor.Tests
             Assert.Equal("안녕 ABC", request.Text);
             Assert.Equal(40, request.FontPixelSize, 6);
             Assert.Equal(0.5, request.EffectScale, 6);
-            Assert.Equal(320, request.CanvasWidth);
-            Assert.Equal(180, request.CanvasHeight);
+            // 그리개 범위는 화면의 4배까지(화소 상한 안) — 화면보다 큰 글도 크기를 바꾸기 전에 잘리지 않게
+            Assert.Equal(1280, request.CanvasWidth);
+            Assert.Equal(720, request.CanvasHeight);
             // 길이 값은 프로젝트 픽셀 그대로 두고 그리개가 EffectScale을 곱한다
             Assert.Equal(9, request.Style.Shadow.Distance);
             // 요청의 스타일은 깊은 복사 — 그린 뒤 클립을 고쳐도 요청은 그대로
@@ -158,11 +160,11 @@ namespace VideoEditor.Tests
             var plan = RenderGraph.Build(project, Options(new FakeTextRasterizer(), width: 8192, height: 8192));
             var request = Assert.Single(plan.TextImages).Value;
             Assert.True((double)request.CanvasWidth * request.CanvasHeight <= StyledTextLayout.MaxPixels, request.CanvasWidth + "×" + request.CanvasHeight);
-            // 줄인 비율만큼 글자·효과도 줄여 그리고, 그래프가 다시 키워 캔버스 크기에 놓는다
+            // 줄인 비율만큼 글자·효과도 줄여 그리고, 그래프가 크기 배율과 함께 한 번에 다시 키운다(scale을 잇지 않음)
             Assert.Equal(400.0 * request.CanvasWidth / 8192, request.FontPixelSize, 6);
             Assert.Equal((double)request.CanvasWidth / 8192, request.EffectScale, 6);
-            Assert.Contains("format=rgba,scale=w='iw*8192/4000':h='ih*8192/4000',crop=", plan.Filter);
-            Assert.Contains("pad=w=8192:h=8192", plan.Filter);
+            Assert.Contains("format=rgba,scale=w='max(1,iw*2.048)':h='max(1,ih*2.048)',format=rgba", plan.Filter);
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(plan.Filter, "scale="));
             // 4K(830만 화소)는 그대로
             project.Width = 3840;
             project.Height = 2160;
