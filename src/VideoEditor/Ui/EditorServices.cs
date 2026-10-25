@@ -29,6 +29,7 @@ namespace VideoEditor.Ui
         public const string RecentSearchesKey = "youtubeRecentSearches";
         public const string DownloadFolderKey = "downloadFolder";
         public const string ProjectTreeHiddenKey = "projectTreeHidden";
+        public const string TextStylesKey = "textStyles";
 
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
@@ -457,6 +458,20 @@ namespace VideoEditor.Ui
                         RenderCommand.TryDelete(path);
                 }
             }));
+        }
+
+        // ---------- 내 스타일 ----------
+
+        /// <summary>내 스타일(설정 textStyles, <see cref="TextStyleLibrary"/>의 규칙으로 읽음 — 없거나 깨졌으면 빈 목록). 부를 때마다 설정을 새로 읽은 새 목록.</summary>
+        public List<(string Name, TextStyle Style)> TextStyles()
+        {
+            return TextStyleLibrary.Read(Setting(TextStylesKey));
+        }
+
+        /// <summary>내 스타일을 설정에 쓴다(비면 키를 지운다). 실패하면 false.</summary>
+        public bool SaveTextStyles(List<(string Name, TextStyle Style)> styles)
+        {
+            return SaveSetting(TextStylesKey, styles.Count == 0 ? null : TextStyleLibrary.Write(styles));
         }
 
         public static BitmapSource Decode(byte[] png)

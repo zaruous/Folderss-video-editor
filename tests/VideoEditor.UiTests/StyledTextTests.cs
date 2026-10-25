@@ -2010,5 +2010,259 @@ namespace VideoEditor.UiTests
                 await CloseEditor(ui, window);
             }
         }
+
+        // ---------- 내 스타일(이슈 #22) ----------
+
+        // 플러그인 설정 키(EditorServices.TextStylesKey). 시험용 설정은 프로세스 안에서 남으므로 시험 앞뒤로 비운다(다른 시험으로 새지 않게)
+        private const string MyStylesKey = "textStyles";
+
+        /// <summary>제목이 정확히 이것인 보이는 창(UI 스레드, 없으면 null) — "내 스타일"은 "내 스타일로 저장"·"내 스타일 덮어쓰기"와 앞이 같아 Ui.Window로는 가를 수 없다.</summary>
+        private static Window DialogTitled(string title)
+        {
+            return Ui.Windows().FirstOrDefault(w => w.IsVisible && w.Title == title);
+        }
+
+        /// <summary>설정 textStyles에 저장된 이름들(없으면 빈 목록).</summary>
+        private static System.Collections.Generic.List<string> SavedNames(PluginUnderTest plugin)
+        {
+            var json = plugin.Manager.GetSetting(MyStylesKey);
+            if (json == null)
+                return new System.Collections.Generic.List<string>();
+            using (var document = JsonDocument.Parse(json))
+                return document.RootElement.EnumerateArray().Select(e => e.GetProperty("Name").GetString()).ToList();
+        }
+
+        /// <summary>설정 textStyles에 저장된 이름의 스타일 JSON.</summary>
+        private static JsonElement SavedStyle(PluginUnderTest plugin, string name)
+        {
+            using (var document = JsonDocument.Parse(plugin.Manager.GetSetting(MyStylesKey)))
+                return document.RootElement.EnumerateArray().First(e => e.GetProperty("Name").GetString() == name).GetProperty("Style").Clone();
+        }
+
+        /// <summary>[내 스타일로 저장]을 누르고 이름 창에 name을 적어 [확인]한다. 이름 창에 먼저 적혀 있던 글을 돌려준다(덮어쓰기·알림 창은 부른 쪽이 처리).</summary>
+        private static async Task<string> SaveMine(UiThread ui, Window window, string name)
+        {
+            // 이름 창은 모달이라 Post로 누르고 뜬 창을 찾는다
+            ui.Post(() => Ui.Click(Ui.ById<Button>(window, "StyleSaveMine")));
+            var input = await ui.WaitFor(() => DialogTitled("내 스타일로 저장"), Wait, "이름 창");
+            var initial = ui.Run(() =>
+            {
+                var box = Ui.ById<TextBox>(input, "DialogInputBox");
+                var text = box.Text;
+                box.Text = name;
+                Ui.Click(Ui.ById<Button>(input, "DialogOkButton"));
+                return text;
+            });
+            await ui.WaitUntil(() => DialogTitled("내 스타일로 저장") == null, Wait, "이름 창 닫힘");
+            return initial;
+        }
+
+        /// <summary>확인 창(UiKit.Ask)이 뜨기를 기다려 글을 읽고 index번 단추를 누른다. 창의 글을 돌려준다.</summary>
+        private static async Task<string> Answer(UiThread ui, string title, int index)
+        {
+            var dialog = await ui.WaitFor(() => DialogTitled(title), Wait, title + " 창");
+            var message = ui.Run(() =>
+            {
+                var text = string.Join(" ", Ui.Texts(dialog));
+                Ui.Click(Ui.ById<Button>(dialog, "AskButton" + index));
+                return text;
+            });
+            await ui.WaitUntil(() => DialogTitled(title) == null, Wait, title + " 창 닫힘");
+            return message;
+        }
+
+        [EditorFact]
+        public async Task MyStyles_SaveShowsButton_SurvivesReopen_RemoveDeletes()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            plugin.Manager.SetSetting(MyStylesKey, null);
+            Window window = null;
+            try
+            {
+                window = await Open(ui, plugin);
+                var id = await AddStyledText(ui, window, "내 스타일 ABC");
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleSaveMine"), Wait, "[내 스타일로 저장]");
+                ui.Run(() =>
+                {
+                    // 비어 있으면 빈 줄 대신 안내
+                    Assert.Null(Ui.ById<Button>(window, "StyleMine0"));
+                    Assert.Equal(Visibility.Visible, Ui.ById<TextBlock>(window, "StyleMineHint").Visibility);
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<WrapPanel>(window, "StyleMine").Visibility);
+                });
+
+                // 스타일이 없는 글자: 지금 색을 이어받은 스타일(왼쪽 맞춤)을 저장 — 저장은 편집이 아니라 클립에는 스타일이 생기지 않는다. 이름은 앞뒤 공백을 다듬는다
+                Assert.Equal("내 스타일 1", await SaveMine(ui, window, "  흰 바탕  "));
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine0"), Wait, "내 스타일 단추");
+                Assert.Equal(new[] { "흰 바탕" }, SavedNames(plugin));
+                var plain = SavedStyle(plugin, "흰 바탕");
+                Assert.Equal("Left", plain.GetProperty("Align").GetString());
+                Assert.Equal("#FFFFFF", plain.GetProperty("Fill").GetProperty("Colors")[0].GetString());
+                await ui.WaitUntil(() => Status(window) == "내 스타일에 저장했습니다: 흰 바탕", Wait, "저장 알림");
+                ui.Run(() =>
+                {
+                    Assert.Null(StyleOf(window, id));
+                    var button = Ui.ById<Button>(window, "StyleMine0");
+                    Assert.Equal("흰 바탕", System.Windows.Automation.AutomationProperties.GetName(button));
+                    Assert.Equal("흰 바탕", button.ToolTip);
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<TextBlock>(window, "StyleMineHint").Visibility);
+                });
+
+                // "노란 자막"을 입힌 뒤 저장 → 둘째 단추. 저장한 것은 사본이라 클립을 고쳐도 설정은 그대로
+                var presets = Presets();
+                var yellow = presets.FindIndex(p => p.Name == "노란 자막");
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StylePreset" + yellow)));
+                await ui.WaitUntil(() => StyleOf(window, id) != null, Wait, "노란 자막");
+                Assert.Equal("내 스타일 2", await SaveMine(ui, window, "노랑 제목"));
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine1"), Wait, "둘째 단추");
+                Assert.Equal(new[] { "흰 바탕", "노랑 제목" }, SavedNames(plugin));
+                Assert.True(SavedStyle(plugin, "노랑 제목").GetProperty("Bold").GetBoolean());
+                Assert.Equal("#FACC15", SavedStyle(plugin, "노랑 제목").GetProperty("Fill").GetProperty("Colors")[0].GetString());
+                ui.Run(() => Ui.ClickToggle(Ui.ById<CheckBox>(window, "StyleBold")));
+                await ui.WaitUntil(() => !(bool)Get(StyleOf(window, id), "Bold"), Wait, "굵게 끔");
+                Assert.True(SavedStyle(plugin, "노랑 제목").GetProperty("Bold").GetBoolean());
+                // 썸네일은 스타일 모음과 같이 그린다
+                await ui.WaitUntil(() => Ui.ById<Image>(window, "StyleMine0Image")?.Source != null && Ui.ById<Image>(window, "StyleMine1Image")?.Source != null, Wait, "내 스타일 썸네일");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "my-styles"));
+
+                // 편집 창을 닫았다 열어도 남아 있다
+                await CloseEditor(ui, window);
+                window = null;
+                window = await Open(ui, plugin);
+                await AddStyledText(ui, window, "다시 연 창");
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine1"), Wait, "다시 연 창의 내 스타일");
+                ui.Run(() =>
+                {
+                    Assert.Equal("흰 바탕", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine0")));
+                    Assert.Equal("노랑 제목", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine1")));
+                    Assert.Null(Ui.ById<Button>(window, "StyleMine2"));
+                });
+
+                // 오른쪽 클릭 [지우기] — 설정이라 실행 취소에 남지 않음을 알린다
+                ui.Run(() => Ui.ContextMenu(Ui.ById<Button>(window, "StyleMine0"), "지우기"));
+                await ui.WaitUntil(() => Ui.ById<Button>(window, "StyleMine1") == null, Wait, "지우기");
+                Assert.Equal(new[] { "노랑 제목" }, SavedNames(plugin));
+                await ui.WaitUntil(() => Status(window).StartsWith("내 스타일에서 지웠습니다: 흰 바탕", StringComparison.Ordinal) && Status(window).Contains("실행 취소"), Wait, "지우기 알림");
+                Assert.Equal("노랑 제목", ui.Run(() => System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine0"))));
+                ui.Run(() => Ui.ContextMenu(Ui.ById<Button>(window, "StyleMine0"), "지우기"));
+                await ui.WaitUntil(() => Ui.ById<Button>(window, "StyleMine0") == null, Wait, "모두 지움");
+                Assert.Null(plugin.Manager.GetSetting(MyStylesKey));
+                Assert.Equal(Visibility.Visible, ui.Run(() => Ui.ById<TextBlock>(window, "StyleMineHint").Visibility));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+                plugin.Manager.SetSetting(MyStylesKey, null);
+            }
+        }
+
+        [EditorFact]
+        public async Task MyStyles_ClickAppliesInOneUndoStep_OverwriteAsks_51stAndBadNameRefused()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            // 악성·넘치는 설정: 제어 문자 이름·겹친 이름·형식이 틀린 스타일·쓰레기 항목은 건너뛰고 앞에서부터 50개
+            var entries = new System.Collections.Generic.List<object>
+            {
+                new { Name = "하늘 광선", Style = new { Bold = true, Fill = new { Kind = "Solid", Colors = new[] { "#38BDF8" } }, Glow = new { Enabled = true, Color = "#38BDF8", Size = 12.0, Opacity = 0.8 } } },
+                new { Name = "줄\n바꿈", Style = new { } },
+                new { Name = " 하늘 광선 ", Style = new { } },
+                new { Name = "굵게 자리에 글", Style = new { Bold = "yes" } },
+                "쓰레기"
+            };
+            for (var i = 1; i <= 49; i++)
+                entries.Add(new { Name = "채움 " + i, Style = new { } });
+            entries.Add(new { Name = "넘침", Style = new { } });
+            var seeded = JsonSerializer.Serialize(entries);
+            plugin.Manager.SetSetting(MyStylesKey, seeded);
+            Window window = null;
+            try
+            {
+                window = await Open(ui, plugin);
+                var id = await AddStyledText(ui, window, "광선 ABC");
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine49"), Wait, "내 스타일 50개");
+                ui.Run(() =>
+                {
+                    Assert.Null(Ui.ById<Button>(window, "StyleMine50"));
+                    Assert.Equal("하늘 광선", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine0")));
+                    Assert.Equal("채움 1", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine1")));
+                    Assert.Equal("채움 49", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine49")));
+                });
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                Assert.Null(ui.Run(() => StyleOf(window, id)));
+                var fontSize = ui.Run(() => (double)Get(ProjectClips(window).First(c => Equals(Get(c, "Id"), id)), "FontSize"));
+                var before = ui.Run(() => PreviewPixels(window));
+
+                // 누르면 스타일이 통째로 그 스타일(하늘색 채우기 + 광선), 글자 내용·크기는 그대로, [글자] 탭 글자 색 = 채우기 색 1 — 하늘색은 검정 미리 보기 바탕에서 보인다
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StyleMine0")));
+                await ui.WaitUntil(() => StyleOf(window, id) != null, Wait, "하늘 광선");
+                ui.Run(() =>
+                {
+                    var style = StyleOf(window, id);
+                    Assert.True((bool)Get(style, "Bold"));
+                    Assert.Equal("#38BDF8", (string)((System.Collections.IList)Get(Get(style, "Fill"), "Colors"))[0]);
+                    Assert.True((bool)Get(Get(style, "Glow"), "Enabled"));
+                    var clip = ProjectClips(window).First(c => Equals(Get(c, "Id"), id));
+                    Assert.Equal("광선 ABC", (string)Get(clip, "Text"));
+                    Assert.Equal(fontSize, (double)Get(clip, "FontSize"));
+                    Assert.Equal("#38BDF8", (string)Get(clip, "TextColor"));
+                    Assert.True(Ui.ById<CheckBox>(window, "StyleGlowOn").IsChecked == true);
+                });
+                await ui.WaitUntil(() => Differs(before, PreviewPixels(window)), Wait, "하늘 광선 미리 보기");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "my-styles-applied"));
+
+                // 실행 취소 한 번에 스타일 없던 처음으로
+                ui.Run(() =>
+                {
+                    Ui.Focus(Canvas(window));
+                    Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control);
+                });
+                await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "실행 취소 한 번에 처음으로");
+                Assert.Equal("#FFFFFF", ui.Run(() => (string)Get(ProjectClips(window).First(c => Equals(Get(c, "Id"), id)), "TextColor")));
+                await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+
+                // 50개가 찼으면 새 이름은 알리고 저장하지 않는다(조용히 버리지 않음) — 설정은 넣어 둔 글 그대로
+                Assert.Equal("내 스타일 51", await SaveMine(ui, window, "내 스타일 51"));
+                Assert.Contains("50개까지", await Answer(ui, "내 스타일", 0));
+                Assert.Equal(seeded, plugin.Manager.GetSetting(MyStylesKey));
+                ui.Run(() =>
+                {
+                    Assert.NotNull(Ui.ById<Button>(window, "StyleMine49"));
+                    Assert.Null(Ui.ById<Button>(window, "StyleMine50"));
+                });
+
+                // 같은 이름은 덮어쓸지 묻는다: [취소]면 그대로, [덮어쓰기]면 그 자리에서 바뀐다(50개가 차도 됨)
+                var presets = Presets();
+                var yellow = presets.FindIndex(p => p.Name == "노란 자막");
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StylePreset" + yellow)));
+                await ui.WaitUntil(() => StyleOf(window, id) != null, Wait, "노란 자막");
+                await SaveMine(ui, window, "하늘 광선");
+                Assert.Contains("하늘 광선", await Answer(ui, "내 스타일 덮어쓰기", 1));
+                Assert.Equal(seeded, plugin.Manager.GetSetting(MyStylesKey));
+                await SaveMine(ui, window, "하늘 광선");
+                await Answer(ui, "내 스타일 덮어쓰기", 0);
+                await ui.WaitUntil(() => plugin.Manager.GetSetting(MyStylesKey) != seeded, Wait, "덮어씀");
+                // 다시 쓴 설정에는 규칙에 맞는 50개만 남는다(악성 항목은 빠짐)
+                var names = SavedNames(plugin);
+                Assert.Equal(50, names.Count);
+                Assert.Equal("하늘 광선", names[0]);
+                Assert.Equal("채움 49", names[49]);
+                Assert.Equal("#FACC15", SavedStyle(plugin, "하늘 광선").GetProperty("Fill").GetProperty("Colors")[0].GetString());
+                Assert.False(SavedStyle(plugin, "하늘 광선").GetProperty("Glow").GetProperty("Enabled").GetBoolean());
+
+                // 빈 이름은 알리고 저장하지 않는다
+                var stored = plugin.Manager.GetSetting(MyStylesKey);
+                await SaveMine(ui, window, "   ");
+                Assert.Contains("1~40자", await Answer(ui, "내 스타일", 0));
+                Assert.Equal(stored, plugin.Manager.GetSetting(MyStylesKey));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+                plugin.Manager.SetSetting(MyStylesKey, null);
+            }
+        }
     }
 }
