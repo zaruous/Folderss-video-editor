@@ -587,5 +587,50 @@ namespace VideoEditor.Tests
             Assert.Equal(VideoEffects.PreviewKey(ScanLine.Def), VideoEffects.PreviewKey(ScanLine.Def));
             Assert.Equal(24, VideoEffects.PreviewKey(ScanLine.Def).Length);
         }
+
+        [Fact]
+        public void PreviewArguments_DrawOnTheTexturedSource_AndTheCacheKeyLeavesOldThumbnails()
+        {
+            // 바탕은 합성 그림(무늬·해·사람 실루엣을 수식으로 한 장 그려 1.5초로 늘임) — 예전의 밋밋한 색 바탕(drawbox)이 아니다
+            var args = VideoEffects.PreviewArguments(ScanLine.Def).ToList();
+            Assert.Equal(VideoEffects.PreviewSource, args[args.IndexOf("-i") + 1]);
+            Assert.Equal("lavfi", args[args.IndexOf("-i") - 1]);
+            var source = VideoEffects.PreviewSource;
+            Assert.StartsWith("color=c=black:s=128x72:r=10:d=0.1,format=gbrp,geq=r='", source);
+            Assert.EndsWith(",tpad=stop_mode=clone:stop_duration=1.4", source);
+            Assert.DoesNotContain("drawbox", source);
+            foreach (var banned in new[] { "st(", "ld(", "random", "time(" })
+                Assert.DoesNotContain(banned, source);
+            // 모든 효과가 같은 바탕에 그린다
+            foreach (var def in VideoEffects.All)
+                Assert.Contains(source, VideoEffects.PreviewArguments(def));
+
+            // 캐시 이름: 바탕이 바뀌었으니 예전 판(fx1, 바탕이 이름에 없었다)의 이름과 다르다 — 예전 썸네일 파일을 다시 쓰지 않는다
+            foreach (var def in VideoEffects.All)
+            {
+                var old = "fx1|" + VideoEffects.PreviewWidth + "x" + VideoEffects.PreviewHeight + "|" + def.Id + "|" + def.Version + "|"
+                    + string.Join(",", def.Params.Select(p => p.Key + "=" + RenderGraph.N(p.Default) + (p.DefaultColor ?? "")))
+                    + "|" + string.Join(",", def.PreviewValues.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => v.Key + "=" + RenderGraph.N(v.Value)));
+                using (var sha = System.Security.Cryptography.SHA256.Create())
+                {
+                    var oldKey = BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(old))).Replace("-", "").Substring(0, 24).ToLowerInvariant();
+                    Assert.NotEqual(oldKey, VideoEffects.PreviewKey(def));
+                }
+            }
+            // 효과마다 다른 이름
+            Assert.Equal(VideoEffects.All.Count, VideoEffects.All.Select(VideoEffects.PreviewKey).Distinct().Count());
+        }
+
+        [Fact]
+        public void Groups_FollowTheCatalogOrder()
+        {
+            // 효과 탭의 묶음 제목·묶음 고르기 차례: 목록에 처음 나오는 차례, 겹치지 않음, 모든 효과의 묶음이 들어 있음
+            var groups = VideoEffects.Groups();
+            Assert.Equal(groups.Count, groups.Distinct().Count());
+            Assert.Equal(ScanLine.Def.Group, groups[0]);
+            Assert.All(VideoEffects.All, d => Assert.Contains(d.Group, groups));
+            var firstSeen = VideoEffects.All.Select(d => d.Group).Distinct().ToList();
+            Assert.Equal(firstSeen, groups);
+        }
     }
 }

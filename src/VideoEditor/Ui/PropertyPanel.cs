@@ -414,7 +414,7 @@ namespace VideoEditor.Ui
                     _updating = was;
                 }
                 empty.Visibility = effects.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-                var personal = effects.Any(e => e != null && e.PersonOnly && VideoEffects.Find(e.Id) != null);
+                var personal = effects.Any(e => e != null && e.PersonOnly && VideoEffects.Find(e.Id)?.AllowsPersonOnly == true);
                 maskBox.Visibility = personal ? Visibility.Visible : Visibility.Collapsed;
                 if (personal)
                     ShowMask(false);
@@ -452,7 +452,15 @@ namespace VideoEditor.Ui
             head.Children.Add(remove);
             var title = Section(def?.Name ?? "알 수 없는 효과(" + effectId + ")");
             title.ToolTip = def?.Description;
+            DockPanel.SetDock(title, Dock.Left);
             head.Children.Add(title);
+            // 이름 옆에 작게 묶음(효과 탭의 묶음 제목과 같은 이름) — 어느 갈래의 효과인지
+            var group = UiKit.Label(def?.Group ?? "", true);
+            group.FontSize = 11;
+            group.Margin = new Thickness(6, 1, 4, 0);
+            group.ToolTip = def?.Description;
+            AutomationProperties.SetAutomationId(group, "EffectGroup" + index);
+            head.Children.Add(group);
             box.Children.Add(head);
             if (def == null)
             {
@@ -487,6 +495,9 @@ namespace VideoEditor.Ui
                     element.ToolTip = param.Hint;
                 box.Children.Add(row);
             }
+            // 그림 전체를 움직이는 효과(흔들림·줌)는 사람 자리만 따로 움직일 수 없어 [사람에게만]이 없다
+            if (!def.AllowsPersonOnly)
+                return box;
             var person = new CheckBox { Content = "사람에게만", VerticalAlignment = VerticalAlignment.Center, ToolTip = "원본의 인물 마스크가 있으면 사람 자리에만 칠합니다(없으면 클립 전체)." };
             AutomationProperties.SetAutomationId(person, index == 0 ? "EffectPersonOnly" : "EffectPersonOnly" + index);
             person.Click += (s, e) =>

@@ -302,6 +302,36 @@ namespace VideoEditor.Tests
             Assert.True(rightMax < 90);
         }
 
+        public static IEnumerable<object[]> EffectIds()
+        {
+            return VideoEffects.All.Select(d => new object[] { d.Id });
+        }
+
+        [Theory]
+        [MemberData(nameof(EffectIds))]
+        public void Effect_EndsWithTheClip_NoExtraFrameOverTheGap(string id)
+        {
+            if (FfmpegMedia.Tool == null)
+                return;
+            // 한 장 그림을 tpad로 늘인 효과 그림은 한 장이 길어, 클립이 끝난 뒤 빈 곳에 한 장이 더 보였다(이어 그리기만 — 한 장 그리기와도 달랐다)
+            var project = NewProject(magnetic: false);
+            var clip = Add(project, project.MainTrack, DarkImage, 0, 30);
+            Add(project, project.MainTrack, DarkImage, 45, 15);
+            clip.Effects = new List<ClipEffect> { VideoEffects.Create(VideoEffects.Find(id)) };
+            var frames = Render(project, 25, 35);
+            long Rgb(byte[] bgra, int frame)
+            {
+                long sum = 0;
+                for (var i = frame * Width * Height * 4; i < (frame + 1) * Width * Height * 4; i += 4)
+                    sum += bgra[i] + bgra[i + 1] + bgra[i + 2];
+                return sum;
+            }
+            Assert.True(Rgb(frames, 4) > 0, "마지막 장(29)에는 클립이 보여야 합니다");
+            for (var f = 5; f < 10; f++)
+                Assert.True(Rgb(frames, f) == 0, id + ": 클립이 끝난 뒤 " + (25 + f) + "번째 장에 그림이 남았습니다(" + Rgb(frames, f) + ")");
+            Assert.Equal(0, Rgb(Render(project, 30, 31), 0));
+        }
+
         [FfmpegFact]
         public void ClipAlpha_IsKept_TransparentPartsShowTheTrackBelow()
         {
@@ -451,6 +481,33 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
+        public void PreviewSource_IsTexturedHighContrastAndStill()
+        {
+            // 썸네일 바탕: 15장이 모두 같고(정지 — 움직임은 효과만), 어두운 사람 실루엣·밝은 해·흑백 바둑판·격자·왼쪽이 어두운 하늘이 있다
+            int w = VideoEffects.PreviewWidth, h = VideoEffects.PreviewHeight, size = w * h * 3;
+            var bytes = FfmpegRunner.RunBytes(FfmpegMedia.Tool.FfmpegPath,
+                new[] { "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", VideoEffects.PreviewSource, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1" },
+                TimeSpan.FromSeconds(30), CancellationToken.None).GetAwaiter().GetResult();
+            Assert.Equal(VideoEffects.PreviewFrames * size, bytes.Length);
+            for (var frame = 1; frame < VideoEffects.PreviewFrames; frame++)
+                Assert.True(bytes.AsSpan(frame * size, size).SequenceEqual(bytes.AsSpan(0, size)), "장 " + frame);
+            int Luma(int x, int y)
+            {
+                var i = (y * w + x) * 3;
+                return (bytes[i] * 3 + bytes[i + 1] * 6 + bytes[i + 2]) / 10;
+            }
+            // 실루엣(머리·어깨)은 거의 검고, 해는 아주 밝다
+            Assert.True(Luma((int)(0.4 * w), (int)(0.35 * h)) < 20, "머리 " + Luma((int)(0.4 * w), (int)(0.35 * h)));
+            Assert.True(Luma((int)(0.4 * w), h - 3) < 20, "어깨 " + Luma((int)(0.4 * w), h - 3));
+            Assert.True(Luma((int)(0.79 * w), (int)(0.3 * h)) > 220, "해 " + Luma((int)(0.79 * w), (int)(0.3 * h)));
+            // 바닥 바둑판: 이웃 칸의 밝기 차가 크다(흔들림·글리치가 잘 보이게)
+            Assert.True(Math.Abs(Luma(w - 12, h - 4) - Luma(w - 4, h - 4)) > 80, "바둑판 " + Luma(w - 12, h - 4) + " / " + Luma(w - 4, h - 4));
+            // 하늘의 격자 줄은 바로 옆보다 밝고, 하늘은 왼쪽이 오른쪽보다 어둡다(어둠에 반응하는 효과용)
+            Assert.True(Luma(12, 30) > Luma(14, 30) + 15, "격자 " + Luma(12, 30) + " / " + Luma(14, 30));
+            Assert.True(Luma(4, 40) + 30 < Luma(w - 6, 40), "하늘 " + Luma(4, 40) + " / " + Luma(w - 6, 40));
+        }
+
+        [FfmpegFact]
         public void Cost_At1080p_StaysWithinBudget()
         {
             // 1080p 내보내기 그래프 2초(60장)를 -f null로: 효과 없이 / 스캔 라인(기본값, 떨림 포함) / 떨림 없이 — 장당 늘어난 시간
@@ -464,7 +521,8 @@ namespace VideoEditor.Tests
             double Measure()
             {
                 var best = double.MaxValue;
-                for (var run = 0; run < 2; run++)
+                // 다른 FFmpeg 시험과 함께 돌면 흔들리므로 세 번 재 가장 빠른 값으로
+                for (var run = 0; run < 3; run++)
                 {
                     var plan = RenderGraph.Build(project, new RenderOptions { From = 0, To = 60, Width = 1920, Height = 1080, Audio = false, TempFolder = RenderEnvironment.TempFolder(), FfmpegMajor = tool.MajorVersion });
                     var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "null", "-" }, out var script);
