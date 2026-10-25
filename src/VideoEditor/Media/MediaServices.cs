@@ -24,7 +24,31 @@ namespace VideoEditor.Media
             var info = FfmpegText.ParseProbe(path, result.Output);
             if (info == null)
                 throw new FfmpegException("동영상·오디오·이미지가 아닙니다: " + Path.GetFileName(path), result.Error);
+            try
+            {
+                var file = new FileInfo(path);
+                info.FileSize = file.Length;
+                info.FileTime = file.LastWriteTimeUtc.Ticks;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                // 크기를 못 읽으면 다음에 다시 읽는다
+            }
             return info;
+        }
+
+        /// <summary>읽은 뒤 파일이 바뀌었는지(크기·고친 시각, 모르면 바뀐 것으로). 파일이 없으면 false.</summary>
+        public static bool IsStale(MediaInfo media)
+        {
+            try
+            {
+                var file = new FileInfo(media.Path);
+                return file.Exists && (media.FileSize == 0 || file.Length != media.FileSize || file.LastWriteTimeUtc.Ticks != media.FileTime);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
+            {
+                return false;
+            }
         }
     }
 

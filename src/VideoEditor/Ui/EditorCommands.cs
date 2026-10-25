@@ -696,8 +696,9 @@ namespace VideoEditor.Ui
             var failed = new List<string>();
             foreach (var path in paths)
             {
+                // 이미 있는 미디어는 그대로 — 파일을 바꿔 넣었으면(같은 이름의 다른 사진) 다시 읽는다
                 var known = Project.FindMedia(path);
-                if (known != null)
+                if (known != null && !MediaProbe.IsStale(known))
                 {
                     infos.Add(known);
                     continue;
@@ -723,8 +724,11 @@ namespace VideoEditor.Ui
             {
                 foreach (var info in infos)
                 {
-                    if (p.FindMedia(info.Path) == null)
+                    var existing = p.FindMedia(info.Path);
+                    if (existing == null)
                         p.Media.Add(info);
+                    else if (!ReferenceEquals(existing, info))
+                        existing.CopyFrom(info);
                 }
                 var firstVideo = infos.FirstOrDefault(i => i.Kind == MediaKind.Video);
                 if (firstVideo != null && Core.ProjectSettings.AdoptFirstVideo(p, firstVideo))
@@ -1087,11 +1091,50 @@ namespace VideoEditor.Ui
                 _session.Open(path);
                 var missing = Project.Media.Count(m => !File.Exists(m.Path));
                 Status("열었습니다: " + path + (missing > 0 ? " — 찾을 수 없는 미디어 " + missing + "개" : ""));
+                _ = RefreshMediaAsync();
             }
             catch (Exception ex)
             {
                 UiKit.Inform(_owner, "프로젝트 열기", "열지 못했습니다: " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// 연 프로젝트의 미디어 가운데 읽은 뒤 바뀐 파일(같은 이름으로 바꿔 넣은 사진 등)을 다시 읽어 크기·길이를 고친다 —
+        /// 미디어 패널·미리 보기 틀이 낡은 크기를 보이지 않게. 실행 취소에는 남기지 않는다.
+        /// </summary>
+        private async Task RefreshMediaAsync()
+        {
+            var tool = _services.Tool ?? await _services.LocateAsync();
+            var project = Project;
+            if (tool == null)
+                return;
+            var fresh = new List<MediaInfo>();
+            foreach (var media in project.Media.ToList())
+            {
+                if (!MediaProbe.IsStale(media))
+                    continue;
+                try
+                {
+                    fresh.Add(await MediaProbe.Probe(tool, media.Path, CancellationToken.None));
+                }
+                catch (Exception)
+                {
+                    // 읽지 못한 파일은 그대로 둔다(미디어가 아닌 것으로 바뀜 등)
+                }
+            }
+            // 그사이 다른 프로젝트를 열었으면 버린다
+            if (fresh.Count == 0 || !ReferenceEquals(project, Project))
+                return;
+            var resized = fresh.Where(f => project.FindMedia(f.Path) is MediaInfo old && (old.Width != f.Width || old.Height != f.Height || Math.Abs(old.DurationSeconds - f.DurationSeconds) > 0.05))
+                .Select(f => Path.GetFileName(f.Path)).ToList();
+            _session.Refresh(p =>
+            {
+                foreach (var info in fresh)
+                    p.FindMedia(info.Path)?.CopyFrom(info);
+            });
+            if (resized.Count > 0)
+                Status("바뀐 미디어 " + resized.Count + "개의 크기·길이를 다시 읽었습니다: " + string.Join(", ", resized.Take(5)) + (resized.Count > 5 ? " 외" : ""));
         }
 
         public bool Save()

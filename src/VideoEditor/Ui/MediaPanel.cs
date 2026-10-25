@@ -228,9 +228,13 @@ namespace VideoEditor.Ui
                 : media.Kind == MediaKind.Audio ? "오디오 · " + Duration(media.DurationSeconds)
                 : "동영상 · " + Duration(media.DurationSeconds) + " · " + media.Width + "×" + media.Height + (media.HasAudio ? "" : " · 소리 없음");
             var used = _session.Project.AllClips.Any(c => string.Equals(c.Path, media.Path, StringComparison.OrdinalIgnoreCase));
-            text.Children.Add(UiKit.Label(info + (used ? " · 사용 중" : ""), true));
+            // 화면과 비율이 다르면 알린다(맞춤이면 빈 곳, 채우기면 잘리는 곳)
+            var differs = media.AspectDiffers(_session.Project.Width, _session.Project.Height);
+            text.Children.Add(UiKit.Label(info + (differs ? " · 화면과 비율 다름" : "") + (used ? " · 사용 중" : ""), true));
             row.Children.Add(text);
-            row.ToolTip = media.Path;
+            row.ToolTip = media.Path + (differs
+                ? "\n화면(" + _session.Project.Width + "×" + _session.Project.Height + ")과 비율이 달라 [화면에 맞춤]이면 빈 곳이, [화면 채우기]면 잘리는 곳이 생깁니다.\n클립 오른쪽 메뉴 [화면 맞춤 방식]에서 고르세요."
+                : "");
             return row;
         }
 

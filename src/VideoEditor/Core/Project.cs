@@ -30,9 +30,38 @@ namespace VideoEditor.Core
         public string AudioCodec { get; set; }
         /// <summary>오디오 채널 수(0 = 모름).</summary>
         public int AudioChannels { get; set; }
+        /// <summary>읽을 때의 파일 크기·고친 시각(UTC 틱) — 같은 이름으로 파일을 바꿔 넣었는지 알아보려고(0 = 모름, 예전 프로젝트).</summary>
+        public long FileSize { get; set; }
+        public long FileTime { get; set; }
 
         [JsonIgnore]
         public string Name { get { return System.IO.Path.GetFileName(Path); } }
+
+        /// <summary>다시 읽은 정보로 바꾼다(경로는 그대로).</summary>
+        public void CopyFrom(MediaInfo other)
+        {
+            Kind = other.Kind;
+            DurationSeconds = other.DurationSeconds;
+            Width = other.Width;
+            Height = other.Height;
+            FrameRate = other.FrameRate;
+            HasVideo = other.HasVideo;
+            HasAudio = other.HasAudio;
+            VideoCodec = other.VideoCodec;
+            AudioCodec = other.AudioCodec;
+            AudioChannels = other.AudioChannels;
+            FileSize = other.FileSize;
+            FileTime = other.FileTime;
+        }
+
+        /// <summary>화면(프로젝트) 비율과 3% 넘게 다른 그림인지 — 맞춤이면 빈 곳, 채우기면 잘리는 곳이 생긴다.</summary>
+        public bool AspectDiffers(int width, int height)
+        {
+            if (Kind == MediaKind.Audio || Width <= 0 || Height <= 0 || width <= 0 || height <= 0)
+                return false;
+            var ratio = ((double)Width / Height) / ((double)width / height);
+            return ratio > 1.03 || ratio < 1 / 1.03;
+        }
     }
 
     public enum TrackKind

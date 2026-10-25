@@ -1,3 +1,4 @@
+using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -110,6 +111,53 @@ namespace VideoEditor.Tests
             Assert.True(fit.R < 30, "맞춤은 빈 곳 " + fit);
             Assert.True(fill.R > 200 && fill.B < 60, "채우기 " + fill);
             Assert.True(stretch.R > 200 && stretch.B < 60, "늘이기 " + stretch);
+        }
+    }
+
+    /// <summary>미디어 정보 다시 읽기: 바꿔 넣은 파일 알아보기, 다시 읽은 값 옮기기, 화면과 비율 비교.</summary>
+    public class MediaRefreshTests
+    {
+        [Fact]
+        public void AspectDiffers_BeyondThreePercent()
+        {
+            var landscape = new MediaInfo { Kind = MediaKind.Image, Width = 1376, Height = 768 };
+            Assert.True(landscape.AspectDiffers(1080, 1920));
+            Assert.False(landscape.AspectDiffers(1920, 1080));
+            Assert.False(new MediaInfo { Kind = MediaKind.Image, Width = 768, Height = 1376 }.AspectDiffers(1080, 1920));
+            Assert.False(new MediaInfo { Kind = MediaKind.Audio }.AspectDiffers(1080, 1920));
+        }
+
+        [Fact]
+        public void CopyFrom_KeepsPath()
+        {
+            var old = new MediaInfo { Path = "a.png", Kind = MediaKind.Image, Width = 768, Height = 1376 };
+            old.CopyFrom(new MediaInfo { Path = "b.png", Kind = MediaKind.Image, Width = 1376, Height = 768, FileSize = 10, FileTime = 20 });
+            Assert.Equal(("a.png", 1376, 768, 10L, 20L), (old.Path, old.Width, old.Height, old.FileSize, old.FileTime));
+        }
+
+        [FfmpegFact]
+        public void Probe_RemembersFile_AndNoticesReplacement()
+        {
+            var folder = Path.Combine(Path.GetTempPath(), "fv-refresh-" + System.Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try
+            {
+                var photo = Path.Combine(folder, "scene.png");
+                File.Copy(FfmpegMedia.RedImage, photo);
+                var info = FfmpegMedia.Probe(photo);
+                Assert.True(info.FileSize > 0 && info.FileTime > 0);
+                Assert.False(MediaProbe.IsStale(info));
+                // 예전 프로젝트(크기·시각 모름)는 바뀐 것으로 보고 다시 읽는다
+                Assert.True(MediaProbe.IsStale(new MediaInfo { Path = photo }));
+                // 같은 이름으로 다른 그림을 넣으면 알아본다, 파일이 없으면 바뀐 것이 아니다
+                File.WriteAllBytes(photo, File.ReadAllBytes(FfmpegMedia.RedImage).Concat(new byte[16]).ToArray());
+                Assert.True(MediaProbe.IsStale(info));
+                Assert.False(MediaProbe.IsStale(new MediaInfo { Path = Path.Combine(folder, "없음.png") }));
+            }
+            finally
+            {
+                Directory.Delete(folder, true);
+            }
         }
     }
 
