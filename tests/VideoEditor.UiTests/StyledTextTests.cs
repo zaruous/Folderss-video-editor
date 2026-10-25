@@ -1259,6 +1259,210 @@ namespace VideoEditor.UiTests
             ((IDisposable)rasterizer).Dispose();
         }
 
+        // ---------- 글자 상자(줄 나눔·세로 정렬) ----------
+
+        /// <summary>글자 상자를 정한 요청: <see cref="Request"/>에 상자 너비(WrapWidth)·높이(BoxHeight)·세로 정렬(VerticalAlign — 이름)을 더한다.</summary>
+        private static object BoxRequest(object rasterizer, string text, double wrapWidth, double boxHeight = 0, string align = null, double fontSize = 80, string style = null,
+            int canvasWidth = 1920, int canvasHeight = 1080)
+        {
+            var request = Request(rasterizer, text, canvasWidth, canvasHeight, fontSize, style);
+            var type = request.GetType();
+            type.GetProperty("WrapWidth").SetValue(request, wrapWidth);
+            type.GetProperty("BoxHeight").SetValue(request, boxHeight);
+            if (align != null)
+                type.GetProperty("VerticalAlign").SetValue(request, Enum.Parse(type.GetProperty("VerticalAlign").PropertyType, align));
+            return request;
+        }
+
+        /// <summary>그리개의 재기(<c>MeasureBox</c>): 상자 너비·높이와 글 높이(fontSize와 같은 단위).</summary>
+        private static (double Width, double Height, double TextHeight) MeasureBox(object rasterizer, string text, object style, double fontSize, double boxWidth, double boxHeight)
+        {
+            var result = rasterizer.GetType().GetMethod("MeasureBox").Invoke(null, new[] { text, style, fontSize, boxWidth, (object)boxHeight });
+            var type = result.GetType();
+            return ((double)type.GetField("Item1").GetValue(result), (double)type.GetField("Item2").GetValue(result), (double)type.GetField("Item3").GetValue(result));
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WrapWidth_WrapsAtSpacesInsideTheBox()
+        {
+            var rasterizer = NewRasterizer();
+            const string text = "가나다라 마바사 아자차카 타파하 가나다라 마바사 아자차카 타파하";
+            var single = await Render(rasterizer, Request(rasterizer, text, 1920, 1080), "box-none");
+            var wrapped = await Render(rasterizer, BoxRequest(rasterizer, text, 600), "box-wrap-600");
+            var singleBands = InkBands(single);
+            var bands = InkBands(wrapped);
+            _out.WriteLine("상자 없음 " + single.Width + "×" + single.Height + " · 토막 " + singleBands.Count + " / 너비 600 " + wrapped.Width + "×" + wrapped.Height + " · 토막 " + string.Join(" ", bands.Select(b => b.Top + "~" + b.Bottom)));
+            Assert.Single(singleBands);
+            // 여덟 낱말(한 줄에 둘)이 네 줄로, PNG 폭 = 상자 + 가장자리 여백(1px씩), 칠한 곳은 상자 안
+            Assert.Equal(4, bands.Count);
+            Assert.Equal(602, wrapped.Width);
+            var (left, right) = wrapped.Extent(0, wrapped.Height);
+            Assert.True(left >= 1 && right <= 600, "칠한 폭 " + left + "~" + right);
+            Assert.Equal(0, wrapped.BorderInk());
+
+            // 한국어는 빈칸에서 나눈다: "가나다라마바 사아"(480 + 빈칸 + 160 > 600)는 첫 줄이 "가나다라마바"뿐이다 —
+            // 글자 단위로 나눴다면 첫 줄에 "사"까지 들어가(약 585px) 더 넓다
+            var words = await Render(rasterizer, BoxRequest(rasterizer, "가나다라마바 사아", 600, style: "\"Align\":\"Left\""), "box-wrap-words");
+            var wordBands = InkBands(words);
+            Assert.Equal(2, wordBands.Count);
+            var first = words.Extent(wordBands[0].Top, wordBands[0].Bottom + 1);
+            var second = words.Extent(wordBands[1].Top, wordBands[1].Bottom + 1);
+            _out.WriteLine("첫 줄 " + first + " · 둘째 줄 " + second);
+            Assert.InRange(first.Right - first.Left, 440, 500);
+            Assert.InRange(second.Right - second.Left, 130, 175);
+            // 나눈 자리의 빈칸은 둘째 줄 앞에 남지 않는다(왼쪽 맞춤 — 두 줄의 왼쪽 끝이 같다)
+            Assert.InRange(second.Left - first.Left, -3, 3);
+
+            // 자간이 있어도(글자 단위 조각) 상자 안에서 나눈다 — 줄이 더 많아진다
+            var spaced = await Render(rasterizer, BoxRequest(rasterizer, text, 600, style: "\"LetterSpacing\":200"), "box-wrap-spaced");
+            var spacedBands = InkBands(spaced);
+            var spacedExtent = spaced.Extent(0, spaced.Height);
+            _out.WriteLine("자간 200 토막 " + spacedBands.Count + " · 칠한 폭 " + spacedExtent);
+            Assert.True(spacedBands.Count > bands.Count);
+            Assert.True(spacedExtent.Left >= 1 && spacedExtent.Right <= 600);
+            Assert.Equal(0, spaced.BorderInk());
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WrapWidth_AlignsInsideTheBox()
+        {
+            var rasterizer = NewRasterizer();
+            // 두 줄 "가나다라마바" / "사아" — 상자(600)는 두 줄보다 넓다
+            const string text = "가나다라마바 사아";
+            var pngs = new System.Collections.Generic.Dictionary<string, Png>();
+            foreach (var align in new[] { "Left", "Center", "Right" })
+                pngs[align] = await Render(rasterizer, BoxRequest(rasterizer, text, 600, style: "\"Align\":\"" + align + "\""), "box-align-" + align);
+            (int Left, int Right) Line(Png png, int index)
+            {
+                var band = InkBands(png)[index];
+                return png.Extent(band.Top, band.Bottom + 1);
+            }
+            foreach (var pair in pngs)
+                _out.WriteLine(pair.Key + " " + pair.Value.Width + " · " + Line(pair.Value, 0) + " / " + Line(pair.Value, 1));
+            // 상자가 PNG 폭(602)을 정한다 — 정렬은 그 상자 안에서
+            Assert.All(pngs.Values, p => Assert.Equal(602, p.Width));
+            var left = pngs["Left"];
+            Assert.InRange(Line(left, 0).Left, 1, 15);
+            Assert.InRange(Line(left, 1).Left - Line(left, 0).Left, -3, 3);
+            var right = pngs["Right"];
+            Assert.InRange(Line(right, 0).Right, 586, 600);
+            Assert.InRange(Line(right, 1).Right - Line(right, 0).Right, -3, 3);
+            var center = pngs["Center"];
+            foreach (var index in new[] { 0, 1 })
+            {
+                var line = Line(center, index);
+                Assert.InRange(line.Left + line.Right - center.Width, -6, 6);
+            }
+        }
+
+        [UiFact]
+        public async Task Rasterizer_ZeroBox_ByteIdenticalToNoBoxFields()
+        {
+            var rasterizer = NewRasterizer();
+            const string text = "가나다 ABC\n두 번째 줄  ";
+            foreach (var (name, style) in new[] { ("plain", (string)null), ("effects", Outline(6, "Miter") + "," + Shadow(10, 45, 6) + ",\"Align\":\"Right\""), ("warp", Warp("ArchUp", 60)), ("spaced", "\"LetterSpacing\":300") })
+            {
+                await Render(rasterizer, Request(rasterizer, text, style: style), "box-zero-base-" + name);
+                await Render(rasterizer, BoxRequest(rasterizer, text, 0, 0, "Bottom", style: style, canvasWidth: 1280, canvasHeight: 720), "box-zero-" + name);
+                var expected = File.ReadAllBytes(Path.Combine(Folder(), "box-zero-base-" + name + ".png"));
+                Assert.True(expected.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "box-zero-" + name + ".png"))), name + ": 상자 0/0이 그림을 바꿨다");
+            }
+            // 상자를 정하면 다르다(비교가 헛돌지 않는지)
+            await Render(rasterizer, BoxRequest(rasterizer, text, 300, canvasWidth: 1280, canvasHeight: 720), "box-zero-on");
+            Assert.False(File.ReadAllBytes(Path.Combine(Folder(), "box-zero-base-plain.png")).AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "box-zero-on.png"))));
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WordWiderThanTheBox_BreaksInside()
+        {
+            var rasterizer = NewRasterizer();
+            // 빈칸 없는 14글자(약 1,120px)를 500px 상자에: 글자 단위로 들어가는 만큼씩(6·6·2) 세 줄, 모두 상자 안
+            var png = await Render(rasterizer, BoxRequest(rasterizer, "가나다라마바사아자차카타파하", 500, style: "\"Align\":\"Left\""), "box-long-word");
+            var bands = InkBands(png);
+            _out.WriteLine(png.Width + "×" + png.Height + " · 토막 " + string.Join(" ", bands.Select(b => b.Top + "~" + b.Bottom + " " + png.Extent(b.Top, b.Bottom + 1))));
+            Assert.Equal(3, bands.Count);
+            Assert.Equal(502, png.Width);
+            Assert.True(png.Extent(0, png.Height).Right <= 500);
+            var last = png.Extent(bands[2].Top, bands[2].Bottom + 1);
+            Assert.InRange(last.Right - last.Left, 130, 175);
+            // 오른쪽→왼쪽 글자가 든 줄도 빈칸에서 나눠 그린다(줄마다 통째로)
+            var rtl = await Render(rasterizer, BoxRequest(rasterizer, "שלום עולם שלום עולם مرحبا بالعالم", 400), "box-rtl");
+            Assert.True(InkBands(rtl).Count >= 2);
+            Assert.True(rtl.Extent(0, rtl.Height).Right <= 400);
+            Assert.Equal(0, rtl.BorderInk());
+        }
+
+        [UiFact]
+        public async Task Rasterizer_BoxHeight_PlacesTheTextTopMiddleBottom()
+        {
+            var rasterizer = NewRasterizer();
+            // 흰 "■"(100px, 줄 높이 120) 하나를 높이 500 상자에: 위·가운데·아래가 (500 - 120) / 2 = 190px씩 내려간다
+            var tops = new System.Collections.Generic.Dictionary<string, int>();
+            foreach (var align in new[] { "Top", "Middle", "Bottom" })
+            {
+                var png = await Render(rasterizer, BoxRequest(rasterizer, "■", 0, 500, align, 100, WhiteFill), "box-height-" + align);
+                Assert.Equal(502, png.Height);
+                tops[align] = Assert.Single(InkBands(png)).Top;
+            }
+            _out.WriteLine("위 " + tops["Top"] + " · 가운데 " + tops["Middle"] + " · 아래 " + tops["Bottom"]);
+            Assert.InRange(tops["Middle"] - tops["Top"], 189, 191);
+            Assert.InRange(tops["Bottom"] - tops["Middle"], 189, 191);
+            // 위 정렬은 상자 위 끝(PNG 1px 여백) 가까이에서 시작한다
+            Assert.InRange(tops["Top"], 1, 60);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_TextTallerThanTheBox_OverflowsFullyDrawn()
+        {
+            var rasterizer = NewRasterizer();
+            // 다섯 줄(600px)을 높이 150 상자에: 가운데는 위아래로, 위는 아래로 넘쳐 모두 그린다(잘리지 않음)
+            const string text = "가\n나\n다\n라\n마";
+            var middle = await Render(rasterizer, BoxRequest(rasterizer, text, 0, 150, "Middle", 100, WhiteFill), "box-overflow-middle");
+            var top = await Render(rasterizer, BoxRequest(rasterizer, text, 0, 150, "Top", 100, WhiteFill), "box-overflow-top");
+            _out.WriteLine("가운데 " + middle.Width + "×" + middle.Height + " · 위 " + top.Width + "×" + top.Height);
+            Assert.Equal(5, InkBands(middle).Count);
+            Assert.Equal(5, InkBands(top).Count);
+            Assert.Equal(0, middle.BorderInk());
+            Assert.Equal(0, top.BorderInk());
+            // PNG 가운데 = 상자 가운데: 위 정렬의 첫 줄은 상자 위 끝(가운데 - 75) 바로 아래, 아래로 넘친 만큼 PNG가 위아래로 커진다
+            var first = InkBands(top)[0].Top;
+            Assert.InRange(first - (top.Height / 2 - 75), 0, 30);
+            Assert.True(top.Height > middle.Height);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_MeasureBox_EqualsTheBoxDrawUses()
+        {
+            var rasterizer = NewRasterizer();
+            const string text = "가나다라 마바사 아자차카 타파하 가나다라 마바사 아자차카 타파하";
+            var request = BoxRequest(rasterizer, text, 600);
+            var style = Get(request, "Style");
+            // 재기: 너비 = 상자, 높이 = 네 줄 × 80 × 1.2. 그린 PNG는 그 상자 + 가장자리 여백(1px씩, 짝수로 올림) — 칠한 곳이 상자 안이라 상자가 PNG 크기를 정한다
+            var box = MeasureBox(rasterizer, text, style, 80, 600, 0);
+            _out.WriteLine("잰 상자 " + box);
+            Assert.Equal(600, box.Width, 6);
+            Assert.Equal(4 * 80 * 1.2, box.Height, 6);
+            Assert.Equal(box.Height, box.TextHeight, 6);
+            var png = await Render(rasterizer, request, "box-measure");
+            Assert.Equal(602, png.Width);
+            Assert.Equal((int)Math.Ceiling(box.Height + 2) + (int)Math.Ceiling(box.Height + 2) % 2, png.Height);
+            // 높이를 정하면 상자 높이 = 그 값, 글 높이는 그대로(넘침 안내에 씀)
+            var tall = MeasureBox(rasterizer, text, style, 80, 600, 500);
+            Assert.Equal((600.0, 500.0), (tall.Width, tall.Height));
+            Assert.Equal(box.TextHeight, tall.TextHeight, 6);
+            Assert.Equal(502, (await Render(rasterizer, BoxRequest(rasterizer, text, 600, 500), "box-measure-tall")).Height);
+            var low = MeasureBox(rasterizer, text, style, 80, 600, 100);
+            Assert.True(low.TextHeight > low.Height, "넘침");
+            // 프로젝트 픽셀로 재도(글자 크기·상자 절반) 같은 줄 나눔 — 상자도 절반
+            var half = MeasureBox(rasterizer, text, style, 40, 300, 0);
+            Assert.Equal(box.Width / 2, half.Width, 6);
+            Assert.Equal(box.Height / 2, half.Height, 6);
+            // 상자가 없으면 글을 감싼 크기 — 한 줄
+            var auto = MeasureBox(rasterizer, text, style, 80, 0, 0);
+            Assert.True(auto.Width > 1500);
+            Assert.Equal(80 * 1.2, auto.Height, 6);
+        }
+
         // ---------- 화면 ----------
 
         /// <summary>미리 보기 화면의 픽셀(UI 스레드).</summary>

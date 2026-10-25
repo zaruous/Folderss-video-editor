@@ -435,6 +435,69 @@ namespace VideoEditor.Ui
             row.Children.Add(label);
             row.Children.Add(colors);
             panel.Children.Add(row);
+            panel.Children.Add(TextBoxRows(id));
+            return panel;
+        }
+
+        /// <summary>
+        /// [글자] 글자 상자: 너비(줄 나눔)·높이(0~4000px, 0 = 자동)·세로 정렬(위·가운데·아래 — 높이를 정했을 때만)과 넘침 안내.
+        /// 클립의 값이라 스타일을 바꿔도 남는다. 미리 보기 틀의 옆 손잡이로 바꾼 값도 여기에 보인다.
+        /// </summary>
+        private UIElement TextBoxRows(string id)
+        {
+            var panel = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+            panel.Children.Add(NumberRow("상자 너비", "PropTextBoxWidth", 0, 4000, "px", id, c => c.TextBoxWidth, (c, v) => c.TextBoxWidth = ClipLayout.TextBoxLength(v)));
+            panel.Children.Add(NumberRow("상자 높이", "PropTextBoxHeight", 0, 4000, "px", id, c => c.TextBoxHeight, (c, v) => c.TextBoxHeight = ClipLayout.TextBoxLength(v)));
+            // 보이는 순서는 아래 배열(enum 순서에 기대지 않는다)
+            var verticals = new[] { TextVerticalAlign.Top, TextVerticalAlign.Middle, TextVerticalAlign.Bottom };
+            var vertical = new ComboBox();
+            AutomationProperties.SetAutomationId(vertical, "PropTextVerticalAlign");
+            AutomationProperties.SetName(vertical, "세로 정렬");
+            foreach (var name in new[] { "위", "가운데", "아래" })
+                vertical.Items.Add(name);
+            vertical.SelectionChanged += (s, e) =>
+            {
+                if (_updating || vertical.SelectedIndex < 0)
+                    return;
+                var value = verticals[vertical.SelectedIndex];
+                var current = _session.Project.FindClip(id);
+                if (current != null && current.TextVerticalAlign != value)
+                    Edit(id, c => c.TextVerticalAlign = value, null);
+            };
+            var verticalRow = Row("세로 정렬", vertical);
+            panel.Children.Add(verticalRow);
+            var overflow = UiKit.Label("글이 상자보다 깁니다", true);
+            overflow.TextWrapping = TextWrapping.Wrap;
+            overflow.Margin = new Thickness(84, 0, 0, 4);
+            AutomationProperties.SetAutomationId(overflow, "PropTextOverflow");
+            panel.Children.Add(overflow);
+            var hint = UiKit.Label("상자 0 = 자동(너비: 줄을 나누지 않음, 높이: 글 높이). 너비를 정하면 낱말 단위로 줄을 나눕니다. 미리 보기에서 글자를 누르고 틀의 옆 손잡이를 끌어도 됩니다(두 번 누르면 자동).", true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Margin = new Thickness(0, 2, 0, 4);
+            panel.Children.Add(hint);
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                // 값을 보이는 것만으로 편집이 일어나지 않게
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var index = Array.IndexOf(verticals, c.TextVerticalAlign);
+                    vertical.SelectedIndex = index >= 0 ? index : 1;
+                    verticalRow.IsEnabled = c.TextBoxHeight > 0;
+                    // 넘침: 그리개와 같은 배치로 잰 글 높이가 상자보다 높으면(긴 글은 drawtext라 상자를 쓰지 않는다)
+                    var longer = c.TextBoxHeight > 0 && (c.Text ?? "").Length <= RenderGraph.MaxStyledTextLength
+                        && StyledTextRasterizer.MeasureClip(c, c.TextBoxWidth, c.TextBoxHeight).TextHeight > c.TextBoxHeight + 0.5;
+                    overflow.Visibility = longer ? Visibility.Visible : Visibility.Collapsed;
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
             return panel;
         }
 

@@ -110,7 +110,7 @@ namespace VideoEditor.Ui
             AutomationProperties.SetAutomationId(_image, "PreviewImage");
             AutomationProperties.SetName(_image, "미리 보기 화면");
             screen.Children.Add(_image);
-            // 고른 동영상·사진을 미리 보기에서 직접 옮기고 크기를 바꾸는 틀
+            // 미리 보기에서 클립을 눌러 고르고, 고른 동영상·사진·글자를 직접 옮기고 크기(글자는 상자 너비·높이도)를 바꾸는 틀
             var overlay = new TransformOverlay(session, commands, () => player.IsPlaying);
             screen.Children.Add(overlay);
             AutomationProperties.SetAutomationId(_placeholder, "PreviewPlaceholder");

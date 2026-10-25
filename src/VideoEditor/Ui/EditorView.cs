@@ -489,6 +489,7 @@ namespace VideoEditor.Ui
                 + "확대 Ctrl+= · 축소 Ctrl+- · 맞춤 Shift+Z\n"
                 + "새로 Ctrl+N · 열기 Ctrl+O · 저장 Ctrl+S · 다른 이름 Ctrl+Shift+S · 가져오기 Ctrl+I · 내보내기 Ctrl+E\n\n"
                 + "타임라인: 휠 = 가로 이동, Ctrl+휠 = 확대/축소, Shift+휠 = 세로 이동, 끄는 동안 Alt = 붙기 잠시 끔\n"
+                + "미리 보기: 클립을 눌러 고르기, 틀 안 끌기 = 옮기기, 모서리 = 크기, 글자의 옆 손잡이 = 상자 너비·높이(두 번 누르면 자동), 누른 뒤 ←/→/↑/↓ = 1px 옮기기(Shift 10px)\n"
                 + "링크된 영상·사운드: Alt를 누른 채 끌기 시작하면 그 한 번만 그 클립만 옮기거나 다듬습니다");
         }
 
@@ -550,6 +551,13 @@ namespace VideoEditor.Ui
                     case Key.OemCloseBrackets: action = () => _commands.TrimToPlayhead(false); break;
                     case Key.Delete: action = _commands.CloseGap; break;
                 }
+            }
+            else if (!typing && Keyboard.FocusedElement is TransformOverlay overlay && (key == Key.Left || key == Key.Right || key == Key.Up || key == Key.Down)
+                && overlay.Nudge(key == Key.Left ? -1 : key == Key.Right ? 1 : 0, key == Key.Up ? -1 : key == Key.Down ? 1 : 0, shift, e.IsRepeat))
+            {
+                // 미리 보기를 누른 뒤의 화살표: 고른 클립을 1px(Shift 10px) 옮긴다(틀이 없으면 원래대로 프레임·편집점 이동)
+                e.Handled = true;
+                return;
             }
             else if (!typing)
             {
