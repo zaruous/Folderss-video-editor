@@ -20,7 +20,7 @@ namespace VideoEditor.Core
         public bool Preview { get; set; }
         /// <summary>글자 클립에 쓸 글꼴 파일(.ttf/.ttc).</summary>
         public string FontFile { get; set; }
-        /// <summary>글자 클립의 글을 담을 임시 파일 폴더.</summary>
+        /// <summary>글자 클립의 글을 담을 임시 파일 폴더. 꾸민 글자 PNG 캐시는 그 아래 styled-text 폴더.</summary>
         public string TempFolder { get; set; }
         /// <summary>쓰는 FFmpeg 주 버전(0이면 모름) — 이보다 새 버전이 필요한 전환 효과는 디졸브로 그린다.</summary>
         public int FfmpegMajor { get; set; }
@@ -29,6 +29,8 @@ namespace VideoEditor.Core
         /// 멈춘 화면 한 장과 내보내기는 원래 크기.
         /// </summary>
         public bool Playback { get; set; }
+        /// <summary>꾸민 글자를 PNG로 그릴 그리개. null이면 스타일이 있어도 drawtext로 그린다(첫 채우기 색만 반영).</summary>
+        public ITextRasterizer TextRasterizer { get; set; }
     }
 
     /// <summary>FFmpeg에 줄 입력(파일마다 인수 묶음)과 filter_complex. 출력 라벨은 [vout]·[aout].</summary>
@@ -44,6 +46,12 @@ namespace VideoEditor.Core
         public Dictionary<string, string> TextFiles { get; } = new Dictionary<string, string>();
         /// <summary>자막 트랙을 libass(ass 필터)로 입힌다 — FFmpeg에 libass가 있어야 한다.</summary>
         public bool UsesLibass { get; set; }
+        /// <summary>
+        /// 실행 전에 그려 둘 꾸민 글자 PNG — 경로·요청. Build는 그리지 않고 적기만 한다(캐시라서 렌더 뒤에도 지우지 않는다).
+        /// </summary>
+        public Dictionary<string, TextImageRequest> TextImages { get; } = new Dictionary<string, TextImageRequest>();
+        /// <summary><see cref="TextImages"/>를 그릴 그리개.</summary>
+        public ITextRasterizer TextRasterizer { get; set; }
     }
 
     /// <summary>
@@ -53,6 +61,9 @@ namespace VideoEditor.Core
     /// </summary>
     public static class RenderGraph
     {
+        /// <summary>이보다 긴 글은 꾸민 경로 대신 drawtext로 그린다.</summary>
+        public const int MaxStyledTextLength = 2000;
+
         public static RenderPlan Build(Project project, RenderOptions options)
         {
             if (options.To <= options.From)
@@ -296,6 +307,8 @@ namespace VideoEditor.Core
             var segFrames = segEnd - segStart;
             if (clip.Kind == ClipKind.Text)
             {
+                if (clip.Style != null && options.TextRasterizer != null && (clip.Text ?? "").Length <= MaxStyledTextLength)
+                    return StyledText(project, options, plan, clip, segFrames);
                 // 파일 이름에 클립 Id(프로젝트 파일 값)를 쓰지 않는다 — 조작된 Id로 다른 폴더의 파일을 덮어쓰지 못하게
                 var textFile = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "fv-text-" + Guid.NewGuid().ToString("N") + ".txt");
                 plan.TextFiles[textFile] = clip.Text ?? "";
@@ -304,7 +317,7 @@ namespace VideoEditor.Core
                 return string.Format(CultureInfo.InvariantCulture,
                     "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba,drawtext={4}textfile={5}:expansion=none:fontsize={6}:fontcolor={7}:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing={8}",
                     options.Width, options.Height, fps, N(rate.ToSeconds(segFrames)), font, FilterValue(textFile),
-                    N(size), FilterValue(TextColor(clip.TextColor)), N(size * 0.2));
+                    N(size), FilterValue(TextColor(clip.Style?.Fill?.Colors?.FirstOrDefault() ?? clip.TextColor)), N(size * 0.2));
             }
             if (clip.MediaKind == MediaKind.Image)
             {
@@ -328,6 +341,45 @@ namespace VideoEditor.Core
             if (Math.Abs(clip.Speed - 1) > 1e-9)
                 chain += ",setpts=PTS/" + N(clip.Speed);
             return chain + ",fps=" + fps + hold;
+        }
+
+        /// <summary>
+        /// 꾸민 글자: 그리개가 그릴 PNG(캔버스 이하, 가운데 = 글자 배치 상자 가운데)를 이미지처럼 읽어 캔버스 크기 투명 바탕 가운데에 놓는다.
+        /// 그러면 뒤의 공통 체인(맞춤 × 크기 → 회전 → 불투명도 → 가운데 + X/Y)이 drawtext 글자와 똑같이 동작한다.
+        /// </summary>
+        private static string StyledText(Project project, RenderOptions options, RenderPlan plan, Clip clip, long segFrames)
+        {
+            var rate = project.Rate;
+            var k = (double)options.Width / project.Width;
+            // 캔버스가 화소 상한보다 크면(8K 등) 줄여서 그리게 하고 아래에서 키운다 — 그리개가 수백 MB짜리 비트맵을 만들지 않게
+            var shrink = Math.Min(1, Math.Sqrt(StyledTextLayout.MaxPixels / ((double)options.Width * options.Height)));
+            var canvasWidth = shrink < 1 ? Math.Max(2, (int)Math.Floor(options.Width * shrink)) : options.Width;
+            var canvasHeight = shrink < 1 ? Math.Max(2, (int)Math.Floor(options.Height * shrink)) : options.Height;
+            var style = clip.Style.Clone();
+            style.Normalize();
+            var request = new TextImageRequest
+            {
+                Text = clip.Text ?? "",
+                Style = style,
+                FontPixelSize = clip.FontSize * k * shrink,
+                EffectScale = k * shrink,
+                CanvasWidth = canvasWidth,
+                CanvasHeight = canvasHeight
+            };
+            // 파일 이름에는 해시만 쓴다 — 글·클립 Id(프로젝트 파일 값)가 경로에 섞이지 않게
+            var path = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "styled-text", "st-" + request.Key(options.TextRasterizer.Version) + ".png");
+            plan.TextImages[path] = request;
+            plan.TextRasterizer = options.TextRasterizer;
+            // image2 + pattern_type none: 임시 폴더 경로에 %d 같은 글이 있어도 파일 이름 패턴으로 읽지 않게(png_pipe는 이 옵션이 없다)
+            var index = AddInput(plan, "-loop", "1", "-framerate", rate.Rational, "-t", N(rate.ToSeconds(segFrames)), "-f", "image2", "-pattern_type", "none", "-i", path);
+            // 비율은 분수식으로(소수로 반올림하면 1px 모자랄 수 있다)
+            var grow = shrink < 1
+                ? string.Format(CultureInfo.InvariantCulture, ",scale=w='iw*{0}/{1}':h='ih*{2}/{3}'", options.Width, canvasWidth, options.Height, canvasHeight)
+                : "";
+            // 그리개가 캔버스보다 큰 PNG를 주어도 pad가 실패하지 않게 먼저 가운데를 잘라 낸다
+            return string.Format(CultureInfo.InvariantCulture,
+                "[{0}:v]setpts=PTS-STARTPTS,format=rgba{3},crop=w='min(iw,{1})':h='min(ih,{2})',pad=w={1}:h={2}:x=(ow-iw)/2:y=(oh-ih)/2:color=black@0.0",
+                index, options.Width, options.Height, grow);
         }
 
         // ---------- 오디오 ----------
@@ -449,13 +501,15 @@ namespace VideoEditor.Core
             return value.ToString("0.######", CultureInfo.InvariantCulture);
         }
 
-        /// <summary>"#RRGGBB" → FFmpeg 색(0xRRGGBB). 잘못된 값은 흰색.</summary>
+        /// <summary>"#RRGGBB" → FFmpeg 색(0xRRGGBB), "#AARRGGBB" → 0xRRGGBBAA. 잘못된 값은 흰색.</summary>
         internal static string TextColor(string color)
         {
-            if (!string.IsNullOrEmpty(color) && color.Length == 7 && color[0] == '#'
-                && int.TryParse(color.Substring(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out _))
-                return "0x" + color.Substring(1).ToUpperInvariant();
-            return "white";
+            var normalized = TextStyle.NormalizeColor(color, null);
+            if (normalized == null)
+                return "white";
+            if (normalized.Length == 9)
+                return "0x" + normalized.Substring(3) + normalized.Substring(1, 2);
+            return "0x" + normalized.Substring(1);
         }
 
         /// <summary>

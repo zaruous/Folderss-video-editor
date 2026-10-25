@@ -247,6 +247,8 @@ namespace VideoEditor.Tests
             Assert.Equal(FillKind.Solid, style.Fill.Kind);
             Assert.Equal(new[] { "#FF0000" }, style.Fill.Colors);
             Assert.Equal(TextStyle.DefaultFont, style.FontFamily);
+            // 예전 그리기(drawtext)는 여러 줄을 왼쪽 맞춤으로 그렸다
+            Assert.Equal(TextAlign.Left, style.Align);
         }
 
         [Fact]

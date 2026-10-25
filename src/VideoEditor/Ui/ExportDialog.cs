@@ -307,7 +307,7 @@ namespace VideoEditor.Ui
             try
             {
                 var token = _cancel.Token;
-                await Task.Run(() => Exporter.Export(tool, _project, settings, progress, token), token);
+                await Task.Run(() => Exporter.Export(tool, _project, settings, progress, token, _services.TextRasterizer), token);
                 ExportedPath = path;
                 _status.Text = "내보냈습니다: " + path + string.Format(" ({0:0.0}MB, {1:0.0}초)", new FileInfo(path).Length / 1048576.0, watch.Elapsed.TotalSeconds);
                 _openFolder.Visibility = Visibility.Visible;

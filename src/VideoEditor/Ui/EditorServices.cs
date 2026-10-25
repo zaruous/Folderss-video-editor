@@ -38,13 +38,25 @@ namespace VideoEditor.Ui
         // 썸네일·파형 FFmpeg를 한꺼번에 수십 개 띄우지 않게
         private static readonly SemaphoreSlim PictureGate = new SemaphoreSlim(3);
 
+        private readonly Lazy<StyledTextRasterizer> _textRasterizer = new Lazy<StyledTextRasterizer>(() => new StyledTextRasterizer());
+
         public EditorServices(IPluginManager manager)
         {
             Manager = manager;
             LoadTransitions();
+            // 앞서 끝난 실행이 남긴 꾸민 글자 PNG 캐시를 치운다(살아 있는 실행의 폴더는 건드리지 않음).
+            // 시스템 글꼴 목록도 미리 읽어 둔다 — 처음 글자 클립을 고를 때 UI 스레드가 멈추지 않게
+            Task.Run(() =>
+            {
+                TextImageCache.Cleanup(RenderEnvironment.TempRoot());
+                _ = StyledTextRasterizer.Fonts;
+            });
         }
 
         public IPluginManager Manager { get; }
+
+        /// <summary>꾸민 글자 그리개 — 편집 창이 여러 개여도 하나(그리기 스레드 하나)를 같이 쓴다.</summary>
+        public ITextRasterizer TextRasterizer { get { return _textRasterizer.Value; } }
 
         /// <summary>찾은 FFmpeg(없으면 null).</summary>
         public FfmpegTool Tool { get; private set; }
