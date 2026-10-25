@@ -436,7 +436,7 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// [꾸미기] 꾸민 글자 스타일 — 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬), 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도),
-        /// 윤곽선 묶음(켜기·색·두께·이음).
+        /// 윤곽선 묶음(켜기·색·두께·이음), 그림자 묶음(켜기·색·거리·방향·흐림·불투명도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
         /// </summary>
         private UIElement StyleTab(string id)
@@ -646,6 +646,51 @@ namespace VideoEditor.Ui
                 }
             });
 
+            // 그림자: 켜기 · 색 · 거리(0~200px) · 방향(0~360°, 0° = 오른쪽, 시계 방향) · 흐림(0~100) · 불투명도(0~100%) — 켰을 때만 고친다
+            panel.Children.Add(Section("그림자"));
+            var shadowOn = new CheckBox { Content = "그림자 그리기", VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetAutomationId(shadowOn, "StyleShadowOn");
+            shadowOn.Click += (s, e) => Edit(id, c => ShadowOf(c).Enabled = shadowOn.IsChecked == true, null);
+            panel.Children.Add(Row("그림자", shadowOn));
+            var shadowColor = UiKit.ColorRow("색", "StyleShadowColor",
+                () => _session.Project.FindClip(id)?.Style?.Shadow?.Color ?? "#000000",
+                hex => Edit(id, c => ShadowOf(c).Color = hex, null));
+            panel.Children.Add(shadowColor);
+            var shadowRows = new[]
+            {
+                NumberRow("거리", "StyleShadowDistance", 0, 200, "px", id,
+                    c => c.Style?.Shadow?.Distance ?? 6, (c, v) => ShadowOf(c).Distance = Math.Max(0, Math.Min(200, v))),
+                NumberRow("방향", "StyleShadowAngle", 0, 360, "°", id,
+                    c => c.Style?.Shadow?.Angle ?? 45, (c, v) => ShadowOf(c).Angle = Math.Max(0, Math.Min(360, v))),
+                NumberRow("흐림", "StyleShadowBlur", 0, 100, "px", id,
+                    c => c.Style?.Shadow?.Blur ?? 6, (c, v) => ShadowOf(c).Blur = Math.Max(0, Math.Min(100, v))),
+                NumberRow("불투명도", "StyleShadowOpacity", 0, 100, "%", id,
+                    c => (c.Style?.Shadow?.Opacity ?? 0.6) * 100, (c, v) => ShadowOf(c).Opacity = Math.Max(0, Math.Min(1, v / 100)))
+            };
+            foreach (var row in shadowRows)
+                panel.Children.Add(row);
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var on = c.Style?.Shadow?.Enabled == true;
+                    shadowOn.IsChecked = on;
+                    shadowColor.Refresh();
+                    shadowColor.IsEnabled = on;
+                    foreach (var row in shadowRows)
+                        row.IsEnabled = on;
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
+
             _refreshers.Add(() =>
             {
                 var c = _session.Project.FindClip(id);
@@ -691,6 +736,12 @@ namespace VideoEditor.Ui
         private static TextOutline OutlineOf(Clip clip)
         {
             return StyleOf(clip).Outline ??= new TextOutline();
+        }
+
+        /// <summary>고칠 클립의 그림자(스타일·그림자가 없으면 만든다).</summary>
+        private static TextShadow ShadowOf(Clip clip)
+        {
+            return StyleOf(clip).Shadow ??= new TextShadow();
         }
 
         /// <summary>밝은 색인지(사람 눈 밝기 0.6 넘음) — 그라데이션 둘째 색을 대비되게 고를 때.</summary>

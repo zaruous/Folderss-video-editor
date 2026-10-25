@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using VideoEditor.Core;
@@ -29,7 +30,7 @@ namespace VideoEditor.Ui
         private bool _disposed;
 
         /// <summary>그리는 방식을 바꾸면 올린다(캐시 키에 들어가 예전 PNG를 쓰지 않게).</summary>
-        public int Version { get { return 3; } }
+        public int Version { get { return 4; } }
 
         /// <summary>어느 스레드에서 불러도 된다. 배경 그리기 스레드에 맡기고 끝날 때까지(최대 30초) 기다린다.</summary>
         public void Render(TextImageRequest request, string pngPath, CancellationToken cancellation)
@@ -195,22 +196,26 @@ namespace VideoEditor.Ui
             if ((double)layout.Width * layout.Height > StyledTextLayout.MaxPixels)
                 throw new InvalidOperationException("꾸민 글자 그림이 너무 큽니다: " + layout.Width + "×" + layout.Height);
 
-            var visual = new DrawingVisual();
-            using (var context = visual.RenderOpen())
+            // 층을 아래에서 위로 하나씩 그려 겹친다: (반사) → 그림자 → (광선) → 본문(윤곽선 → 채우기). 괄호는 다음 작업에서 이 자리에 더한다
+            var origin = new Vector(layout.OriginX + halfWidth - centerX, layout.OriginY + halfHeight - centerY);
+            var layers = new List<Visual>();
+            var shadow = ShadowLayer(geometry, ink, style, request.EffectScale, origin);
+            if (shadow != null)
+                layers.Add(shadow);
+            var body = new DrawingVisual();
+            using (var context = body.RenderOpen())
             {
-                context.PushTransform(new TranslateTransform(layout.OriginX + halfWidth - centerX, layout.OriginY + halfHeight - centerY));
-                // 윤곽선을 먼저, 채우기를 위에 — 펜 두께의 바깥 절반(= 윤곽선 두께)만 보인다. 그림자는 다음 작업에서 더한다
-                var outline = OutlinePen(style.Outline, request.EffectScale);
-                if (outline != null && !ink.IsEmpty)
-                    DrawOutline(context, outline, geometry, style.Fill);
-                // 채우기(단색·선형·원형, 없음이면 칠하지 않음)
-                var fill = FillBrush(style.Fill);
-                if (fill != null)
-                    context.DrawGeometry(fill, null, geometry);
+                context.PushTransform(new TranslateTransform(origin.X, origin.Y));
+                DrawBody(context, geometry, ink, style, request.EffectScale, null);
                 context.Pop();
             }
+            layers.Add(body);
             var bitmap = new RenderTargetBitmap(layout.Width, layout.Height, 96, 96, PixelFormats.Pbgra32);
-            bitmap.Render(visual);
+            foreach (var layer in layers)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                bitmap.Render(layer);
+            }
             cancellation.ThrowIfCancellationRequested();
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(bitmap));
@@ -272,6 +277,59 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
+        /// 본문을 그린다: 윤곽선을 먼저, 채우기를 위에 — 펜 두께의 바깥 절반(= 윤곽선 두께)만 보인다.
+        /// paint가 있으면 윤곽선·채우기 색 대신 모두 그 붓으로 칠한다 — 그림자처럼 본문이 칠하는 모양만 필요할 때(채우기가 없으면 윤곽선 고리만).
+        /// </summary>
+        private static void DrawBody(DrawingContext context, Geometry geometry, Rect ink, TextStyle style, double effectScale, Brush paint)
+        {
+            var outline = OutlinePen(style.Outline, effectScale, paint);
+            if (outline != null && !ink.IsEmpty)
+                DrawOutline(context, outline, geometry, style.Fill);
+            // 채우기(단색·선형·원형, 없음이면 칠하지 않음)
+            var fill = FillBrush(style.Fill);
+            if (fill != null)
+                context.DrawGeometry(paint ?? fill, null, geometry);
+        }
+
+        /// <summary>
+        /// 그림자 층: 본문이 칠하는 모양(채우기 영역 + 켰으면 윤곽선, 채우기가 없으면 윤곽선 고리만)을 그림자 색 × 불투명도로 칠해
+        /// 거리·각도만큼 옮기고, 가우스 흐림(반지름 = 흐림 × 효과 배율, 상한 <see cref="TextEffects.MaxBlurRadius"/>)을 건다.
+        /// 거리·흐림은 여백 계산(<see cref="StyledTextLayout.Spread"/>)과 같은 값이라 그림 가장자리에서 잘리지 않는다. 꺼졌거나 보이지 않으면 null.
+        /// </summary>
+        private static Visual ShadowLayer(Geometry geometry, Rect ink, TextStyle style, double effectScale, Vector origin)
+        {
+            var shadow = style.Shadow;
+            if (!shadow.Enabled || ink.IsEmpty)
+                return null;
+            var color = UiKit.ParseColor(shadow.Color, Colors.Black);
+            var opacity = color.A / 255.0 * shadow.Opacity;
+            if (!(opacity > 0))
+                return null;
+            // 윤곽선 안쪽 절반과 채우기가 겹친 곳이 진해지지 않게 불투명한 색으로 칠하고, 불투명도는 층 전체에 한 번
+            color.A = 255;
+            var paint = new SolidColorBrush(color);
+            paint.Freeze();
+            var offset = StyledTextLayout.ShadowOffset(shadow, effectScale);
+            var visual = new DrawingVisual();
+            using (var context = visual.RenderOpen())
+            {
+                context.PushTransform(new TranslateTransform(origin.X + offset.X, origin.Y + offset.Y));
+                context.PushOpacity(opacity);
+                DrawBody(context, geometry, ink, style, effectScale, paint);
+                context.Pop();
+                context.Pop();
+            }
+            var radius = TextEffects.BlurRadius(shadow.Blur, effectScale);
+            if (radius > 0)
+            {
+                var blur = new BlurEffect { Radius = radius, KernelType = KernelType.Gaussian };
+                blur.Freeze();
+                visual.Effect = blur;
+            }
+            return visual;
+        }
+
+        /// <summary>
         /// 채우기 붓: 단색은 첫 색, 선형·원형 그라데이션은 색을 고르게 놓은 정지점(색이 하나뿐이면 단색), 없음은 null.
         /// 그라데이션은 글자 모양의 경계 상자 기준(선형 끝점은 <see cref="TextEffects.GradientPoints"/>, 원형은 가운데·반지름 0.5).
         /// </summary>
@@ -302,9 +360,9 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// 윤곽선 펜: 두께 = 윤곽선 두께 × 효과 배율 × 2(글자 윤곽 양쪽으로 반씩 — 바깥쪽 절반이 윤곽선 두께), 이음은 둥글게·각지게·깎아서,
-        /// 각진 이음 한도는 <see cref="StyledTextLayout.MiterLimit"/>(여백 계산과 같은 값). 꺼졌거나 두께가 0이면 null.
+        /// 각진 이음 한도는 <see cref="StyledTextLayout.MiterLimit"/>(여백 계산과 같은 값). paint가 있으면 윤곽선 색 대신 그 붓. 꺼졌거나 두께가 0이면 null.
         /// </summary>
-        private static Pen OutlinePen(TextOutline outline, double effectScale)
+        private static Pen OutlinePen(TextOutline outline, double effectScale, Brush paint)
         {
             if (!outline.Enabled)
                 return null;
@@ -312,7 +370,7 @@ namespace VideoEditor.Ui
             var thickness = outline.Width * (double.IsFinite(effectScale) && effectScale > 0 ? effectScale : 0) * 2;
             if (!(thickness > 0))
                 return null;
-            var pen = new Pen(SolidBrush(outline.Color), thickness)
+            var pen = new Pen(paint ?? SolidBrush(outline.Color), thickness)
             {
                 LineJoin = outline.Join == LineJoinKind.Miter ? PenLineJoin.Miter : outline.Join == LineJoinKind.Bevel ? PenLineJoin.Bevel : PenLineJoin.Round,
                 MiterLimit = StyledTextLayout.MiterLimit

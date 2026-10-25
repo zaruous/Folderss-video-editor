@@ -58,8 +58,9 @@ namespace VideoEditor.Core
             double left = outline, right = outline, top = outline, bottom = outline;
             if (style.Shadow != null && style.Shadow.Enabled)
             {
+                // 그림자 = 윤곽선까지 그린 글자를 옮겨 흐린 것 — 그리개와 같은 거리·흐림 반지름(상한 포함)
                 var offset = ShadowOffset(style.Shadow, scale);
-                var blur = Length(style.Shadow.Blur) * scale;
+                var blur = TextEffects.BlurRadius(style.Shadow.Blur, scale);
                 left = Math.Max(left, outline + Math.Max(0, -offset.X) + blur);
                 right = Math.Max(right, outline + Math.Max(0, offset.X) + blur);
                 top = Math.Max(top, outline + Math.Max(0, -offset.Y) + blur);
@@ -83,14 +84,12 @@ namespace VideoEditor.Core
             return (Math.Max(left, right), Math.Max(top, bottom));
         }
 
-        /// <summary>그림자가 글자에서 떨어진 거리(픽셀). 각도 0° = 오른쪽, 시계 방향(화면 좌표는 아래가 +y).</summary>
+        /// <summary>그림자가 글자에서 떨어진 거리(픽셀): 거리 × 효과 배율을 <see cref="TextEffects.ShadowOffset"/>로(0° = 오른쪽, 시계 방향).</summary>
         public static (double X, double Y) ShadowOffset(TextShadow shadow, double effectScale)
         {
             if (shadow == null)
                 return (0, 0);
-            var distance = Length(shadow.Distance) * Length(effectScale);
-            var radians = (double.IsFinite(shadow.Angle) ? shadow.Angle : 0) * Math.PI / 180;
-            return (distance * Math.Cos(radians), distance * Math.Sin(radians));
+            return TextEffects.ShadowOffset(Length(shadow.Distance) * Length(effectScale), shadow.Angle);
         }
 
         /// <summary>필요한 길이 → 짝수로 올린 정수(2 이상), 캔버스보다 크면 캔버스.</summary>
