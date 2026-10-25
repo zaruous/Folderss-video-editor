@@ -112,4 +112,42 @@ namespace VideoEditor.Tests
             Assert.True(stretch.R > 200 && stretch.B < 60, "늘이기 " + stretch);
         }
     }
+
+    /// <summary>미리 보기 틀의 자리: 렌더 그래프와 같은 규칙(틀 = 화면 × 크기, 맞춤 방식, 가운데 + X/Y).</summary>
+    public class ClipLayoutTests
+    {
+        private static (Project Project, Clip Photo) Photo(ClipFit fit)
+        {
+            var project = TestProjects.Empty();
+            var media = TestProjects.Image();
+            project.Media.Add(media);
+            var photo = TimelineEdits.CreateClip(media, project.Rate, 0, 60);
+            photo.Fit = fit;
+            TimelineEdits.Place(project, project.MainTrack, photo, 0);
+            return (project, photo);
+        }
+
+        [Fact]
+        public void Content_FollowsFitScaleAndOffset()
+        {
+            // 800×600(4:3) 사진을 640×360 화면에: 맞춤은 높이에 맞춰 480×360, 채우기·늘이기는 화면 크기
+            var (project, photo) = Photo(ClipFit.Fit);
+            Assert.Equal((320.0, 180.0, 480.0, 360.0, 0.0), ClipLayout.Content(project, photo));
+            photo.Fit = ClipFit.Fill;
+            Assert.Equal((320.0, 180.0, 640.0, 360.0, 0.0), ClipLayout.Content(project, photo));
+            photo.Fit = ClipFit.Fit;
+            photo.Scale = 0.5;
+            photo.X = 100;
+            photo.Y = -50;
+            photo.Rotation = 30;
+            Assert.Equal((420.0, 130.0, 240.0, 180.0, 30.0), ClipLayout.Content(project, photo));
+        }
+
+        [Fact]
+        public void Snap_PullsNearCenterToZero()
+        {
+            Assert.Equal(0, ClipLayout.Snap(5, 8));
+            Assert.Equal(-9, ClipLayout.Snap(-9, 8));
+        }
+    }
 }

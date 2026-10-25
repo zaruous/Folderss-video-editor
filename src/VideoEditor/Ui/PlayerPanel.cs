@@ -110,6 +110,9 @@ namespace VideoEditor.Ui
             AutomationProperties.SetAutomationId(_image, "PreviewImage");
             AutomationProperties.SetName(_image, "미리 보기 화면");
             screen.Children.Add(_image);
+            // 고른 동영상·사진을 미리 보기에서 직접 옮기고 크기를 바꾸는 틀
+            var overlay = new TransformOverlay(session, commands, () => player.IsPlaying);
+            screen.Children.Add(overlay);
             AutomationProperties.SetAutomationId(_placeholder, "PreviewPlaceholder");
             screen.Children.Add(_placeholder);
             Children.Add(screen);
@@ -119,6 +122,7 @@ namespace VideoEditor.Ui
             {
                 ((TextBlock)_play.Content).Text = player.IsPlaying ? UiKit.GlyphPause : UiKit.GlyphPlay;
                 UpdatePlaceholder();
+                overlay.Refresh();
             };
             session.PlayheadChanged += (s, e) => UpdateTime();
             session.Changed += (s, e) =>
