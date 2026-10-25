@@ -55,6 +55,8 @@ namespace VideoEditor.Media
         public string Vad { get; set; }
         public string Language { get; set; }
         public string Prompt { get; set; }
+        /// <summary>대본 글(있으면 글은 대본에서, 시각은 인식에서 — 대본 맞춤 자막).</summary>
+        public string Script { get; set; }
     }
 
     /// <summary>
@@ -179,7 +181,7 @@ namespace VideoEditor.Media
         /// <summary>
         /// 클립 하나(내레이션 등)의 소리를 인식해 타임라인 시각의 큐로. 원본의 클립 구간만 읽고, 속도를 바꾼 클립은 시각을 나눠 맞춘다.
         /// </summary>
-        public static Task<List<SubtitleCue>> RecognizeClip(FfmpegTool ffmpeg, WhisperTool whisper, SpeechOptions options, Clip clip, FrameRate rate,
+        public static Task<SpeechResult> RecognizeClip(FfmpegTool ffmpeg, WhisperTool whisper, SpeechOptions options, Clip clip, FrameRate rate,
                                                             IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation)
         {
             var from = rate.ToSeconds(clip.SourceIn);
@@ -191,7 +193,7 @@ namespace VideoEditor.Media
         }
 
         /// <summary>타임라인 전체 소리(모든 트랙을 섞은 것)를 인식한다 — 음악이 섞이면 정확도가 떨어진다.</summary>
-        public static Task<List<SubtitleCue>> RecognizeTimeline(FfmpegTool ffmpeg, WhisperTool whisper, SpeechOptions options, Project project,
+        public static Task<SpeechResult> RecognizeTimeline(FfmpegTool ffmpeg, WhisperTool whisper, SpeechOptions options, Project project,
                                                                 IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation)
         {
             var plan = RenderGraph.Build(project, new RenderOptions { From = 0, To = project.Duration, Width = 16, Height = 16, Video = false });
@@ -212,7 +214,7 @@ namespace VideoEditor.Media
             return new[] { "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", wav };
         }
 
-        private static async Task<List<SubtitleCue>> Recognize(FfmpegTool ffmpeg, WhisperTool whisper, SpeechOptions options, Func<string, IEnumerable<string>> extract,
+        private static async Task<SpeechResult> Recognize(FfmpegTool ffmpeg, WhisperTool whisper, SpeechOptions options, Func<string, IEnumerable<string>> extract,
                                                                Action cleanup, double start, double speed, double end,
                                                                IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation)
         {
@@ -232,9 +234,11 @@ namespace VideoEditor.Media
                 var srt = output + ".srt";
                 if (!File.Exists(srt))
                     throw new InvalidDataException("음성 인식 결과(SRT)가 없습니다.");
-                // 단어(어절)마다 한 큐로 받아 타임라인 시각으로 옮긴 뒤 자막 큐로 묶는다(단어 시각은 큐에 남긴다)
+                // 단어(어절)마다 한 큐로 받아 타임라인 시각으로 옮긴 뒤 자막 큐로 묶는다(단어 시각은 큐에 남긴다) — 대본이 있으면 글은 대본에서
                 var words = SpeechText.ToTimeline(SubtitleFile.Parse(File.ReadAllText(srt, Encoding.UTF8)), start, speed, end);
-                return SpeechText.Group(words);
+                return string.IsNullOrWhiteSpace(options.Script)
+                    ? new SpeechResult { Cues = SpeechText.Group(words) }
+                    : SpeechText.AlignScript(options.Script, words);
             }
             finally
             {

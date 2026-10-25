@@ -14,12 +14,13 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// [음성 인식으로 자막 만들기] 창: 말(언어)과 모델을 고르고 [자막 만들기]. 처음이면 whisper.cpp와 모델을 내려받고(SHA-256 확인),
-    /// 이 PC에서 인식한다(소리를 인터넷으로 보내지 않음). 끝나면 인식한 큐를 <see cref="Cues"/>로 돌려주고 닫힌다.
+    /// 이 PC에서 인식한다(소리를 인터넷으로 보내지 않음). 대본을 주면 글은 대본에서, 시각은 소리에서 가져온다.
+    /// 끝나면 결과를 <see cref="Result"/>로 돌려주고 닫힌다.
     /// </summary>
     internal sealed class SpeechToTextDialog : Window
     {
         /// <summary>whisper와 인식 설정(모델·말소리 구간 감지·말·낱말)으로 인식해 타임라인 시각의 큐를 돌려준다.</summary>
-        public delegate Task<List<SubtitleCue>> Recognizer(WhisperTool whisper, SpeechOptions options, IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation);
+        public delegate Task<SpeechResult> Recognizer(WhisperTool whisper, SpeechOptions options, IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation);
 
         public const string ModelKey = "speechModel";
         public const string LanguageKey = "speechLanguage";
@@ -29,6 +30,12 @@ namespace VideoEditor.Ui
         private readonly Recognizer _recognize;
         private readonly ComboBox _language = new ComboBox { Margin = new Thickness(0, 4, 0, 0) };
         private readonly TextBox _prompt = new TextBox { Margin = new Thickness(0, 4, 0, 0), MaxLength = SpeechText.MaxPromptLength };
+        private readonly TextBox _script = new TextBox
+        {
+            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 72, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Margin = new Thickness(0, 4, 0, 0), MaxLength = SubtitleFile.MaxBytes / 2
+        };
+        private Button _scriptFile;
         private readonly List<RadioButton> _models = new List<RadioButton>();
         private readonly TextBlock _status = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) };
         private readonly ProgressBar _progress = new ProgressBar { Height = 14, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
@@ -82,6 +89,20 @@ namespace VideoEditor.Ui
             _prompt.Text = services.Setting(PromptKey) ?? "";
             panel.Children.Add(_prompt);
 
+            // 대본(선택): 글은 대본에서, 시각은 소리에서 — 대본의 장면 설명·해시태그처럼 말하지 않은 글은 저절로 빠진다
+            var scriptRow = new DockPanel { Margin = new Thickness(0, 12, 0, 0), LastChildFill = true };
+            _scriptFile = UiKit.TextButton("대본 파일…", "SpeechScriptFileButton", PickScript);
+            DockPanel.SetDock(_scriptFile, Dock.Right);
+            scriptRow.Children.Add(_scriptFile);
+            var scriptLabel = UiKit.Label("대본(선택) — 글은 대본에서, 시각은 소리에서. 붙여 넣거나 파일(.txt·.md)을 고르세요.");
+            scriptLabel.TextWrapping = TextWrapping.Wrap;
+            scriptLabel.VerticalAlignment = VerticalAlignment.Center;
+            scriptRow.Children.Add(scriptLabel);
+            panel.Children.Add(scriptRow);
+            AutomationProperties.SetAutomationId(_script, "SpeechScript");
+            AutomationProperties.SetName(_script, "대본");
+            panel.Children.Add(_script);
+
             var modelLabel = UiKit.Label("모델");
             modelLabel.Margin = new Thickness(0, 12, 0, 0);
             panel.Children.Add(modelLabel);
@@ -129,8 +150,8 @@ namespace VideoEditor.Ui
             Closing += (s, e) => _cancel?.Cancel();
         }
 
-        /// <summary>인식한 큐(타임라인 시각). [자막 만들기]가 끝났을 때만.</summary>
-        public List<SubtitleCue> Cues { get; private set; }
+        /// <summary>인식한 큐(타임라인 시각)와 대본 맞춤 결과. [자막 만들기]가 끝났을 때만.</summary>
+        public SpeechResult Result { get; private set; }
 
         public SpeechModel Model { get; private set; }
 
@@ -149,6 +170,33 @@ namespace VideoEditor.Ui
                 var model = (SpeechModel)radio.Tag;
                 var have = WhisperTool.HasModel(_services.WhisperFolder, model);
                 radio.Content = new TextBlock { Text = model.Label + " — " + model.Note + (have ? " · 받아 둠" : ""), TextWrapping = TextWrapping.Wrap };
+            }
+        }
+
+        /// <summary>[대본 파일…]: 글 파일(1MB까지, UTF-8·UTF-16·CP949)을 읽어 대본 칸에.</summary>
+        private void PickScript()
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = "대본 고르기", Filter = "대본(글 파일)|*.txt;*.md;*.markdown|모든 파일|*.*" };
+            var folder = _services.Setting(EditorServices.LastFolderKey);
+            if (!string.IsNullOrEmpty(folder) && System.IO.Directory.Exists(folder))
+                dialog.InitialDirectory = folder;
+            if (dialog.ShowDialog(this) != true)
+                return;
+            try
+            {
+                var info = new System.IO.FileInfo(dialog.FileName);
+                if (info.Length > 1024 * 1024)
+                {
+                    _status.Text = "대본 파일이 너무 큽니다(1MB까지).";
+                    return;
+                }
+                _script.Text = SubtitleFile.Decode(System.IO.File.ReadAllBytes(dialog.FileName));
+                var count = SpeechText.ScriptSentences(_script.Text).Count;
+                _status.Text = "대본: " + info.Name + " — 문장 " + count + "개(말하지 않은 글은 맞춤에서 빠집니다).";
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "대본을 읽지 못했습니다: " + ex.Message;
             }
         }
 
@@ -185,9 +233,8 @@ namespace VideoEditor.Ui
                 var modelPath = await SpeechRecognizer.DownloadModel(_services.WhisperFolder, model, progress, cancellation);
                 ShowModels();
                 watch.Restart();
-                var options = new SpeechOptions { Model = modelPath, Vad = vad, Language = language, Prompt = prompt };
-                var cues = await _recognize(whisper, options, progress, cancellation);
-                Cues = cues;
+                var options = new SpeechOptions { Model = modelPath, Vad = vad, Language = language, Prompt = prompt, Script = _script.Text };
+                Result = await _recognize(whisper, options, progress, cancellation);
                 Model = model;
                 Elapsed = watch.Elapsed;
                 DialogResult = true;
@@ -214,6 +261,8 @@ namespace VideoEditor.Ui
             _run.IsEnabled = !busy;
             _language.IsEnabled = !busy;
             _prompt.IsEnabled = !busy;
+            _script.IsEnabled = !busy;
+            _scriptFile.IsEnabled = !busy;
             foreach (var radio in _models)
                 radio.IsEnabled = !busy;
             ((TextBlock)_close.Content).Text = busy ? "취소" : "닫기";

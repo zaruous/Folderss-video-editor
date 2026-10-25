@@ -195,6 +195,76 @@ namespace VideoEditor.Tests
             Assert.Equal("그래서, 다음으로", Assert.Single(early).Text);
         }
 
+        // ---------- 대본 맞춤 ----------
+
+        private const string Script =
+            "# [대본] 맹자의 반구저기 (反求諸己)\n"
+            + "- **카테고리**: 인생철학\n"
+            + "  > \"화살이 과녁을 빗나가면 과녁을 탓하지 말고 자신을 돌아보라.\"\n"
+            + "| 씬 | 비주얼 | 내레이션 대본 |\n"
+            + "| :--- | :--- | :--- |\n"
+            + "| **Scene 1** | `images/scene1.jpg`<br>비 내리는 밤의 어두운 사무실 (9:16) | 억울해서 피가 거꾸로 솟았습니다.<br>*(자막 강조)* **\"그 사람 잡으러 다니지 말고, 네 서류부터 다시 꺼내 봐라.\"** |\n"
+            + "| **Scene 2** | `images/scene2.jpg` | 맹자는 이렇게 말했습니다.<br>\"화살이 과녁을 빗나가면, 과녁을 탓하지 말고 자신을 돌아보라.\" |\n"
+            + "#맹자 #인생철학\n";
+
+        [Fact]
+        public void ScriptSentences_TakesCellsAndLines_WithoutMarkup()
+        {
+            var sentences = SpeechText.ScriptSentences(Script);
+            Assert.Contains("억울해서 피가 거꾸로 솟았습니다.", sentences);
+            // 연출 지시 *(…)*·강조 **·코드 `…`는 빠지고 따옴표는 남는다
+            Assert.Contains("\"그 사람 잡으러 다니지 말고, 네 서류부터 다시 꺼내 봐라.\"", sentences);
+            Assert.Contains("[대본] 맹자의 반구저기 (反求諸己)", sentences);
+            Assert.DoesNotContain(sentences, s => s.Contains("images/") || s.Contains("자막 강조") || s.Contains("*") || s.StartsWith("#", StringComparison.Ordinal));
+            // 장면 설명 칸과 내레이션 칸은 섞이지 않는다
+            Assert.Contains("비 내리는 밤의 어두운 사무실 (9:16)", sentences);
+        }
+
+        [Fact]
+        public void AlignScript_TakesTextFromScript_TimesFromSpeech()
+        {
+            // 인식: 틀린 말("꼽고로 쏟았습니다")과 띄어쓰기가 다른 말, 대본에 없는 말(애드리브)이 섞여 있다
+            var words = new[]
+            {
+                W(0.0, 0.8, "억울해서"), W(0.8, 1.2, "피가"), W(1.2, 1.9, "꼽고로"), W(1.9, 3.0, "쏟았습니다."),
+                W(3.5, 3.8, "그"), W(3.8, 4.2, "사람"), W(4.2, 4.7, "잡으러"), W(4.7, 5.2, "다니지"), W(5.2, 5.6, "말고"),
+                W(5.6, 5.8, "네"), W(5.8, 6.4, "서류부터"), W(6.4, 6.8, "다시"), W(6.8, 7.5, "꺼내봐라."),
+                W(8.5, 9.0, "자,"), W(9.0, 9.6, "여러분"), W(9.6, 10.4, "들어보세요."),
+                W(11.0, 11.6, "맹자는"), W(11.6, 12.1, "이렇게"), W(12.1, 13.0, "말했습니다."),
+                W(13.3, 14.0, "화살이"), W(14.0, 14.5, "과녁을"), W(14.5, 15.2, "빗나가면"), W(15.2, 15.7, "과녁을"), W(15.7, 16.2, "탓하지"),
+                W(16.2, 16.6, "말고"), W(16.6, 17.1, "자신을"), W(17.1, 18.0, "돌아보라.")
+            };
+            var result = SpeechText.AlignScript(Script, words);
+            Assert.Equal(4, result.Matched);
+            Assert.Equal(1, result.Unscripted);
+            Assert.Equal(new[]
+            {
+                "억울해서 피가 거꾸로 솟았습니다.",
+                "\"그 사람 잡으러 다니지 말고, 네 서류부터 다시 꺼내 봐라.\"",
+                "자, 여러분 들어보세요.",
+                "맹자는 이렇게 말했습니다.",
+                "\"화살이 과녁을 빗나가면, 과녁을 탓하지 말고 자신을 돌아보라.\""
+            }, result.Cues.Select(c => c.Text));
+            // 시각은 인식한 단어에서(대본 머리글의 같은 인용문이 아니라 말한 순서의 것)
+            Assert.Equal(0.0, result.Cues[0].Start);
+            Assert.Equal(3.5, result.Cues[1].Start);
+            Assert.InRange(result.Cues[1].End, 7.4, 8.5);
+            Assert.Equal(13.3, result.Cues[4].Start);
+            Assert.Equal(18.0, result.Cues[4].End);
+            // 대본 단어마다 시각이 붙는다(단어 강조에 씀)
+            Assert.Equal("거꾸로", result.Cues[0].Words[2].Text);
+            Assert.Equal((1.2, 1.9), (result.Cues[0].Words[2].Start, result.Cues[0].Words[2].End));
+        }
+
+        [Fact]
+        public void AlignScript_UnrelatedScript_KeepsRecognizedText()
+        {
+            var words = new[] { W(0, 1, "오늘은"), W(1, 2, "날씨가"), W(2, 3, "좋습니다.") };
+            var result = SpeechText.AlignScript("전혀 다른 대본 문장입니다.\n이것도 말하지 않았습니다.", words);
+            Assert.Equal(0, result.Matched);
+            Assert.Equal("오늘은 날씨가 좋습니다.", Assert.Single(result.Cues).Text);
+        }
+
         // ---------- 내려받기(가짜 응답) ----------
 
         private sealed class FakeServer : HttpMessageHandler
@@ -316,8 +386,8 @@ namespace VideoEditor.Tests
             var stages = new List<string>();
             var vad = WhisperTool.ModelPath(Whisper.Folder, SpeechText.VadModel);
             var options = new SpeechOptions { Model = Model, Vad = File.Exists(vad) ? vad : null, Language = "ko" };
-            var cues = await SpeechRecognizer.RecognizeClip(FfmpegMedia.Tool, Whisper, options, clip, project.Rate,
-                new SyncProgress(s => stages.Add(s.Stage + " " + s.Done)), CancellationToken.None);
+            var cues = (await SpeechRecognizer.RecognizeClip(FfmpegMedia.Tool, Whisper, options, clip, project.Rate,
+                new SyncProgress(s => stages.Add(s.Stage + " " + s.Done)), CancellationToken.None)).Cues;
             _out.WriteLine(string.Join(" / ", stages.Distinct()) + " · 큐 " + cues.Count + ": " + string.Join(" | ", cues.Select(c => c.Start + "~" + c.End + " " + c.Text)));
             Assert.Contains(stages, s => s.StartsWith("음성 인식 중", StringComparison.Ordinal));
             Assert.Equal(30, clip.Start);

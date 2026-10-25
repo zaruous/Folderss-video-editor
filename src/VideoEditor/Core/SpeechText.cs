@@ -23,6 +23,15 @@ namespace VideoEditor.Core
         public string Url { get { return (BaseUrl ?? SpeechText.ModelBaseUrl) + File; } }
     }
 
+    /// <summary>인식 결과: 자막 큐와, 대본을 줬으면 대본 문장 수·시각을 맞춘 문장 수·대본에 없어 인식한 글로 남긴 큐 수.</summary>
+    public sealed class SpeechResult
+    {
+        public List<SubtitleCue> Cues { get; set; }
+        public int Sentences { get; set; }
+        public int Matched { get; set; }
+        public int Unscripted { get; set; }
+    }
+
     /// <summary>
     /// 음성 인식 자막(whisper.cpp)에 쓰는 것: 내려받을 릴리스·모델 고르기, 명령 인수, 진행률 읽기, 인식한 큐를 타임라인 시각으로 옮기기.
     /// 프로세스·네트워크는 쓰지 않는다(Media.SpeechRecognizer가 돌린다).
@@ -317,6 +326,233 @@ namespace VideoEditor.Core
                 yield return ends[end] - (previous < 0 ? 0 : ends[previous] + 1);
                 previous = end;
             }
+        }
+
+        // ---------- 대본 맞춤 ----------
+
+        private static readonly Regex Breaks = new Regex(@"<br\s*/?>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly Regex CodeSpan = new Regex("`[^`]*`", RegexOptions.CultureInvariant);
+        private static readonly Regex Direction = new Regex(@"[*_]\([^)]*\)[*_]", RegexOptions.CultureInvariant);
+        private static readonly Regex LineMarker = new Regex(@"^\s*(#+|>+|[-*+]\s|\d+[.)]\s)\s*", RegexOptions.CultureInvariant);
+        private static readonly Regex ScriptSentenceEnd = new Regex(@"(?<=[.?!。？！…][""'”’」』)]*)\s+", RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// 대본 글(텍스트·마크다운)을 문장으로: 표는 칸마다, &lt;br&gt;은 줄바꿈으로, 제목·목록·인용 표시와 강조 기호(*)·코드(`…`)·연출 지시(*(…)*)는 뺀다.
+        /// 말하지 않는 글(장면 설명·해시태그 등)도 남지만 맞춤에서 소리와 맞는 곳이 없어 빠진다.
+        /// </summary>
+        public static List<string> ScriptSentences(string script)
+        {
+            var result = new List<string>();
+            foreach (var raw in (script ?? "").Replace("\r", "").Split('\n'))
+            {
+                // 표는 칸마다 먼저 나누고 칸 안의 <br>을 줄로(장면 설명 칸과 내레이션 칸이 섞이지 않게)
+                var line = raw.Trim();
+                var cells = line.StartsWith("|", StringComparison.Ordinal) ? line.Trim('|').Split('|') : new[] { line };
+                foreach (var cell in cells.SelectMany(c => Breaks.Split(c)))
+                {
+                    var text = Direction.Replace(CodeSpan.Replace(cell, " "), " ");
+                    text = LineMarker.Replace(text, "").Replace("*", "").Trim();
+                    foreach (var sentence in ScriptSentenceEnd.Split(text))
+                    {
+                        var clean = Regex.Replace(sentence, @"\s+", " ").Trim();
+                        if (clean.Count(char.IsLetterOrDigit) >= 2)
+                            result.Add(clean);
+                    }
+                }
+            }
+            return result;
+        }
+
+        private static char[] Letters(string text)
+        {
+            return text.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray();
+        }
+
+        /// <summary>
+        /// 대본 맞춤 자막: 글은 대본에서, 시각은 인식한 단어에서. 대본 문장마다 인식한 글(글자·숫자만)에서 가장 비슷한 곳을 찾고(편집 거리 35% 이하),
+        /// 말한 순서와 대본 순서가 맞는 문장들을 고른다(맞춘 글자가 가장 많게). 문장 안 단어 시각은 글자 맞춤으로 정하고 40자 넘는 문장은 나눈다.
+        /// 대본에 없는 말은 인식한 글 그대로 큐로 남긴다.
+        /// </summary>
+        public static SpeechResult AlignScript(string script, IReadOnlyList<SubtitleCue> words, int maxChars = 40, double linger = 0.5)
+        {
+            var sentences = ScriptSentences(script);
+            // 인식한 글자 줄: 글자마다 시각(단어 안에서 고르게 나눔)과 그 글자의 단어
+            var spoken = new List<char>();
+            var times = new List<(double Start, double End)>();
+            var owners = new List<int>();
+            var valid = words.Where(w => !string.IsNullOrWhiteSpace(w.Text) && !IsNoise(w.Text)).ToList();
+            for (var w = 0; w < valid.Count; w++)
+            {
+                var letters = Letters(valid[w].Text);
+                for (var i = 0; i < letters.Length; i++)
+                {
+                    var span = valid[w].End - valid[w].Start;
+                    spoken.Add(letters[i]);
+                    times.Add((valid[w].Start + span * i / letters.Length, valid[w].Start + span * (i + 1) / letters.Length));
+                    owners.Add(w);
+                }
+            }
+            var r = spoken.ToArray();
+            // 대본 문장마다 가장 비슷한 곳
+            var found = new List<(int Sentence, int Start, int End, int Weight)>();
+            for (var j = 0; j < sentences.Count; j++)
+            {
+                var s = Letters(sentences[j]);
+                if (s.Length < 4 || r.Length == 0)
+                    continue;
+                var (start, end, cost) = BestMatch(s, r);
+                if (end >= start && cost <= s.Length * 0.35)
+                    found.Add((j, start, end, s.Length - cost));
+            }
+            // 대본 순서 = 말한 순서이고 겹치지 않는(경계 두 글자까지는 봐줌) 문장들 중 맞춘 글자가 가장 많은 묶음
+            var best = new int[found.Count];
+            var previous = new int[found.Count];
+            for (var k = 0; k < found.Count; k++)
+            {
+                best[k] = found[k].Weight;
+                previous[k] = -1;
+                for (var p = 0; p < k; p++)
+                {
+                    if (found[p].Start < found[k].Start && found[p].End - 2 < found[k].Start && best[p] + found[k].Weight > best[k])
+                    {
+                        best[k] = best[p] + found[k].Weight;
+                        previous[k] = p;
+                    }
+                }
+            }
+            var chain = new List<(int Sentence, int Start, int End, int Weight)>();
+            for (var k = found.Count == 0 ? -1 : Array.IndexOf(best, best.Max()); k >= 0; k = previous[k])
+                chain.Insert(0, found[k]);
+
+            var cues = new List<SubtitleCue>();
+            var covered = new bool[valid.Count];
+            var floor = 0;
+            foreach (var match in chain)
+            {
+                var start = Math.Max(match.Start, floor);
+                if (start > match.End)
+                    continue;
+                floor = match.End + 1;
+                for (var i = start; i <= match.End; i++)
+                    covered[owners[i]] = true;
+                // 대본 단어마다 시각: 대본 글자를 인식한 글자에 맞춰 첫·끝 글자의 시각
+                var map = MapLetters(Letters(sentences[match.Sentence]), r, start, match.End);
+                var scriptWords = new List<SubtitleCue>();
+                var at = 0;
+                foreach (var token in sentences[match.Sentence].Split(' '))
+                {
+                    var count = token.Count(char.IsLetterOrDigit);
+                    if (count == 0)
+                    {
+                        if (scriptWords.Count > 0)
+                            scriptWords[scriptWords.Count - 1].Text += " " + token;
+                        continue;
+                    }
+                    var first = times[map[at]];
+                    var last = times[map[at + count - 1]];
+                    var begin = scriptWords.Count > 0 ? Math.Max(first.Start, scriptWords[scriptWords.Count - 1].Start) : first.Start;
+                    scriptWords.Add(new SubtitleCue { Start = begin, End = Math.Max(begin, last.End), Text = token });
+                    at += count;
+                }
+                AddSentence(scriptWords, maxChars, cues);
+            }
+            // 대본에 없는 말: 인식한 글 그대로
+            var unscripted = Group(valid.Where((w, i) => !covered[i] && Letters(w.Text).Length > 0).ToList(), maxChars, 0.6, 0);
+            cues.AddRange(unscripted);
+            cues.Sort((a, b) => a.Start.CompareTo(b.Start));
+            for (var i = 0; i + 1 < cues.Count; i++)
+            {
+                if (cues[i].End > cues[i + 1].Start)
+                    cues[i].End = Math.Max(cues[i].Start + 0.05, cues[i + 1].Start);
+                else if (cues[i + 1].Start - cues[i].End < linger)
+                    cues[i].End = cues[i + 1].Start;
+            }
+            return new SpeechResult
+            {
+                Cues = cues,
+                Sentences = sentences.Count(t => Letters(t).Length >= 4),
+                Matched = chain.Count,
+                Unscripted = unscripted.Count
+            };
+        }
+
+        /// <summary>s 전체와 가장 비슷한 r의 부분(시작·끝 위치, 편집 거리) — 부분의 앞뒤는 공짜(Sellers).</summary>
+        private static (int Start, int End, int Cost) BestMatch(char[] s, char[] r)
+        {
+            var previous = new int[r.Length + 1];
+            var current = new int[r.Length + 1];
+            var previousStart = new int[r.Length + 1];
+            var currentStart = new int[r.Length + 1];
+            for (var j = 0; j <= r.Length; j++)
+                previousStart[j] = j;
+            for (var i = 1; i <= s.Length; i++)
+            {
+                current[0] = i;
+                currentStart[0] = 0;
+                for (var j = 1; j <= r.Length; j++)
+                {
+                    var cost = previous[j - 1] + (s[i - 1] == r[j - 1] ? 0 : 1);
+                    var start = previousStart[j - 1];
+                    if (previous[j] + 1 < cost)
+                    {
+                        cost = previous[j] + 1;
+                        start = previousStart[j];
+                    }
+                    if (current[j - 1] + 1 < cost)
+                    {
+                        cost = current[j - 1] + 1;
+                        start = currentStart[j - 1];
+                    }
+                    current[j] = cost;
+                    currentStart[j] = start;
+                }
+                (previous, current) = (current, previous);
+                (previousStart, currentStart) = (currentStart, previousStart);
+            }
+            var end = 1;
+            for (var j = 2; j <= r.Length; j++)
+            {
+                if (previous[j] < previous[end])
+                    end = j;
+            }
+            return (previousStart[end], end - 1, previous[end]);
+        }
+
+        /// <summary>대본 글자마다 맞춘 인식 글자 위치(r[from..to] 안, 맞출 글자가 없으면 이웃 글자) — 전역 맞춤(편집 거리).</summary>
+        private static int[] MapLetters(char[] s, char[] r, int from, int to)
+        {
+            var n = to - from + 1;
+            var d = new int[s.Length + 1, n + 1];
+            for (var i = 0; i <= s.Length; i++)
+                d[i, 0] = i;
+            for (var j = 0; j <= n; j++)
+                d[0, j] = j;
+            for (var i = 1; i <= s.Length; i++)
+            {
+                for (var j = 1; j <= n; j++)
+                    d[i, j] = Math.Min(d[i - 1, j - 1] + (s[i - 1] == r[from + j - 1] ? 0 : 1), Math.Min(d[i - 1, j], d[i, j - 1]) + 1);
+            }
+            var map = new int[s.Length];
+            int a = s.Length, b = n;
+            while (a > 0)
+            {
+                if (b > 0 && d[a, b] == d[a - 1, b - 1] + (s[a - 1] == r[from + b - 1] ? 0 : 1))
+                {
+                    map[a - 1] = from + b - 1;
+                    a--;
+                    b--;
+                }
+                else if (b > 0 && d[a, b] == d[a, b - 1] + 1)
+                {
+                    b--;
+                }
+                else
+                {
+                    map[a - 1] = from + Math.Max(0, Math.Min(n - 1, b - 1));
+                    a--;
+                }
+            }
+            return map;
         }
 
         private static string Text(JsonElement element, string name)

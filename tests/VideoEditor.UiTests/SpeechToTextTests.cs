@@ -47,6 +47,7 @@ namespace VideoEditor.UiTests
                     Assert.True(Ui.ById<RadioButton>(dialog, "SpeechModel_small").IsChecked);
                     Assert.NotNull(Ui.ById<RadioButton>(dialog, "SpeechModel_turbo"));
                     Assert.Equal("한국어", ((ComboBoxItem)Ui.ById<ComboBox>(dialog, "SpeechLanguage").SelectedItem).Content);
+                    Assert.NotNull(Ui.ById<Button>(dialog, "SpeechScriptFileButton"));
                     Ui.Snap(dialog, plugin.ShotFolder, "speech-to-text");
                 });
 
@@ -69,6 +70,7 @@ namespace VideoEditor.UiTests
                 ui.Run(() =>
                 {
                     Ui.ById<TextBox>(dialog, "SpeechPrompt").Text = " 맹자, 반구저기 ";
+                    Ui.ById<TextBox>(dialog, "SpeechScript").Text = "억울해서 피가 거꾸로 솟았습니다.";
                     Ui.Click(Ui.ById<Button>(dialog, "SpeechRunButton"));
                 });
                 await ui.WaitUntil(() => Ui.Window("음성 인식으로 자막 만들기") == null, TimeSpan.FromMinutes(3), "인식이 끝나 창 닫힘");

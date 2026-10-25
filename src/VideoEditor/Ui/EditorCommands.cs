@@ -605,18 +605,22 @@ namespace VideoEditor.Ui
                 Status("음성 인식 창을 열지 못했습니다: " + ex.Message);
                 return;
             }
-            if (dialog.ShowDialog() != true || dialog.Cues == null)
+            if (dialog.ShowDialog() != true || dialog.Result == null)
                 return;
-            var cues = dialog.Cues;
+            var result = dialog.Result;
+            var cues = result.Cues;
             if (cues.Count == 0)
             {
                 Status("말소리를 찾지 못했습니다(" + dialog.Model.Label + " 모델). 말이 있는 클립을 골랐는지, 인식할 말이 맞는지 확인하세요.");
                 return;
             }
             var seconds = (int)Math.Round(dialog.Elapsed.TotalSeconds);
+            // 대본을 줬으면 몇 문장에 시각을 맞췄는지(대본에 없는 말은 인식한 글로 남는다)
+            var script = result.Sentences == 0 ? "틀린 글은 큐를 골라 속성에서 고치세요."
+                : result.Matched == 0 ? "대본과 맞는 말을 찾지 못해 인식한 글로 넣었습니다(대본이 이 소리의 것인지 확인하세요)."
+                : "대본 문장 " + result.Matched + "개에 시각을 맞췄습니다" + (result.Unscripted > 0 ? "(대본에 없는 말 " + result.Unscripted + "곳은 인식한 글로)." : ".");
             Run(p => TimelineEdits.ImportSubtitles(p, cues),
-                "음성 인식으로 자막 " + cues.Count + "개를 만들었습니다(" + dialog.Model.Label + " 모델, " + (seconds >= 60 ? seconds / 60 + "분 " : "") + seconds % 60 + "초). "
-                + "틀린 글은 큐를 골라 속성에서 고치세요.");
+                "음성 인식으로 자막 " + cues.Count + "개를 만들었습니다(" + dialog.Model.Label + " 모델, " + (seconds >= 60 ? seconds / 60 + "분 " : "") + seconds % 60 + "초). " + script);
         }
 
         /// <summary>[URL에서 가져오기]: 직접 링크·유튜브 주소 또는 유튜브 검색으로 받아 미디어 목록에 더한다.</summary>
