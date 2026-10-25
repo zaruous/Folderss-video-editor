@@ -182,6 +182,12 @@ namespace VideoEditor.Core
             return id == null ? null : All.FirstOrDefault(d => d.Id == id);
         }
 
+        /// <summary>효과 탭의 묶음 이름(목록에 처음 나오는 차례 — 효과 탭이 이 차례로 묶음 제목과 묶음 고르기를 보인다).</summary>
+        public static IReadOnlyList<string> Groups()
+        {
+            return All.Select(d => d.Group).Where(g => !string.IsNullOrEmpty(g)).Distinct().ToList();
+        }
+
         /// <summary>id 형식(영문 소문자로 시작하는 소문자·숫자·- 48자 이내)인지.</summary>
         public static bool IsValidId(string id)
         {
@@ -355,7 +361,33 @@ namespace VideoEditor.Core
         private const double PreviewPixelScale = 0.16;
 
         /// <summary>
-        /// 효과 미리 보기 띠를 그리는 FFmpeg 인수(PNG를 표준 출력으로). 바탕은 어두운 남색에 왼쪽 위로 갈수록 더 어둡고, 오른쪽에 밝은 사각(사람 자리처럼)을 둔 합성 그림이다.
+        /// 효과 미리 보기 띠의 바탕(FFmpeg lavfi 입력 — 합성 그림 한 장을 1.5초로 늘인 정지 화면). 효과가 잘 보이게 무늬와 밝고 어두운 곳을 섞었다:
+        /// 위 72%는 남색에서 분홍으로 가는 하늘(왼쪽일수록 어두움)에 가는 격자, 아래는 흑백 바둑판 바닥, 오른쪽 위에 밝은 해(둘레에 빛), 가운데 왼쪽에 어두운 사람 실루엣(머리·목·어깨).
+        /// 격자·바둑판은 흔들림·확대를, 해·실루엣의 또렷한 가장자리는 글리치·색 어긋남을, 어두운 곳(실루엣·왼쪽 하늘)은 어둠에 반응하는 효과(스캔 라인의 떨림)를 보여 준다.
+        /// 수식(geq)은 한 장만 그리고 나머지는 tpad로 같은 그림을 늘인다. 바꾸면 썸네일 캐시 이름(<see cref="PreviewKey"/>)도 바뀐다.
+        /// </summary>
+        public static string PreviewSource { get; } = BuildPreviewSource();
+
+        private static string BuildPreviewSource()
+        {
+            // 한 채널의 수식: 사람 > 해 > 바닥(바둑판) > 하늘(그라데이션 + 격자 + 해 둘레 빛) 차례로 덮는다
+            string Plane(int skyTop, int skyBottom, int tileDark, int tileLight, int sun, int halo, int person, int grid)
+            {
+                const string personArea = "lt(hypot(X-0.4*W,Y-0.35*H),0.13*H)+lt(abs(X-0.4*W),0.04*W)*between(Y,0.4*H,0.7*H)+lt(hypot((X-0.4*W)/(0.22*W),(Y-H)/(0.4*H)),1)";
+                const string sunDistance = "hypot(X-0.79*W,Y-0.3*H)/H";
+                var sky = "(" + skyTop + "+" + (skyBottom - skyTop) + "*Y/(0.72*H))*(0.45+0.55*X/W)";
+                var lines = grid + "*(lt(mod(X,12),1)+lt(mod(Y,12),1))";
+                var floor = "if(mod(floor(X/8)+floor(Y/8),2)," + tileDark + "," + tileLight + ")";
+                return "if(" + personArea + "," + person + ",if(lt(" + sunDistance + ",0.15)," + sun + ",if(gt(Y,0.72*H)," + floor
+                    + ",min(255," + sky + "+" + lines + "+" + halo + "*max(0,1-" + sunDistance + "/0.32)))))";
+            }
+            return "color=c=black:s=" + PreviewWidth + "x" + PreviewHeight + ":r=10:d=0.1,format=gbrp,"
+                + "geq=r='" + Plane(30, 205, 40, 150, 255, 90, 10, 34) + "':g='" + Plane(44, 96, 46, 158, 238, 60, 12, 34) + "':b='" + Plane(96, 132, 64, 176, 176, 20, 18, 34) + "',"
+                + "tpad=stop_mode=clone:stop_duration=" + RenderGraph.N((PreviewFrames - 1) / 10.0);
+        }
+
+        /// <summary>
+        /// 효과 미리 보기 띠를 그리는 FFmpeg 인수(PNG를 표준 출력으로). 바탕은 무늬·해·사람 실루엣을 넣은 합성 그림(<see cref="PreviewSource"/>)이다.
         /// 실제 그리기와 같은 필터 조각(<see cref="VideoEffectDef.Recipe"/>)에 썸네일용 값(<see cref="VideoEffectDef.PreviewValues"/>)을 넣어 1.5초를 15칸으로 그린다.
         /// </summary>
         public static IReadOnlyList<string> PreviewArguments(VideoEffectDef def)
@@ -376,20 +408,19 @@ namespace VideoEditor.Core
                 TimeOffset = 0,
                 Label = "p"
             };
-            var size = PreviewWidth + "x" + PreviewHeight;
             return new[]
             {
                 "-hide_banner", "-nostdin", "-loglevel", "error",
-                "-f", "lavfi", "-i", "color=c=0x1e2a44:s=" + size + ":r=10:d=1.5,drawbox=x=0:y=0:w=48:h=72:c=0x0b1020:t=fill,drawbox=x=78:y=14:w=36:h=58:c=0x94a3b8:t=fill",
+                "-f", "lavfi", "-i", PreviewSource,
                 "-filter_complex", "[0]format=gbrap" + def.Recipe(render) + ",format=rgb24,tile=" + PreviewFrames + "x1",
                 "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1"
             };
         }
 
-        /// <summary>미리 보기 띠 캐시 이름(효과·그리는 방법의 판·썸네일 값이 같으면 같은 이름).</summary>
+        /// <summary>미리 보기 띠 캐시 이름(바탕 그림·효과·그리는 방법의 판·썸네일 값이 같으면 같은 이름 — 예전 판의 밋밋한 바탕 썸네일은 다시 쓰지 않는다).</summary>
         public static string PreviewKey(VideoEffectDef def)
         {
-            var recipe = "fx1|" + PreviewWidth + "x" + PreviewHeight + "|" + def.Id + "|" + def.Version + "|"
+            var recipe = "fx2|" + PreviewSource + "|" + def.Id + "|" + def.Version + "|"
                 + string.Join(",", def.Params.Select(p => p.Key + "=" + RenderGraph.N(p.Default) + (p.DefaultColor ?? "")))
                 + "|" + string.Join(",", def.PreviewValues.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => v.Key + "=" + RenderGraph.N(v.Value)));
             using (var sha = System.Security.Cryptography.SHA256.Create())

@@ -104,7 +104,12 @@ namespace VideoEditor.UiTests
                 ui.Run(() => Ui.ById<ComboBox>(window, "TransitionGroup").SelectedItem = "모양");
                 await ui.WaitUntil(() => Tiles(window).Contains("Transition_Heart") && !Tiles(window).Contains("Transition_WipeLeft"), Wait, "모양 묶음");
                 await ui.WaitUntil(() => Thumbnail(window, "Diamond") != null, Wait, "모양 썸네일");
-                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "transition-thumbnails-shapes"));
+                ui.Run(() =>
+                {
+                    // 효과 탭은 동영상 효과 아래에 전환 효과가 있다 — 전환 목록이 보이게 스크롤해 찍는다
+                    Ui.ById<ListBox>(window, "TransitionList").BringIntoView();
+                    Ui.Snap(window, plugin.ShotFolder, "transition-thumbnails-shapes");
+                });
                 ui.Run(() => Ui.ById<ComboBox>(window, "TransitionGroup").SelectedItem = "모든 효과");
                 await ui.WaitUntil(() => Tiles(window).Contains("Transition_WipeLeft"), Wait, "모든 효과");
                 ui.Run(() =>

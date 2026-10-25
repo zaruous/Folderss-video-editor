@@ -452,7 +452,15 @@ namespace VideoEditor.Ui
             head.Children.Add(remove);
             var title = Section(def?.Name ?? "알 수 없는 효과(" + effectId + ")");
             title.ToolTip = def?.Description;
+            DockPanel.SetDock(title, Dock.Left);
             head.Children.Add(title);
+            // 이름 옆에 작게 묶음(효과 탭의 묶음 제목과 같은 이름) — 어느 갈래의 효과인지
+            var group = UiKit.Label(def?.Group ?? "", true);
+            group.FontSize = 11;
+            group.Margin = new Thickness(6, 1, 4, 0);
+            group.ToolTip = def?.Description;
+            AutomationProperties.SetAutomationId(group, "EffectGroup" + index);
+            head.Children.Add(group);
             box.Children.Add(head);
             if (def == null)
             {
