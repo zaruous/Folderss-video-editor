@@ -764,7 +764,8 @@ namespace VideoEditor.Ui
 
         // 스타일 모음 단추: 어두운 바탕(흰 글자·속 빈 글자도 보이게)에 썸네일을 반 크기로 놓는다.
         // 썸네일 PNG의 가운데가 글자 가운데라 가운데 맞춤으로 두면 모두 같은 크기·위치로 보인다(넘치는 효과 여백은 잘림)
-        private const double PresetTileWidth = 96;
+        // 폭은 좁은 속성 패널(안쪽 약 200px)에도 한 줄에 둘씩 들어가게
+        private const double PresetTileWidth = 84;
         private const double PresetTileHeight = 44;
         private const double PresetThumbnailScale = 0.5;
         private static readonly System.Windows.Media.Brush PresetBackdrop = FrozenBrush(System.Windows.Media.Color.FromRgb(0x50, 0x50, 0x50));
