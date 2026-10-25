@@ -113,11 +113,42 @@ namespace VideoEditor.Ui
             // 미리 보기에서 클립을 눌러 고르고, 고른 동영상·사진·글자를 직접 옮기고 크기(글자는 상자 너비·높이도)를 바꾸는 틀
             var overlay = new TransformOverlay(session, commands, () => player.IsPlaying);
             screen.Children.Add(overlay);
+            // 효과 칸 미리 보기(효과 탭 칸에 마우스를 올려 둔 동안): 화면을 효과를 얹은 그림으로 바꾸고 왼쪽 위에 이름 — 끝나면 미리 보기 그림으로 되돌린다
+            var hover = commands.EffectHover;
+            var hoverText = new TextBlock { Foreground = Brushes.White, FontSize = 12 };
+            var hoverLabel = new Border
+            {
+                Child = hoverText,
+                Background = new SolidColorBrush(Color.FromArgb(0xB4, 0, 0, 0)),
+                BorderThickness = new Thickness(3, 0, 0, 0),
+                CornerRadius = new CornerRadius(2),
+                Padding = new Thickness(7, 3, 8, 3),
+                Margin = new Thickness(8),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                IsHitTestVisible = false,
+                Visibility = Visibility.Collapsed
+            };
+            hoverLabel.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
+            AutomationProperties.SetAutomationId(hoverLabel, "EffectHoverPreview");
+            screen.Children.Add(hoverLabel);
             AutomationProperties.SetAutomationId(_placeholder, "PreviewPlaceholder");
             screen.Children.Add(_placeholder);
             Children.Add(screen);
 
-            player.BitmapChanged += (s, e) => _image.Source = player.Bitmap;
+            hover.Changed += (s, e) =>
+            {
+                var showing = hover.Frame != null;
+                _image.Source = showing ? hover.Frame : player.Bitmap;
+                hoverText.Text = showing ? "미리 보기: " + hover.Effect.Name : "";
+                AutomationProperties.SetName(hoverLabel, hoverText.Text);
+                hoverLabel.Visibility = showing ? Visibility.Visible : Visibility.Collapsed;
+            };
+            player.BitmapChanged += (s, e) =>
+            {
+                if (hover.Frame == null)
+                    _image.Source = player.Bitmap;
+            };
             player.StateChanged += (s, e) =>
             {
                 ((TextBlock)_play.Content).Text = player.IsPlaying ? UiKit.GlyphPause : UiKit.GlyphPlay;

@@ -163,6 +163,7 @@ namespace VideoEditor.Ui
             Unloaded += (s, e) =>
             {
                 _services.ToolChanged -= _toolChanged;
+                _commands.EffectHover.Dispose();
                 _player.Dispose();
                 _autosave.Stop();
                 if (_host != null)

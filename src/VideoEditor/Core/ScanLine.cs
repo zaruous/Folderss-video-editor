@@ -41,7 +41,8 @@ namespace VideoEditor.Core
             },
             Render,
             // 썸네일 띠(1.5초)에 한 번 훑고 쉬는 것까지 다 보이게, 작은 그림에서도 선과 빛이 보이게 조금 굵고 넓게
-            new Dictionary<string, double> { ["period"] = 1.5, ["glow"] = 70, ["core"] = 8, ["jitter"] = 25 });
+            new Dictionary<string, double> { ["period"] = 1.5, ["glow"] = 70, ["core"] = 8, ["jitter"] = 25 })
+        { Since = 1 };
 
         /// <summary>선 모양(출력 픽셀): 속 반폭, 번짐 폭, 처짐 깊이, 떨림 폭(0 = 떨리지 않음), 띠 위아래 여백(선 끝에서 띠 가장자리까지), 띠 높이.</summary>
         public readonly struct Shape

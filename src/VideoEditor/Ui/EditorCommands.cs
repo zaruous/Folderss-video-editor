@@ -35,9 +35,13 @@ namespace VideoEditor.Ui
             _services = services;
             _player = player;
             _owner = owner;
+            EffectHover = new EffectHoverPreview(session, services, player, owner.Dispatcher);
         }
 
         public TimelineView Timeline { get; set; }
+
+        /// <summary>효과 칸에 마우스를 올려 둔 동안 고른 클립에 그 효과를 얹어 미리 보기 화면에 보이기(효과 탭이 부르고 플레이어 패널이 보인다).</summary>
+        public EffectHoverPreview EffectHover { get; }
 
         /// <summary>상태 줄 글.</summary>
         public event Action<string> StatusChanged;
@@ -613,6 +617,8 @@ namespace VideoEditor.Ui
                 }, "'" + def.Name + "' 효과를 " + (ids.Count == 1 ? "클립" : ids.Count + "개 클립") + "에 넣었습니다(속성 패널 [효과] 탭에서 조절)."))
             {
                 _session.Select(ids.Select(Project.FindClip).Where(c => c != null));
+                // 넣은 효과는 본 것(효과 탭의 "새로" 표시가 사라짐) — 넣기 단추·두 번 누르기·끌어 놓기 모두 여기로 온다
+                _services.MarkEffectsSeen(new[] { def.Id });
                 VideoEffectsApplied?.Invoke(ids);
             }
         }

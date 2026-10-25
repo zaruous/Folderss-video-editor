@@ -16,7 +16,8 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// 미디어 패널(왼쪽 위): [미디어] 가져온 파일 목록(썸네일·종류·길이 — 두 번 누르면 타임라인 끝에 추가, 끌어서 원하는 자리에),
-    /// [폴더] Folderss 폴더 패널에서 골라 가져오기, [글자] 글자 클립 만들기, [효과] 동영상 효과·전환 효과(썸네일). 도구 막대에 [URL에서 가져오기](직접 링크·유튜브).
+    /// [폴더] Folderss 폴더 패널에서 골라 가져오기, [글자] 글자 클립 만들기, [효과] 동영상 효과(썸네일 — 새 효과는 "새로"), [전환] 전환 효과(썸네일).
+    /// 도구 막대에 [URL에서 가져오기](직접 링크·유튜브).
     /// </summary>
     internal sealed class MediaPanel : DockPanel
     {
@@ -25,6 +26,7 @@ namespace VideoEditor.Ui
         private readonly EditorCommands _commands;
         private readonly ListBox _list = new ListBox { BorderThickness = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Stretch };
         private readonly TabControl _tabs = new TabControl();
+        private readonly TabItem _effectsTab;
         private Point _dragStart;
         private bool _dragFromItem;
         private bool _folderLoaded;
@@ -36,47 +38,64 @@ namespace VideoEditor.Ui
             _services = services;
             _commands = commands;
             AutomationProperties.SetAutomationId(_tabs, "MediaTabs");
-            UiKit.StyleTabs(_tabs);
+            // 탭이 다섯이라 머리글 여백을 줄인다(기본 크기 창의 좁은 패널에서도 탭 줄이 한 줄에)
+            UiKit.StyleTabs(_tabs, 8);
             _tabs.Items.Add(new TabItem { Header = "미디어", Content = MediaTab() });
             var folderTab = new TabItem { Header = "폴더", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
             _tabs.Items.Add(folderTab);
             _tabs.Items.Add(new TabItem { Header = "글자", Content = TextTab() });
-            // 효과 탭은 처음 볼 때 만든다(효과마다 미리 보기를 FFmpeg로 그리므로 열지 않으면 그리지 않게)
-            var effectsTab = new TabItem { Header = "효과", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
-            AutomationProperties.SetAutomationId(effectsTab, "EffectsTab");
-            _tabs.Items.Add(effectsTab);
+            // 효과·전환 탭은 처음 볼 때 만든다(효과마다 썸네일을 FFmpeg로 그리므로 열지 않으면 그리지 않게)
+            _effectsTab = new TabItem { Header = "효과", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
+            AutomationProperties.SetAutomationId(_effectsTab, "EffectsTab");
+            _tabs.Items.Add(_effectsTab);
+            var transitionsTab = new TabItem { Header = "전환", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
+            AutomationProperties.SetAutomationId(transitionsTab, "TransitionsTab");
+            _tabs.Items.Add(transitionsTab);
             _tabs.SelectionChanged += (s, e) =>
             {
                 if (e.OriginalSource != _tabs)
                     return;
+                // 탭을 바꾸면 효과 칸 미리 보기(미리 보기 화면)와 썸네일 움직임을 멈춘다
+                _commands.EffectHover.Cancel();
+                StopPreview();
                 if (_tabs.SelectedItem == folderTab && !_folderLoaded)
                 {
                     _folderLoaded = true;
                     folderTab.Content = FolderTab();
                 }
-                if (_tabs.SelectedItem == effectsTab && _refillEffects == null)
-                    effectsTab.Content = EffectsTab();
+                if (_tabs.SelectedItem == _effectsTab && _showNewEffects == null)
+                    _effectsTab.Content = EffectsTab();
+                if (_tabs.SelectedItem == transitionsTab && _refillTransitions == null)
+                    transitionsTab.Content = TransitionsTab();
             };
             Children.Add(_tabs);
             session.Changed += (s, e) => Refill();
-            // FFmpeg를 찾으면(또는 바꾸면) 썸네일·효과 목록(FFmpeg 버전에 따라 쓸 수 있는 효과)을 다시
+            // FFmpeg를 찾으면(또는 바꾸면) 썸네일·전환 목록(FFmpeg 버전에 따라 쓸 수 있는 효과)을 다시
             EventHandler toolChanged = (s, e) => Dispatcher.BeginInvoke(new Action(() =>
             {
                 Refill();
-                _refillEffects?.Invoke();
+                _refillTransitions?.Invoke();
             }));
+            // 효과를 본 것으로 적으면(이 창이나 다른 편집 창에서) "새로" 표시를 다시
+            EventHandler seenChanged = (s, e) => ShowNewEffects();
             _previewTimer.Tick += (s, e) => PreviewTick();
             Loaded += (s, e) =>
             {
                 services.ToolChanged -= toolChanged;
                 services.ToolChanged += toolChanged;
+                services.SeenEffectsChanged -= seenChanged;
+                services.SeenEffectsChanged += seenChanged;
+                ShowNewEffects();
             };
             Unloaded += (s, e) =>
             {
                 services.ToolChanged -= toolChanged;
+                services.SeenEffectsChanged -= seenChanged;
                 StopPreview();
+                _commands.EffectHover.Cancel();
             };
             Refill();
+            ShowNewEffects();
         }
 
         private UIElement MediaTab()
@@ -401,31 +420,278 @@ namespace VideoEditor.Ui
 
         // ---------- 효과 ----------
 
+        // [묶음]에서 아직 보지 않은 효과만 보는 항목(새 효과가 있을 때만)
+        private const string NewGroup = "새로 추가됨";
+
         /// <summary>
-        /// [효과] 탭: 맨 위에 동영상 효과(묶음마다 제목을 단 썸네일 칸), 그 아래 전환 효과. 탭 전체가 한 번에 스크롤되고(안쪽 목록은 스스로 스크롤하지 않는다),
-        /// 두 머리글을 누르면 그 부분을 접고 편다. 썸네일은 그 효과를 실제로 그린 띠다(마우스를 올리면 움직임).
+        /// [효과] 탭: 동영상 효과(클립 그림 위에 그리는 효과 — <see cref="VideoEffects"/>). 효과는 묶음(<see cref="VideoEffectDef.Group"/>)마다 제목 아래 같은 크기 칸으로 보이고,
+        /// [묶음]에서 한 묶음만 고를 수 있다. 칸에서 골라 [고른 클립에 넣기]·두 번 누르기, 또는 타임라인의 클립으로 끌어 놓는다(동영상·사진 클립에만, 값은 속성 패널의 [효과] 탭에서).
+        /// [고른 클립에 넣기]는 동영상·사진 클립을 골랐을 때만 켜지고, 고른 클립에 이미 든 효과는 썸네일 둘레와 이름을 강조색으로 보인다.
+        /// 아직 보지 않은 효과(<see cref="VideoEffectNews"/>)는 칸에 "새로"를 달고, 탭 맨 위 알림 줄의 [보기]는 [묶음]을 "새로 추가됨"(새 효과만)으로, [확인]은 모두 본 것으로 한다.
+        /// 동영상·사진 클립을 고른 채 칸에 마우스를 올려 두면 그 효과를 얹은 모습을 미리 보기 화면에 잠깐 돌려 보인다(<see cref="EffectHoverPreview"/>).
+        /// 썸네일은 그 효과를 합성 그림에 실제로 그린 띠다(마우스를 올리면 움직임). 탭 전체가 한 번에 스크롤된다(안쪽 목록은 스스로 스크롤하지 않는다).
         /// </summary>
         private UIElement EffectsTab()
         {
             var panel = new StackPanel { Margin = new Thickness(8, 4, 8, 8) };
             var scroll = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
             AutomationProperties.SetAutomationId(scroll, "EffectsTabScroll");
-            panel.Children.Add(VideoEffectsBlock(scroll));
-            panel.Children.Add(TransitionsBlock(scroll));
+
+            var list = new ListBox { BorderThickness = new Thickness(0), Margin = new Thickness(0, 2, 0, 0) };
+            AutomationProperties.SetAutomationId(list, "VideoEffectList");
+            AutomationProperties.SetName(list, "동영상 효과");
+            list.SetResourceReference(BackgroundProperty, "PanelBackground");
+            list.ItemsPanel = TileGrid.PanelTemplate();
+            ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
+            PassWheel(list, scroll);
+            var tiles = new List<ListBoxItem>();
+            var badges = new Dictionary<string, FrameworkElement>(StringComparer.Ordinal);
+            foreach (var def in VideoEffects.All)
+            {
+                var badge = NewBadge(def.Id);
+                badges[def.Id] = badge;
+                var item = VideoEffectTile(def, badge);
+                // 두 번 누르면 그 효과를 고른 클립에(묶음 제목을 두 번 눌러서는 넣지 않게 칸마다 받는다)
+                item.MouseDoubleClick += (s, e) =>
+                {
+                    list.SelectedItem = item;
+                    _commands.AddVideoEffect(def.Id);
+                    e.Handled = true;
+                };
+                // 마우스를 올려 두면 고른 동영상·사진 클립에 그 효과를 얹어 미리 보기 화면에, 떠나면 원래 화면
+                item.MouseEnter += (s, e) => _commands.EffectHover.Hover(def);
+                item.MouseLeave += (s, e) => _commands.EffectHover.Leave(def);
+                tiles.Add(item);
+            }
+            // 묶음마다 제목(이름 · 개수 ───) — 묶음 차례는 효과 목록에 처음 나오는 차례.
+            // 칸 목록을 ItemsSource로 준다(Items에 바로 넣으면 묶을 수 없다 — 묶기는 목록 보기(ListCollectionView)에서만 된다)
+            list.ItemsSource = tiles;
+            list.GroupStyle.Add(TileGroupStyle());
+            list.Items.GroupDescriptions.Add(new System.Windows.Data.PropertyGroupDescription("Tag.Group"));
+            list.SelectedIndex = 0;
+            VideoEffectDef Chosen() => list.SelectedItem is ListBoxItem chosen ? (VideoEffectDef)chosen.Tag : VideoEffects.All[0];
+
+            // 묶음 [모든 효과 ▾] — 새 효과가 있으면 "새로 추가됨"도
+            var groups = new ComboBox { VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetAutomationId(groups, "VideoEffectGroup");
+            AutomationProperties.SetName(groups, "동영상 효과 묶음");
+            const string allGroups = "모든 효과";
+
+            // 맨 위 알림 줄(새 효과가 있을 때만): 새 동영상 효과 N개가 추가되었습니다 [보기] [확인]
+            var noticeText = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetAutomationId(noticeText, "VideoEffectNewText");
+            var noticeButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            noticeButtons.Children.Add(UiKit.TextButton("보기", "VideoEffectNewShow", () => groups.SelectedItem = NewGroup));
+            // [확인]: 지금 있는 효과를 모두 본 것으로("새로 추가됨"을 보던 중이면 모든 효과로 돌아간다)
+            noticeButtons.Children.Add(UiKit.TextButton("확인", "VideoEffectNewDismiss", () =>
+            {
+                if (groups.SelectedItem as string == NewGroup)
+                    groups.SelectedItem = allGroups;
+                _services.MarkEffectsSeen(VideoEffects.All.Select(d => d.Id));
+            }));
+            foreach (Button button in noticeButtons.Children)
+            {
+                button.MinWidth = 0;
+                button.Padding = new Thickness(8, 1, 8, 1);
+            }
+            ((Button)noticeButtons.Children[0]).ToolTip = "[묶음]을 \"" + NewGroup + "\"으로 — 새 효과만 봅니다.";
+            ((Button)noticeButtons.Children[1]).ToolTip = "모든 효과를 본 것으로 하고 \"새로\" 표시를 지웁니다.";
+            var noticeRow = new DockPanel();
+            DockPanel.SetDock(noticeButtons, Dock.Right);
+            noticeRow.Children.Add(noticeButtons);
+            noticeRow.Children.Add(noticeText);
+            var notice = new Border { Child = noticeRow, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3), Padding = new Thickness(8, 4, 4, 4), Margin = new Thickness(0, 2, 0, 4) };
+            notice.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
+            notice.SetResourceReference(Border.BackgroundProperty, "ControlBackground");
+            AutomationProperties.SetAutomationId(notice, "VideoEffectNewNotice");
+            panel.Children.Add(notice);
+
+            // 묶음 [모든 효과 ▾], 아래 줄에 한 줄 설명 ……… [고른 클립에 넣기]
+            var row = new DockPanel { Margin = new Thickness(0, 4, 0, 4) };
+            var groupLabel = UiKit.Label("묶음 ", true);
+            DockPanel.SetDock(groupLabel, Dock.Left);
+            row.Children.Add(groupLabel);
+            row.Children.Add(groups);
+            panel.Children.Add(row);
+            var apply = UiKit.TextButton("고른 클립에 넣기", "VideoEffectApplyButton", () => _commands.AddVideoEffect(Chosen().Id));
+            apply.Margin = new Thickness(6, 0, 0, 0);
+            apply.Padding = new Thickness(8, 1, 8, 1);
+            apply.MinWidth = 0;
+            apply.VerticalAlignment = VerticalAlignment.Center;
+            ToolTipService.SetShowOnDisabled(apply, true);
+            var hint = UiKit.Label("고른 동영상·사진 클립 위에 그립니다 · 클립으로 끌어 놓아도 됩니다", true);
+            hint.TextTrimming = TextTrimming.CharacterEllipsis;
+            hint.ToolTip = "동영상 효과는 클립 그림 위에 그려져 클립과 함께 옮기고 돌고 사라집니다(글자 클립에는 넣지 않습니다).\n"
+                + "효과를 타임라인의 클립으로 끌어 놓거나, 두 번 눌러 고른 클립에 넣습니다. 값은 속성 패널의 [효과] 탭에서 바꿉니다.\n"
+                + "동영상·사진 클립을 고른 채 효과에 마우스를 올려 두면 그 클립에 얹은 모습을 미리 보기 화면에 잠깐 보입니다.";
+            var applyRow = new DockPanel { Margin = new Thickness(0, 0, 0, 2) };
+            DockPanel.SetDock(apply, Dock.Right);
+            applyRow.Children.Add(apply);
+            applyRow.Children.Add(hint);
+            panel.Children.Add(applyRow);
+            panel.Children.Add(list);
+
+            // "새로 추가됨"을 고르면 그때 새 효과였던 칸만 — 보는 동안 본 효과가 되어도(미리 보기·넣기) 칸이 사라지지 않게 고를 때 정해 둔다
+            var filling = false;
+            void Filter()
+            {
+                StopPreview();
+                var group = groups.SelectedItem as string;
+                if (group == NewGroup)
+                {
+                    var shown = new HashSet<string>(_services.NewEffects().Select(d => d.Id), StringComparer.Ordinal);
+                    list.Items.Filter = o => shown.Contains(((VideoEffectDef)((ListBoxItem)o).Tag).Id);
+                }
+                else
+                {
+                    list.Items.Filter = group == null || group == allGroups ? null : new Predicate<object>(o => ((VideoEffectDef)((ListBoxItem)o).Tag).Group == group);
+                }
+                if (list.SelectedItem == null && list.Items.Count > 0)
+                    list.SelectedIndex = 0;
+            }
+            // 묶음 목록: 모든 효과, (새 효과가 있거나 보는 중이면) 새로 추가됨, 묶음들. 고른 항목이 빠지면 모든 효과로
+            void FillGroups(bool hasNew)
+            {
+                var chosen = groups.SelectedItem as string ?? allGroups;
+                var names = new List<string> { allGroups };
+                if (hasNew || chosen == NewGroup)
+                    names.Add(NewGroup);
+                names.AddRange(VideoEffects.Groups());
+                if (names.SequenceEqual(groups.Items.Cast<string>()))
+                    return;
+                filling = true;
+                groups.Items.Clear();
+                foreach (var name in names)
+                    groups.Items.Add(name);
+                groups.SelectedItem = names.Contains(chosen) ? chosen : allGroups;
+                filling = false;
+                if ((string)groups.SelectedItem != chosen)
+                    Filter();
+            }
+            groups.SelectionChanged += (s, e) =>
+            {
+                if (filling)
+                    return;
+                Filter();
+                // "새로 추가됨"을 떠났는데 새 효과가 더 없으면 그 항목을 뺀다(고르기가 끝난 뒤에)
+                if (groups.SelectedItem as string != NewGroup)
+                    Dispatcher.BeginInvoke(new Action(() => FillGroups(_services.NewEffects().Count > 0)));
+            };
+
+            // 새 효과 표시: 칸의 "새로", 알림 줄, 묶음의 "새로 추가됨"
+            void ShowNew(List<VideoEffectDef> news)
+            {
+                var ids = new HashSet<string>(news.Select(d => d.Id), StringComparer.Ordinal);
+                foreach (var item in tiles)
+                {
+                    var id = ((VideoEffectDef)item.Tag).Id;
+                    badges[id].Visibility = ids.Contains(id) ? Visibility.Visible : Visibility.Collapsed;
+                    AutomationProperties.SetHelpText(item, ids.Contains(id) ? "새로 추가된 효과" : "");
+                }
+                noticeText.Text = "새 동영상 효과 " + news.Count + "개가 추가되었습니다";
+                notice.Visibility = news.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                FillGroups(news.Count > 0);
+            }
+            _showNewEffects = ShowNew;
+            ShowNew(_services.NewEffects());
+
+            // 고른 클립에 따라: 넣기 단추(동영상·사진 클립을 골랐을 때만), 이미 든 효과 강조
+            void ShowSelection()
+            {
+                var clips = _session.SelectedClips.Where(VideoEffects.CanHave).ToList();
+                apply.IsEnabled = clips.Count > 0;
+                apply.ToolTip = clips.Count > 0 ? "고른 효과를 고른 동영상·사진 클립에 넣습니다(두 번 눌러도 됩니다)." : "타임라인에서 동영상·사진 클립을 고르세요(글자 클립에는 넣지 않습니다).";
+                var applied = new HashSet<string>(clips.Where(c => c.Effects != null).SelectMany(c => c.Effects).Where(e => e != null).Select(e => e.Id), StringComparer.Ordinal);
+                foreach (var item in tiles)
+                    MarkApplied(item, applied.Contains(((VideoEffectDef)item.Tag).Id));
+            }
+            _session.SelectionChanged += (s, e) => ShowSelection();
+            _session.Changed += (s, e) => ShowSelection();
+            ShowSelection();
+
+            // 끌어서 타임라인의 클립에 놓으면 그 클립에(누르면 효과 칸 미리 보기는 그만)
+            var dragStart = new Point();
+            var fromItem = false;
+            list.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                _commands.EffectHover.Cancel();
+                dragStart = e.GetPosition(list);
+                fromItem = e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(list, source) is ListBoxItem;
+            };
+            list.PreviewMouseMove += (s, e) =>
+            {
+                if (e.LeftButton != MouseButtonState.Pressed || !fromItem || list.SelectedItem == null)
+                    return;
+                var point = e.GetPosition(list);
+                if (Math.Abs(point.X - dragStart.X) < 6 && Math.Abs(point.Y - dragStart.Y) < 6)
+                    return;
+                StopPreview();
+                var data = new DataObject();
+                data.SetData(TimelineCanvas.VideoEffectDataFormat, Chosen().Id);
+                DragDrop.DoDragDrop(list, data, DragDropEffects.Copy);
+            };
             return scroll;
         }
 
-        /// <summary>
-        /// [효과] 전환 효과: 썸네일에서 고르고 [고른 클립에 넣기]·[모든 클립 사이에] — 또는 효과를 타임라인의 클립으로 끌어 놓는다.
-        /// 클립 앞(앞 클립에서 바뀌어 들어오는 곳)에 들어가고, 앞 클립이 그 길이만큼 밑에 더 그려질 뿐 타임라인 위치는 바뀌지 않는다.
-        /// 효과는 데이터(기본 효과 + 데이터 폴더\transitions\*.json)에서 오고, 썸네일은 그 효과를 실제로 그린 띠다(마우스를 올리면 움직임).
-        /// </summary>
-        private UIElement TransitionsBlock(ScrollViewer scroll)
+        /// <summary>칸의 "새로" 표시(썸네일 왼쪽 위, 강조색 바탕) — 아직 보지 않은 효과의 칸만 보인다.</summary>
+        private static FrameworkElement NewBadge(string id)
         {
-            var top = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
-            var block = new StackPanel();
-            block.Children.Add(SectionHeader("전환 효과", "TransitionSection", top, out var count));
-            block.Children.Add(top);
+            var text = new TextBlock { Text = "새로", FontSize = 10, FontWeight = FontWeights.SemiBold };
+            // 글은 패널 바탕색(어두운 테마는 어둡게, 밝은 테마는 밝게) — 강조색 위에서 잘 읽히게
+            text.SetResourceReference(TextBlock.ForegroundProperty, "PanelBackground");
+            var badge = new Border
+            {
+                Child = text,
+                CornerRadius = new CornerRadius(2),
+                Padding = new Thickness(4, 0, 4, 1),
+                Margin = new Thickness(3),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                IsHitTestVisible = false,
+                Visibility = Visibility.Collapsed
+            };
+            badge.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
+            AutomationProperties.SetAutomationId(badge, "VideoEffectNew_" + id);
+            AutomationProperties.SetName(badge, "새로");
+            return badge;
+        }
+
+        /// <summary>새 효과 표시를 다시: [효과] 탭 머리글(새 효과가 있으면 강조색 점), 효과 탭을 만들었으면 칸의 "새로"·알림 줄·묶음.</summary>
+        private void ShowNewEffects()
+        {
+            var news = _services.NewEffects();
+            if (news.Count == 0)
+            {
+                _effectsTab.Header = "효과";
+                _effectsTab.ToolTip = null;
+                AutomationProperties.SetName(_effectsTab, "효과");
+            }
+            else
+            {
+                // 효과 • (점은 강조색) — 좁은 패널에서도 탭 줄이 넘치지 않게 개수는 툴팁·자동화 이름에
+                var header = new StackPanel { Orientation = Orientation.Horizontal };
+                header.Children.Add(new TextBlock { Text = "효과" });
+                var dot = new TextBlock { Text = "●", FontSize = 8, Margin = new Thickness(3, 1, 0, 0), VerticalAlignment = VerticalAlignment.Top };
+                dot.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+                AutomationProperties.SetAutomationId(dot, "EffectsTabNewMark");
+                header.Children.Add(dot);
+                _effectsTab.Header = header;
+                _effectsTab.ToolTip = "새 동영상 효과 " + news.Count + "개";
+                AutomationProperties.SetName(_effectsTab, "효과 (새 효과 " + news.Count + "개)");
+            }
+            _showNewEffects?.Invoke(news);
+        }
+
+        /// <summary>
+        /// [전환] 탭: 전환 효과를 썸네일에서 고르고 [고른 클립에 넣기]·[모든 클립 사이에] — 또는 효과를 타임라인의 클립으로 끌어 놓는다.
+        /// 클립 앞(앞 클립에서 바뀌어 들어오는 곳)에 들어가고, 앞 클립이 그 길이만큼 밑에 더 그려질 뿐 타임라인 위치는 바뀌지 않는다.
+        /// 효과는 데이터(기본 효과 + 데이터 폴더\transitions\*.json)에서 오고, 썸네일은 그 효과를 실제로 그린 띠다(마우스를 올리면 움직임). 탭 전체가 한 번에 스크롤된다.
+        /// </summary>
+        private UIElement TransitionsTab()
+        {
+            var top = new StackPanel { Margin = new Thickness(8, 4, 8, 8) };
+            var scroll = new ScrollViewer { Content = top, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+            AutomationProperties.SetAutomationId(scroll, "TransitionsTabScroll");
             // 설명은 한 줄(전체는 툴팁) — 좁은 패널에서도 썸네일이 많이 보이게
             var hint = UiKit.Label("클립 앞에 넣습니다(타임라인 위치는 그대로) · 타임라인의 클립으로 끌어 놓아도 됩니다", true);
             hint.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -500,12 +766,12 @@ namespace VideoEditor.Ui
                 var names = new[] { allGroups }.Concat(usable.Select(d => d.Group).Where(g => g != null).Distinct()).ToList();
                 if (!names.SequenceEqual(groups.Items.Cast<string>()))
                 {
-                    _fillingEffects = true;
+                    _fillingTransitions = true;
                     groups.Items.Clear();
                     foreach (var name in names)
                         groups.Items.Add(name);
                     groups.SelectedItem = names.Contains(group) ? group : allGroups;
-                    _fillingEffects = false;
+                    _fillingTransitions = false;
                     group = (string)groups.SelectedItem;
                 }
                 StopPreview();
@@ -513,7 +779,6 @@ namespace VideoEditor.Ui
                 foreach (var def in usable.Where(d => group == allGroups || d.Group == group))
                     list.Items.Add(TransitionTile(def));
                 list.SelectedItem = list.Items.Cast<ListBoxItem>().FirstOrDefault(i => ((TransitionDef)i.Tag).Id == keep) ?? list.Items.Cast<ListBoxItem>().FirstOrDefault();
-                count.Text = usable.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 var errors = _services.TransitionErrors;
                 problems.Text = errors.Count == 0 ? "" : "효과 파일에서 " + errors.Count + "개를 건너뛰었습니다(마우스를 올리면 까닭).";
                 problems.ToolTip = errors.Count == 0 ? null : string.Join("\n", errors.Take(30));
@@ -521,7 +786,7 @@ namespace VideoEditor.Ui
             }
             groups.SelectionChanged += (s, e) =>
             {
-                if (!_fillingEffects)
+                if (!_fillingTransitions)
                     Fill();
             };
             folderButtons.Children.Add(UiKit.TextButton("다시 읽기", "TransitionReloadButton", () =>
@@ -534,7 +799,7 @@ namespace VideoEditor.Ui
             }));
             foreach (FrameworkElement button in folderButtons.Children)
                 button.Margin = new Thickness(0, 0, 4, 0);
-            _refillEffects = Fill;
+            _refillTransitions = Fill;
             Fill();
 
             // 두 번 누르면 고른 클립에, 끌어서 타임라인의 클립에 놓으면 그 클립에
@@ -562,124 +827,7 @@ namespace VideoEditor.Ui
                 data.SetData(TimelineCanvas.TransitionDataFormat, Chosen().Id + "|" + UiKit.Number(Seconds()));
                 DragDrop.DoDragDrop(list, data, DragDropEffects.Copy);
             };
-            return block;
-        }
-
-        /// <summary>
-        /// [효과] 동영상 효과: 클립 그림 위에 그리는 효과(스캔 라인 등 — <see cref="VideoEffects"/>). 썸네일에서 골라 [고른 클립에 넣기]·두 번 누르기, 또는 타임라인의 클립으로 끌어 놓는다.
-        /// 효과는 묶음(<see cref="VideoEffectDef.Group"/>)마다 제목 아래 같은 크기 칸으로 보이고, [묶음]에서 한 묶음만 고를 수 있다.
-        /// [고른 클립에 넣기]는 동영상·사진 클립을 골랐을 때만 켜지고, 고른 클립에 이미 든 효과는 썸네일 둘레와 이름을 강조색으로 보인다.
-        /// 동영상·사진 클립에만 들어가고, 값은 속성 패널의 [효과] 탭에서 바꾼다. 썸네일은 그 효과를 합성 그림에 실제로 그린 띠다(마우스를 올리면 움직임).
-        /// </summary>
-        private UIElement VideoEffectsBlock(ScrollViewer scroll)
-        {
-            var list = new ListBox { BorderThickness = new Thickness(0), Margin = new Thickness(0, 2, 0, 0) };
-            AutomationProperties.SetAutomationId(list, "VideoEffectList");
-            AutomationProperties.SetName(list, "동영상 효과");
-            list.SetResourceReference(BackgroundProperty, "PanelBackground");
-            list.ItemsPanel = TileGrid.PanelTemplate();
-            ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
-            PassWheel(list, scroll);
-            var tiles = new List<ListBoxItem>();
-            foreach (var def in VideoEffects.All)
-            {
-                var item = VideoEffectTile(def);
-                // 두 번 누르면 그 효과를 고른 클립에(묶음 제목을 두 번 눌러서는 넣지 않게 칸마다 받는다)
-                item.MouseDoubleClick += (s, e) =>
-                {
-                    list.SelectedItem = item;
-                    _commands.AddVideoEffect(def.Id);
-                    e.Handled = true;
-                };
-                tiles.Add(item);
-            }
-            // 묶음마다 제목(이름 · 개수 ───) — 묶음 차례는 효과 목록에 처음 나오는 차례.
-            // 칸 목록을 ItemsSource로 준다(Items에 바로 넣으면 묶을 수 없다 — 묶기는 목록 보기(ListCollectionView)에서만 된다)
-            list.ItemsSource = tiles;
-            list.GroupStyle.Add(TileGroupStyle());
-            list.Items.GroupDescriptions.Add(new System.Windows.Data.PropertyGroupDescription("Tag.Group"));
-            list.SelectedIndex = 0;
-            VideoEffectDef Chosen() => list.SelectedItem is ListBoxItem chosen ? (VideoEffectDef)chosen.Tag : VideoEffects.All[0];
-
-            var body = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
-            var block = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
-            // 머리글 줄: ▾ 동영상 효과 N개 ……… [고른 클립에 넣기](접으면 단추도 숨김), 아래에 한 줄 설명
-            var apply = UiKit.TextButton("고른 클립에 넣기", "VideoEffectApplyButton", () => _commands.AddVideoEffect(Chosen().Id));
-            apply.Margin = new Thickness(6, 2, 0, 3);
-            apply.Padding = new Thickness(8, 1, 8, 1);
-            apply.MinWidth = 0;
-            apply.VerticalAlignment = VerticalAlignment.Center;
-            ToolTipService.SetShowOnDisabled(apply, true);
-            apply.SetBinding(VisibilityProperty, new System.Windows.Data.Binding("Visibility") { Source = body });
-            block.Children.Add(SectionHeader("동영상 효과", "VideoEffectSection", body, out var count, apply));
-            block.Children.Add(body);
-            count.Text = VideoEffects.All.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var hint = UiKit.Label("고른 동영상·사진 클립 위에 그립니다 · 클립으로 끌어 놓아도 됩니다", true);
-            hint.TextTrimming = TextTrimming.CharacterEllipsis;
-            hint.ToolTip = "동영상 효과는 클립 그림 위에 그려져 클립과 함께 옮기고 돌고 사라집니다(글자 클립에는 넣지 않습니다).\n"
-                + "효과를 타임라인의 클립으로 끌어 놓거나, 두 번 눌러 고른 클립에 넣습니다. 값은 속성 패널의 [효과] 탭에서 바꿉니다.";
-            body.Children.Add(hint);
-
-            // 묶음 [모든 효과 ▾]
-            var groups = new ComboBox { VerticalAlignment = VerticalAlignment.Center };
-            AutomationProperties.SetAutomationId(groups, "VideoEffectGroup");
-            AutomationProperties.SetName(groups, "동영상 효과 묶음");
-            const string allGroups = "모든 효과";
-            groups.Items.Add(allGroups);
-            foreach (var name in VideoEffects.Groups())
-                groups.Items.Add(name);
-            groups.SelectedIndex = 0;
-            groups.SelectionChanged += (s, e) =>
-            {
-                StopPreview();
-                var group = groups.SelectedItem as string;
-                list.Items.Filter = group == null || group == allGroups ? null : new Predicate<object>(o => ((VideoEffectDef)((ListBoxItem)o).Tag).Group == group);
-                if (list.SelectedItem == null && list.Items.Count > 0)
-                    list.SelectedIndex = 0;
-            };
-            var groupLabel = UiKit.Label("묶음 ", true);
-            DockPanel.SetDock(groupLabel, Dock.Left);
-            var row = new DockPanel { Margin = new Thickness(0, 6, 0, 4) };
-            row.Children.Add(groupLabel);
-            row.Children.Add(groups);
-            body.Children.Add(row);
-            body.Children.Add(list);
-
-            // 고른 클립에 따라: 넣기 단추(동영상·사진 클립을 골랐을 때만), 이미 든 효과 강조
-            void ShowSelection()
-            {
-                var clips = _session.SelectedClips.Where(VideoEffects.CanHave).ToList();
-                apply.IsEnabled = clips.Count > 0;
-                apply.ToolTip = clips.Count > 0 ? "고른 효과를 고른 동영상·사진 클립에 넣습니다(두 번 눌러도 됩니다)." : "타임라인에서 동영상·사진 클립을 고르세요(글자 클립에는 넣지 않습니다).";
-                var applied = new HashSet<string>(clips.Where(c => c.Effects != null).SelectMany(c => c.Effects).Where(e => e != null).Select(e => e.Id), StringComparer.Ordinal);
-                foreach (var item in tiles)
-                    MarkApplied(item, applied.Contains(((VideoEffectDef)item.Tag).Id));
-            }
-            _session.SelectionChanged += (s, e) => ShowSelection();
-            _session.Changed += (s, e) => ShowSelection();
-            ShowSelection();
-
-            // 끌어서 타임라인의 클립에 놓으면 그 클립에
-            var dragStart = new Point();
-            var fromItem = false;
-            list.PreviewMouseLeftButtonDown += (s, e) =>
-            {
-                dragStart = e.GetPosition(list);
-                fromItem = e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(list, source) is ListBoxItem;
-            };
-            list.PreviewMouseMove += (s, e) =>
-            {
-                if (e.LeftButton != MouseButtonState.Pressed || !fromItem || list.SelectedItem == null)
-                    return;
-                var point = e.GetPosition(list);
-                if (Math.Abs(point.X - dragStart.X) < 6 && Math.Abs(point.Y - dragStart.Y) < 6)
-                    return;
-                StopPreview();
-                var data = new DataObject();
-                data.SetData(TimelineCanvas.VideoEffectDataFormat, Chosen().Id);
-                DragDrop.DoDragDrop(list, data, DragDropEffects.Copy);
-            };
-            return block;
+            return scroll;
         }
 
         /// <summary>고른 클립에 든 효과의 칸: 썸네일 둘레와 이름을 강조색으로(자동화 ItemStatus "고른 클립에 있음").</summary>
@@ -700,63 +848,6 @@ namespace VideoEditor.Ui
             }
             name.FontWeight = applied ? FontWeights.SemiBold : FontWeights.Normal;
             AutomationProperties.SetItemStatus(item, applied ? "고른 클립에 있음" : "");
-        }
-
-        /// <summary>
-        /// 접고 펴는 머리글 줄(▾ 제목 개수 …… [action], 아래에 가는 줄): 머리글을 누르면 body를 숨기고 보인다(처음에는 펴 둠). count에 개수 글을 넣는다.
-        /// action(단추 등)은 줄 오른쪽에 — 머리글 글과 겹치지 않게 그만큼 비켜 둔다.
-        /// </summary>
-        private static FrameworkElement SectionHeader(string title, string automationId, UIElement body, out TextBlock count, FrameworkElement action = null)
-        {
-            var chevron = new TextBlock { FontFamily = UiKit.IconFont, FontSize = 10, Width = 16, VerticalAlignment = VerticalAlignment.Center };
-            var name = new TextBlock { Text = title, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
-            count = UiKit.Label("", true);
-            count.FontSize = 11;
-            count.Margin = new Thickness(5, 1, 0, 0);
-            var content = new StackPanel { Orientation = Orientation.Horizontal };
-            content.Children.Add(chevron);
-            content.Children.Add(name);
-            content.Children.Add(count);
-            var header = new ToggleButton { Content = content, IsChecked = true, Template = SectionTemplate(), Cursor = Cursors.Hand, Focusable = true };
-            header.SetResourceReference(Control.ForegroundProperty, "PrimaryText");
-            AutomationProperties.SetAutomationId(header, automationId);
-            AutomationProperties.SetName(header, title);
-            void Show()
-            {
-                var open = header.IsChecked == true;
-                body.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-                // Segoe 글리프: 펴짐 = 아래 꺾쇠(E70D), 접힘 = 오른쪽 꺾쇠(E76C)
-                chevron.Text = open ? "\uE70D" : "\uE76C";
-                header.ToolTip = open ? "눌러서 접기" : "눌러서 펴기";
-            }
-            header.Checked += (s, e) => Show();
-            header.Unchecked += (s, e) => Show();
-            Show();
-            var row = new DockPanel();
-            if (action != null)
-            {
-                DockPanel.SetDock(action, Dock.Right);
-                row.Children.Add(action);
-            }
-            row.Children.Add(header);
-            var line = new Border { Child = row, BorderThickness = new Thickness(0, 0, 0, 1) };
-            line.SetResourceReference(Border.BorderBrushProperty, "BorderBrush");
-            return line;
-        }
-
-        // 머리글 모양: 바탕 없음(마우스를 올리면 ControlHoverBrush)
-        private static ControlTemplate SectionTemplate()
-        {
-            var template = new ControlTemplate(typeof(ToggleButton));
-            var border = new FrameworkElementFactory(typeof(Border), "Bd");
-            border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
-            border.SetValue(Border.PaddingProperty, new Thickness(0, 5, 4, 5));
-            border.AppendChild(new FrameworkElementFactory(typeof(ContentPresenter)));
-            template.VisualTree = border;
-            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Border.BackgroundProperty, new DynamicResourceExtension("ControlHoverBrush"), "Bd"));
-            template.Triggers.Add(hover);
-            return template;
         }
 
         /// <summary>묶음 제목(이름 · 개수 ─────): 동영상 효과 목록이 묶음마다 칸 위에 단다.</summary>
@@ -802,8 +893,9 @@ namespace VideoEditor.Ui
         private BitmapSource[] _previewFrames;
         private int _previewStill;
         private int _previewTick;
-        private bool _fillingEffects;
-        private Action _refillEffects;
+        private bool _fillingTransitions;
+        private Action _refillTransitions;
+        private Action<List<VideoEffectDef>> _showNewEffects;
 
         private ListBoxItem TransitionTile(TransitionDef def)
         {
@@ -816,20 +908,30 @@ namespace VideoEditor.Ui
                 Transitions.PreviewWidth, Transitions.PreviewHeight, Transitions.PreviewFrames, Transitions.PreviewStill);
         }
 
-        private ListBoxItem VideoEffectTile(VideoEffectDef def)
+        private ListBoxItem VideoEffectTile(VideoEffectDef def, FrameworkElement badge)
         {
             return Tile(def, def.Name, def.Name + (def.Group != null ? " · " + def.Group : "") + "\n" + def.Description, "VideoEffect_" + def.Id, _services.EffectPreview(def),
-                VideoEffects.PreviewWidth, VideoEffects.PreviewHeight, VideoEffects.PreviewFrames, VideoEffects.PreviewStill);
+                VideoEffects.PreviewWidth, VideoEffects.PreviewHeight, VideoEffects.PreviewFrames, VideoEffects.PreviewStill, badge);
         }
 
         /// <summary>
         /// 효과 썸네일 단추 하나(전환·동영상 효과 공용): 칸 폭을 따라 16:9 썸네일과 아래에 이름. 미리 보기 띠가 그려지면 정지 칸을 보이고, 마우스를 올리면 칸을 차례로 보인다.
         /// 썸네일 틀은 늘 2px 둘레를 두고(평소 투명) 고른 클립에 든 효과만 강조색으로 칠한다 — 강조해도 칸 크기가 바뀌지 않게.
+        /// badge(동영상 효과의 "새로" 표시)가 있으면 썸네일 위에 겹친다.
         /// </summary>
-        private ListBoxItem Tile(object tag, string title, string tip, string automationId, System.Threading.Tasks.Task<BitmapSource> preview, int width, int height, int count, int still)
+        private ListBoxItem Tile(object tag, string title, string tip, string automationId, System.Threading.Tasks.Task<BitmapSource> preview, int width, int height, int count, int still,
+            FrameworkElement badge = null)
         {
             var image = new Image { Stretch = Stretch.UniformToFill };
-            var frame = new ThumbFrame { Child = image, CornerRadius = new CornerRadius(3), ClipToBounds = true, BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent };
+            UIElement picture = image;
+            if (badge != null)
+            {
+                var layers = new Grid();
+                layers.Children.Add(image);
+                layers.Children.Add(badge);
+                picture = layers;
+            }
+            var frame = new ThumbFrame { Child = picture, CornerRadius = new CornerRadius(3), ClipToBounds = true, BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent };
             frame.SetResourceReference(Border.BackgroundProperty, "ControlBackground");
             var name = new TextBlock { Text = title, TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 11, Margin = new Thickness(0, 2, 0, 0) };
             var content = new StackPanel { Margin = new Thickness(1) };

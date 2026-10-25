@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -94,10 +95,49 @@ namespace VideoEditor.UiTests
             return a == null || b == null || a.Length != b.Length || !a.AsSpan().SequenceEqual(b);
         }
 
+        /// <summary>칸의 썸네일 그림(썸네일 틀 안 — "새로" 표시와 겹쳐 있다).</summary>
         private static ImageSource Thumbnail(Window window, string id)
         {
             var tile = Tile(window, id);
-            return tile == null ? null : ((Image)((Border)((StackPanel)tile.Content).Children[0]).Child).Source;
+            if (tile == null)
+                return null;
+            var frame = (Border)((StackPanel)tile.Content).Children[0];
+            return (frame.Child as Image ?? ((Panel)frame.Child).Children.OfType<Image>().Single()).Source;
+        }
+
+        private const string SeenKey = "seenVideoEffects";
+
+        /// <summary>본 효과 기록을 지운다 — 플러그인 설정은 시험 프로세스 내내 남으므로(다른 시험이 넣은 효과는 본 것이 된다) 새 효과를 보는 시험의 앞뒤에.</summary>
+        private static void ForgetSeen(PluginUnderTest plugin)
+        {
+            plugin.Manager.SetSetting(SeenKey, null);
+        }
+
+        /// <summary>목록의 모든 효과를 본 것으로(새 효과가 없는 화면).</summary>
+        private static void SeeAll(PluginUnderTest plugin)
+        {
+            plugin.Manager.SetSetting(SeenKey, "[" + string.Join(",", Catalog(plugin).Select(c => "\"" + c.Id + "\"")) + "]");
+        }
+
+        /// <summary>칸의 "새로" 표시(칸 안에서 찾는다 — 막 만든 탭이라 자리를 잡기 전에도).</summary>
+        private static FrameworkElement Badge(Window window, string id)
+        {
+            var tile = Tile(window, id);
+            return tile == null ? null : Ui.ById<FrameworkElement>(tile, "VideoEffectNew_" + id);
+        }
+
+        /// <summary>"새로" 표시가 보이는 칸의 효과 id(목록 차례).</summary>
+        private static List<string> Badged(Window window)
+        {
+            return Ui.ById<ListBox>(window, "VideoEffectList").Items.Cast<ListBoxItem>()
+                .Select(i => System.Windows.Automation.AutomationProperties.GetAutomationId(i).Substring("VideoEffect_".Length))
+                .Where(id => Badge(window, id)?.Visibility == Visibility.Visible).ToList();
+        }
+
+        /// <summary>[효과] 탭 머리글의 자동화 이름(새 효과가 있으면 개수를 붙인다).</summary>
+        private static string EffectsHeader(Window window)
+        {
+            return System.Windows.Automation.AutomationProperties.GetName(Ui.ById<TabItem>(window, "EffectsTab"));
         }
 
         /// <summary>효과 탭의 동영상 효과 칸(묶음을 고르면 그 묶음 칸만 있다).</summary>
@@ -142,11 +182,11 @@ namespace VideoEditor.UiTests
                 encoder.Save(stream);
         }
 
-        /// <summary>플러그인의 효과 목록(id·이름·묶음 — 다른 로드 컨텍스트라 리플렉션으로).</summary>
-        private static List<(string Id, string Name, string Group)> Catalog(PluginUnderTest plugin)
+        /// <summary>플러그인의 효과 목록(id·이름·묶음·처음 나온 판 — 다른 로드 컨텍스트라 리플렉션으로).</summary>
+        private static List<(string Id, string Name, string Group, int Since)> Catalog(PluginUnderTest plugin)
         {
             var all = (IEnumerable)plugin.Assembly.GetType("VideoEditor.Core.VideoEffects", true).GetProperty("All").GetValue(null);
-            return all.Cast<object>().Select(d => ((string)Get(d, "Id"), (string)Get(d, "Name"), (string)Get(d, "Group"))).ToList();
+            return all.Cast<object>().Select(d => ((string)Get(d, "Id"), (string)Get(d, "Name"), (string)Get(d, "Group"), (int)Get(d, "Since"))).ToList();
         }
 
         /// <summary>빨간 사진을 놓고 고른 뒤 재생 헤드를 1초로(스캔 라인이 화면 가운데쯤 지날 때) — 미리 보기를 기다린다.</summary>
@@ -324,6 +364,8 @@ namespace VideoEditor.UiTests
         {
             var ui = UiThread.Instance;
             var plugin = PluginUnderTest.Load(ui);
+            // 효과 탭의 기본 모양(새 효과 표시는 아래 NewEffects 시험에서): 모든 효과를 본 것으로 두고 연다
+            SeeAll(plugin);
             var window = await Open(ui, plugin);
             try
             {
@@ -348,13 +390,19 @@ namespace VideoEditor.UiTests
                     Assert.Equal(ordered.Select(c => "VideoEffect_" + c.Id), Tiles(window));
                     Assert.Equal(catalog[0].Name, System.Windows.Automation.AutomationProperties.GetName(Tile(window, catalog[0].Id)));
                     Assert.Contains(catalog[0].Group, (string)Tile(window, catalog[0].Id).ToolTip);
-                    // 동영상 효과가 맨 위, 전환 효과는 그 아래 — 탭 전체가 한 번에 스크롤된다
+                    // [효과] 탭에는 동영상 효과만(전환 효과는 [전환] 탭 — 열기 전이라 아직 만들지 않음), 새 효과가 없으면 알림 줄·머리글 점도 없다.
+                    // 탭 전체가 한 번에 스크롤된다
+                    var tab = Ui.ById<TabItem>(window, "EffectsTab");
                     var list = Ui.ById<ListBox>(window, "VideoEffectList");
-                    var transitions = Ui.ById<ListBox>(window, "TransitionList");
+                    Assert.Same(tab.Content, Ui.ById<ScrollViewer>(window, "EffectsTabScroll"));
+                    Assert.NotNull(Ui.ById<ListBox>((DependencyObject)tab.Content, "VideoEffectList"));
+                    Assert.Null(Ui.ById<ListBox>(window, "TransitionList"));
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<Border>(window, "VideoEffectNewNotice").Visibility);
+                    Assert.Equal("효과", tab.Header);
+                    Assert.Empty(Badged(window));
                     Assert.True(list.ActualHeight > 0, "동영상 효과 목록 높이 " + list.ActualHeight);
-                    Assert.True(transitions.TranslatePoint(new Point(), list).Y >= list.ActualHeight, "전환 목록이 동영상 효과 아래에 있어야 합니다");
                     var scroll = Ui.ById<ScrollViewer>(window, "EffectsTabScroll");
-                    Assert.True(scroll.ExtentHeight > scroll.ViewportHeight, "효과 탭이 스크롤되어야 합니다(전환 효과까지 길다)");
+                    Assert.True(scroll.ExtentHeight > scroll.ViewportHeight, "효과 탭이 스크롤되어야 합니다(효과 14개)");
                     // 칸은 모두 같은 크기다
                     Assert.Single(list.Items.Cast<ListBoxItem>().Select(i => (Math.Round(i.ActualWidth), Math.Round(i.ActualHeight))).Distinct());
                     // 고른 클립이 없으면 넣기 단추는 꺼져 있다
@@ -441,26 +489,27 @@ namespace VideoEditor.UiTests
                     Assert.Equal("", System.Windows.Automation.AutomationProperties.GetItemStatus(Tile(window, catalog[0].Id)));
                 });
 
-                // 머리글을 누르면 동영상 효과를 접는다(전환 효과가 위로) — 다시 누르면 편다
-                ui.Run(() => Ui.ClickToggle(Ui.ById<ToggleButton>(window, "VideoEffectSection")));
+                // 전환 효과는 [전환] 탭에(처음 열 때 만든다) — 그 탭에는 동영상 효과 목록이 없다
+                ui.Run(() => Ui.ById<TabControl>(window, "MediaTabs").SelectedItem = Ui.ById<TabItem>(window, "TransitionsTab"));
+                await ui.WaitFor(() => Ui.ById<ListBox>(window, "TransitionList"), Wait, "전환 목록");
                 ui.Run(() =>
                 {
-                    Ui.ById<ScrollViewer>(window, "EffectsTabScroll").UpdateLayout();
+                    var tab = Ui.ById<TabItem>(window, "TransitionsTab");
+                    Assert.Equal("전환", tab.Header);
+                    Assert.Same(tab.Content, Ui.ById<ScrollViewer>(window, "TransitionsTabScroll"));
+                    Assert.NotNull(Ui.ById<ListBox>((DependencyObject)tab.Content, "TransitionList"));
+                    Assert.Null(Ui.ById<ListBox>((DependencyObject)tab.Content, "VideoEffectList"));
                     Assert.False(Ui.ById<ListBox>(window, "VideoEffectList").IsVisible);
-                    Assert.True(Ui.ById<ListBox>(window, "TransitionList").IsVisible);
-                    Ui.Snap(window, plugin.ShotFolder, "video-effects-collapsed");
-                });
-                ui.Run(() => Ui.ClickToggle(Ui.ById<ToggleButton>(window, "VideoEffectSection")));
-                ui.Run(() =>
-                {
-                    Ui.ById<ScrollViewer>(window, "EffectsTabScroll").UpdateLayout();
-                    Assert.True(Ui.ById<ListBox>(window, "VideoEffectList").IsVisible);
+                    // 탭 차례: 미디어 · 폴더 · 글자 · 효과 · 전환
+                    Assert.Equal(new object[] { "미디어", "폴더", "글자", "효과", "전환" }, Ui.ById<TabControl>(window, "MediaTabs").Items.Cast<TabItem>().Select(t => t.Header));
+                    Ui.Snap(window, plugin.ShotFolder, "transitions-tab");
                 });
                 Assert.Empty(ui.TakeErrors());
             }
             finally
             {
                 await CloseEditor(ui, window);
+                ForgetSeen(plugin);
             }
         }
 
@@ -534,6 +583,320 @@ namespace VideoEditor.UiTests
             finally
             {
                 await CloseEditor(ui, window);
+            }
+        }
+
+        // ---------- 새 효과("새로" 표시)·효과 칸 미리 보기 ----------
+
+        private static void OpenEffectsTab(UiThread ui, Window window)
+        {
+            ui.Run(() => Ui.ById<TabControl>(window, "MediaTabs").SelectedItem = Ui.ById<TabItem>(window, "EffectsTab"));
+        }
+
+        private static void Enter(Window window, string id)
+        {
+            Tile(window, id).RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = Mouse.MouseEnterEvent });
+        }
+
+        private static void Leave(Window window, string id)
+        {
+            Tile(window, id).RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = Mouse.MouseLeaveEvent });
+        }
+
+        private static Border HoverLabel(Window window)
+        {
+            return Ui.ById<Border>(window, "EffectHoverPreview");
+        }
+
+        [EditorFact]
+        public async Task NewEffects_BadgesNoticeAndHeaderMark_ShowFilterAndDismiss_PersistAcrossReopening()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var catalog = Catalog(plugin);
+            var groups = catalog.Select(c => c.Group).Distinct().ToList();
+            // 화면 차례(묶음마다)의 새 효과: 스캔 라인 뒤에 더한 13개
+            var news = catalog.Where(c => c.Since > 1).OrderBy(c => groups.IndexOf(c.Group)).ToList();
+            Assert.Equal(13, news.Count);
+            // 본 기록이 없는 사용자(예전부터 쓰던 사람)
+            ForgetSeen(plugin);
+            Window window = null;
+            try
+            {
+                window = await Open(ui, plugin);
+                // 효과 탭을 열기 전에도 머리글에 강조색 점(자동화 이름에 개수)
+                ui.Run(() =>
+                {
+                    Assert.Equal("효과 (새 효과 13개)", EffectsHeader(window));
+                    Assert.NotNull(Ui.ById<TextBlock>(window, "EffectsTabNewMark"));
+                });
+                OpenEffectsTab(ui, window);
+                await ui.WaitFor(() => Ui.ById<ListBox>(window, "VideoEffectList"), Wait, "동영상 효과 목록");
+                ui.Run(() =>
+                {
+                    Ui.ById<ScrollViewer>(window, "EffectsTabScroll").UpdateLayout();
+                    // 13개 칸에 "새로"(스캔 라인 — 처음부터 있던 효과 — 에는 없음), 맨 위 알림 줄, 묶음에 "새로 추가됨"
+                    Assert.Equal(news.Select(c => c.Id), Badged(window));
+                    Assert.Equal(Visibility.Collapsed, Badge(window, "scan-line").Visibility);
+                    Assert.Equal("새로 추가된 효과", System.Windows.Automation.AutomationProperties.GetHelpText(Tile(window, news[0].Id)));
+                    Assert.Equal("", System.Windows.Automation.AutomationProperties.GetHelpText(Tile(window, "scan-line")));
+                    var notice = Ui.ById<Border>(window, "VideoEffectNewNotice");
+                    Assert.Equal(Visibility.Visible, notice.Visibility);
+                    Assert.Equal("새 동영상 효과 13개가 추가되었습니다", Ui.ById<TextBlock>(window, "VideoEffectNewText").Text);
+                    Assert.True(Ui.ById<ListBox>(window, "VideoEffectList").TranslatePoint(new Point(), notice).Y >= notice.ActualHeight, "알림 줄은 목록 위에");
+                    Assert.Equal(new[] { "모든 효과", "새로 추가됨" }.Concat(groups), Ui.ById<ComboBox>(window, "VideoEffectGroup").Items.Cast<string>());
+                    Assert.Equal("모든 효과", Ui.ById<ComboBox>(window, "VideoEffectGroup").SelectedItem);
+                });
+                await ui.WaitUntil(() => catalog.All(c => Thumbnail(window, c.Id) != null), Wait, "모든 썸네일");
+                ui.Run(() =>
+                {
+                    Ui.Snap(window, plugin.ShotFolder, "video-effects-new");
+                    SnapTab(window, plugin.ShotFolder, "video-effects-new-full");
+                });
+
+                // [보기]: 묶음이 "새로 추가됨" — 새 효과 13개만(묶음 제목은 원래 묶음), 고른 칸이 늘 있다
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "VideoEffectNewShow")));
+                await ui.WaitUntil(() => Ui.ById<ComboBox>(window, "VideoEffectGroup").SelectedItem as string == "새로 추가됨", Wait, "새로 추가됨 고르기");
+                ui.Run(() =>
+                {
+                    Ui.ById<ScrollViewer>(window, "EffectsTabScroll").UpdateLayout();
+                    Assert.Equal(news.Select(c => "VideoEffect_" + c.Id), Tiles(window));
+                    Assert.Equal(news.Select(c => c.Group).Distinct(), GroupHeaders(window));
+                    Assert.NotNull(Ui.ById<ListBox>(window, "VideoEffectList").SelectedItem);
+                    Ui.Snap(window, plugin.ShotFolder, "video-effects-new-filter");
+                    SnapTab(window, plugin.ShotFolder, "video-effects-new-filter-full");
+                });
+
+                // [확인]: 모두 본 것 — "새로"·알림 줄·머리글 점·"새로 추가됨"이 사라지고 모든 효과로 돌아간다
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "VideoEffectNewDismiss")));
+                await ui.WaitUntil(() => !Ui.ById<ComboBox>(window, "VideoEffectGroup").Items.Cast<string>().Contains("새로 추가됨"), Wait, "새로 추가됨 빼기");
+                ui.Run(() =>
+                {
+                    Assert.Empty(Badged(window));
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<Border>(window, "VideoEffectNewNotice").Visibility);
+                    Assert.Equal("효과", EffectsHeader(window));
+                    Assert.Equal("효과", Ui.ById<TabItem>(window, "EffectsTab").Header);
+                    Assert.Null(Ui.ById<TextBlock>(window, "EffectsTabNewMark"));
+                    Assert.Equal(new[] { "모든 효과" }.Concat(groups), Ui.ById<ComboBox>(window, "VideoEffectGroup").Items.Cast<string>());
+                    Assert.Equal("모든 효과", Ui.ById<ComboBox>(window, "VideoEffectGroup").SelectedItem);
+                    Assert.Equal(catalog.Count, Tiles(window).Count);
+                    Ui.Snap(window, plugin.ShotFolder, "video-effects-new-dismissed");
+                });
+                // 설정에 남는다(모든 효과, 목록 차례)
+                Assert.Equal("[" + string.Join(",", catalog.Select(c => "\"" + c.Id + "\"")) + "]", plugin.Manager.GetSetting(SeenKey));
+
+                // 편집 창을 다시 열어도 그대로
+                await CloseEditor(ui, window);
+                window = null;
+                window = await Open(ui, plugin);
+                Assert.Equal("효과", ui.Run(() => EffectsHeader(window)));
+                OpenEffectsTab(ui, window);
+                await ui.WaitFor(() => Ui.ById<ListBox>(window, "VideoEffectList"), Wait, "동영상 효과 목록(다시 열기)");
+                ui.Run(() =>
+                {
+                    Assert.Empty(Badged(window));
+                    Assert.Equal(Visibility.Collapsed, Ui.ById<Border>(window, "VideoEffectNewNotice").Visibility);
+                    Assert.DoesNotContain("새로 추가됨", Ui.ById<ComboBox>(window, "VideoEffectGroup").Items.Cast<string>());
+                });
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+                ForgetSeen(plugin);
+            }
+        }
+
+        [EditorFact]
+        public async Task NewEffects_ApplyingOneClearsOnlyItsBadge_ByDoubleClickButtonOrDrop()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var catalog = Catalog(plugin);
+            var groups = catalog.Select(c => c.Group).Distinct().ToList();
+            var expected = catalog.Where(c => c.Since > 1).OrderBy(c => groups.IndexOf(c.Group)).Select(c => c.Id).ToList();
+            ForgetSeen(plugin);
+            var window = await Open(ui, plugin);
+            try
+            {
+                await Import(ui, window, "red.png");
+                OpenEffectsTab(ui, window);
+                await ui.WaitFor(() => Ui.ById<ListBox>(window, "VideoEffectList"), Wait, "동영상 효과 목록");
+                ui.Run(() => Assert.Equal(expected, Badged(window)));
+
+                // 두 번 누르기 → 그 칸의 "새로"만 사라진다(알림 줄의 개수·머리글도 하나 줄어듦)
+                ui.Run(() =>
+                {
+                    SelectClip(window, n => n.Contains("red.png"));
+                    Tile(window, "rgb-split").RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Control.MouseDoubleClickEvent });
+                });
+                await ui.WaitUntil(() => Effects(window)?.Count == 1, Wait, "두 번 눌러 넣기");
+                expected.Remove("rgb-split");
+                ui.Run(() =>
+                {
+                    Assert.Equal(expected, Badged(window));
+                    Assert.Equal("새 동영상 효과 12개가 추가되었습니다", Ui.ById<TextBlock>(window, "VideoEffectNewText").Text);
+                    Assert.Equal("효과 (새 효과 12개)", EffectsHeader(window));
+                });
+
+                // [고른 클립에 넣기]
+                ui.Run(() =>
+                {
+                    SelectClip(window, n => n.Contains("red.png"));
+                    Ui.ById<ListBox>(window, "VideoEffectList").SelectedItem = Tile(window, "heartbeat");
+                    Ui.Click(Ui.ById<Button>(window, "VideoEffectApplyButton"));
+                });
+                await ui.WaitUntil(() => Effects(window)?.Count == 2, Wait, "단추로 넣기");
+                expected.Remove("heartbeat");
+                ui.Run(() => Assert.Equal(expected, Badged(window)));
+
+                // 타임라인의 클립에 끌어 놓기(끌어 놓기 이벤트를 만들 수 없어 처리기를 직접 부른다)
+                ui.Run(() =>
+                {
+                    var canvas = Canvas(window);
+                    var handler = (Delegate)canvas.GetType().GetField("VideoEffectDropped", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(canvas);
+                    handler.DynamicInvoke("glitch-scan", Get(Red(window), "Id"));
+                });
+                await ui.WaitUntil(() => Effects(window)?.Count == 3, Wait, "끌어 놓아 넣기");
+                expected.Remove("glitch-scan");
+                ui.Run(() =>
+                {
+                    Assert.Equal(expected, Badged(window));
+                    Assert.Equal("새 동영상 효과 10개가 추가되었습니다", Ui.ById<TextBlock>(window, "VideoEffectNewText").Text);
+                    Assert.Equal("효과 (새 효과 10개)", EffectsHeader(window));
+                });
+                // 설정에는 처음 판의 효과와 넣은 셋(목록 차례)
+                Assert.Equal("[\"scan-line\",\"glitch-scan\",\"rgb-split\",\"heartbeat\"]", plugin.Manager.GetSetting(SeenKey));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+                ForgetSeen(plugin);
+            }
+        }
+
+        [EditorFact]
+        public async Task HoverPreview_ShowsTheEffectOnTheSelectedClip_LeavingRestores_ProjectUntouched()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            ForgetSeen(plugin);
+            var window = await Open(ui, plugin);
+            try
+            {
+                // 빨간 사진(정지 그림)을 고르고 재생 헤드 1초 — 효과 탭을 연다
+                await RedAtOneSecond(ui, window);
+                OpenEffectsTab(ui, window);
+                await ui.WaitFor(() => Ui.ById<ListBox>(window, "VideoEffectList"), Wait, "동영상 효과 목록");
+                await Task.Delay(300);
+                var snapshot = plugin.Assembly.GetType("VideoEditor.Core.ProjectFile", true).GetMethod("Snapshot");
+                string Snapshot() => (string)snapshot.Invoke(null, new[] { Project(window) });
+                var (original, source, before, canUndo, dirty) = ui.Run(() => (PreviewPixels(window), Ui.ById<Image>(window, "PreviewImage").Source, Snapshot(),
+                    (bool)Get(Session(window), "CanUndo"), (bool)Get(Session(window), "Dirty")));
+                Assert.NotNull(original);
+
+                // SF 스캔 칸에 마우스를 올려 둔다: 머무는 동안은 그대로, 잠깐 뒤 미리 보기 화면이 사진에 효과를 얹은 그림(절반 크기)으로 바뀌고 위에 이름
+                var watch = Stopwatch.StartNew();
+                ui.Run(() =>
+                {
+                    Enter(window, "scifi-scan");
+                    Assert.Equal(Visibility.Collapsed, HoverLabel(window).Visibility);
+                    Assert.Same(source, Ui.ById<Image>(window, "PreviewImage").Source);
+                });
+                await ui.WaitUntil(() => HoverLabel(window).Visibility == Visibility.Visible, Wait, "효과 칸 미리 보기");
+                var shown = watch.Elapsed;
+                var first = ui.Run(() =>
+                {
+                    Assert.Equal("미리 보기: SF 스캔", System.Windows.Automation.AutomationProperties.GetName(HoverLabel(window)));
+                    var picture = (BitmapSource)Ui.ById<Image>(window, "PreviewImage").Source;
+                    Assert.NotSame(source, picture);
+                    Assert.InRange(picture.PixelWidth, ((BitmapSource)source).PixelWidth / 2 - 2, ((BitmapSource)source).PixelWidth / 2);
+                    Assert.True(Differs(original, PreviewPixels(window)));
+                    return PreviewPixels(window);
+                });
+                // 정지 사진인데 장이 바뀐다 — 효과가 그려지고 움직인다
+                await ui.WaitUntil(() => Differs(first, PreviewPixels(window)), Wait, "미리 보기 움직임");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "video-effect-hover-preview"));
+                // 1초 넘게 보이면 본 효과 — 그 칸의 "새로"만 사라진다
+                await ui.WaitUntil(() => Badge(window, "scifi-scan").Visibility == Visibility.Collapsed, Wait, "미리 본 효과");
+                ui.Run(() => Assert.Equal(Visibility.Visible, Badge(window, "rgb-split").Visibility));
+
+                // 마우스가 떠나면 바로 원래 미리 보기(같은 그림), 늦게 온 장이 다시 덮지 않는다
+                ui.Run(() =>
+                {
+                    Leave(window, "scifi-scan");
+                    Assert.Equal(Visibility.Collapsed, HoverLabel(window).Visibility);
+                    Assert.Same(source, Ui.ById<Image>(window, "PreviewImage").Source);
+                    Assert.False(Differs(original, PreviewPixels(window)));
+                });
+                await Task.Delay(600);
+                ui.Run(() =>
+                {
+                    Assert.Equal(Visibility.Collapsed, HoverLabel(window).Visibility);
+                    Assert.Same(source, Ui.ById<Image>(window, "PreviewImage").Source);
+                    Assert.False(Differs(original, PreviewPixels(window)));
+                    // 프로젝트·실행 취소·저장 안 함 표시는 그대로
+                    Assert.Equal(before, Snapshot());
+                    Assert.Equal(canUndo, (bool)Get(Session(window), "CanUndo"));
+                    Assert.Equal(dirty, (bool)Get(Session(window), "Dirty"));
+                    Assert.Null(Effects(window));
+                });
+
+                // 보이는 중에 고르기를 풀면 바로 끝난다
+                ui.Run(() => Enter(window, "rgb-split"));
+                await ui.WaitUntil(() => HoverLabel(window).Visibility == Visibility.Visible, Wait, "두 번째 미리 보기");
+                ui.Run(() =>
+                {
+                    Session(window).GetType().GetMethod("ClearSelection").Invoke(Session(window), null);
+                    Assert.Equal(Visibility.Collapsed, HoverLabel(window).Visibility);
+                    Assert.Same(source, Ui.ById<Image>(window, "PreviewImage").Source);
+                    Leave(window, "rgb-split");
+                });
+
+                // 고른 클립이 없으면 아무것도 하지 않는다
+                ui.Run(() => Enter(window, "bad-tv"));
+                await Task.Delay(1500);
+                ui.Run(() =>
+                {
+                    Assert.Equal(Visibility.Collapsed, HoverLabel(window).Visibility);
+                    Assert.Same(source, Ui.ById<Image>(window, "PreviewImage").Source);
+                    Assert.Equal(Visibility.Visible, Badge(window, "bad-tv").Visibility);
+                    Leave(window, "bad-tv");
+                });
+
+                // 글자 클립만 골랐을 때도(효과를 넣을 수 없는 클립)
+                ui.Run(() => Ui.ById<TabControl>(window, "MediaTabs").SelectedIndex = 2);
+                await ui.WaitFor(() => Ui.ById<TextBox>(window, "NewTextBox"), Wait, "글자 탭");
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(window, "NewTextBox").Text = "미리 보기 없음";
+                    Ui.Click(Ui.ById<Button>(window, "AddTextButton"));
+                });
+                await ui.WaitUntil(() => Clips(window).Any(n => n.Contains("미리 보기 없음")), Wait, "글자 클립");
+                OpenEffectsTab(ui, window);
+                await Task.Delay(500);
+                var withText = ui.Run(() =>
+                {
+                    SelectClip(window, n => n.Contains("미리 보기 없음"));
+                    Enter(window, "bad-tv");
+                    return Ui.ById<Image>(window, "PreviewImage").Source;
+                });
+                await Task.Delay(1500);
+                ui.Run(() =>
+                {
+                    Assert.Equal(Visibility.Collapsed, HoverLabel(window).Visibility);
+                    Assert.Same(withText, Ui.ById<Image>(window, "PreviewImage").Source);
+                    Leave(window, "bad-tv");
+                });
+                File.WriteAllText(Path.Combine(plugin.ShotFolder, "video-effect-hover-preview.txt"),
+                    "마우스를 올린 뒤 첫 장까지 " + Math.Round(shown.TotalMilliseconds) + "ms(머무는 350ms 포함)");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+                ForgetSeen(plugin);
             }
         }
     }

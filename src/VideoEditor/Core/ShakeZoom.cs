@@ -63,7 +63,7 @@ namespace VideoEditor.Core
             CameraShakeRender,
             // 썸네일(작은 그림, 1.5초)에서도 출렁임이 보이게 크고 빠르게
             new Dictionary<string, double> { ["horizontal"] = 60, ["vertical"] = 45, ["rotate"] = 3, ["speed"] = 2 })
-        { AllowsPersonOnly = false };
+        { AllowsPersonOnly = false, Since = 2 };
 
         public static readonly VideoEffectDef Earthquake = new VideoEffectDef(EarthquakeId, "지진", Group,
             "땅이 흔들리듯 화면이 세고 빠르게 홱홱 흔들립니다(조금 흐려져 움직임이 번짐). 흔드는 만큼 키워 가장자리가 비지 않습니다.", 1,
@@ -75,7 +75,7 @@ namespace VideoEditor.Core
             },
             EarthquakeRender,
             new Dictionary<string, double> { ["amount"] = 70, ["blur"] = 30 })
-        { AllowsPersonOnly = false };
+        { AllowsPersonOnly = false, Since = 2 };
 
         public static readonly VideoEffectDef Heartbeat = new VideoEffectDef(HeartbeatId, "하트비트", Group,
             "심장이 뛰듯 박자에 맞춰 화면이 쿵 커졌다가 가라앉습니다(두 번째 작은 박동까지).", 1,
@@ -88,7 +88,7 @@ namespace VideoEditor.Core
             HeartbeatRender,
             // 썸네일(1.5초)에 세 번 뛰게
             new Dictionary<string, double> { ["amount"] = 40, ["bpm"] = 120 })
-        { AllowsPersonOnly = false };
+        { AllowsPersonOnly = false, Since = 2 };
 
         public static readonly VideoEffectDef PunchZoom = new VideoEffectDef(PunchZoomId, "빠른 줌", Group,
             "정한 때에 화면이 확 커져 들어가 그대로 머뭅니다(배율이 −면 커진 데서 원래 크기로 확 빠져나옴).", 1,
@@ -103,7 +103,7 @@ namespace VideoEditor.Core
             PunchZoomRender,
             // 썸네일: 잠깐 그대로였다가 확 커져 머문다
             new Dictionary<string, double> { ["zoom"] = 80, ["start"] = 0.3, ["duration"] = 0.25 })
-        { AllowsPersonOnly = false };
+        { AllowsPersonOnly = false, Since = 2 };
 
         public static readonly VideoEffectDef ZoomBounce = new VideoEffectDef(ZoomBounceId, "줌 바운스", Group,
             "화면이 탄력 있게 튀며 커졌다가 다시 튀며 돌아오기를 되풀이합니다(반복 횟수를 정하면 마지막에는 커진 채 머묾).", 1,
@@ -116,7 +116,7 @@ namespace VideoEditor.Core
             },
             ZoomBounceRender,
             new Dictionary<string, double> { ["zoom"] = 40, ["period"] = 1.5 })
-        { AllowsPersonOnly = false };
+        { AllowsPersonOnly = false, Since = 2 };
 
         /// <summary>사인 하나: 빠르기(Hz), 위상(라디안), 무게.</summary>
         private readonly struct Wave

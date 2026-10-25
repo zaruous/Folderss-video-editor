@@ -117,8 +117,9 @@ namespace VideoEditor.Ui
         /// <summary>
         /// 탭을 테마에 맞춘다. Folderss 테마(Controls.xaml)에는 TabControl 스타일이 없어 기본(밝은) 모양이 나오므로
         /// 탭 머리글을 직접 그린다: 바탕 SurfaceBackground, 고른 탭은 ControlBackground + 아래 AccentBrush 줄.
+        /// padding은 머리글 글 좌우 여백(탭이 많은 좁은 패널은 줄여 한 줄에 들어가게 — 넘치면 탭 줄이 두 줄이 되고 고를 때마다 줄이 자리를 바꾼다).
         /// </summary>
-        public static void StyleTabs(TabControl tabs)
+        public static void StyleTabs(TabControl tabs, double padding = 12)
         {
             tabs.SetResourceReference(Control.BackgroundProperty, "PanelBackground");
             tabs.SetResourceReference(Control.BorderBrushProperty, "BorderBrush");
@@ -126,7 +127,7 @@ namespace VideoEditor.Ui
             tabs.Padding = new Thickness(0);
             var template = new ControlTemplate(typeof(TabItem));
             var border = new FrameworkElementFactory(typeof(Border), "Bd");
-            border.SetValue(Border.PaddingProperty, new Thickness(12, 5, 12, 4));
+            border.SetValue(Border.PaddingProperty, new Thickness(padding, 5, padding, 4));
             border.SetValue(Border.MarginProperty, new Thickness(0, 0, 2, 0));
             border.SetValue(Border.BorderThicknessProperty, new Thickness(0, 0, 0, 2));
             border.SetValue(Border.BorderBrushProperty, Brushes.Transparent);

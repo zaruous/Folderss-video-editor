@@ -45,7 +45,8 @@ namespace VideoEditor.Core
             },
             Render,
             // 썸네일 띠(1.5초)에 한 번 퍼지고 쉬는 것까지, 작은 그림에서도 고리와 일렁임이 보이게
-            new Dictionary<string, double> { ["period"] = 1.5, ["glow"] = 60, ["core"] = 8, ["refract"] = 100 });
+            new Dictionary<string, double> { ["period"] = 1.5, ["glow"] = 60, ["core"] = 8, ["refract"] = 100 })
+        { Since = 2 };
 
         /// <summary>
         /// 고리 모양(출력 픽셀): 중심(픽셀 모서리 좌표), 흰 고리 반폭, 빛 번짐 폭, 안쪽 물결 폭, 미는 거리(0 = 밀지 않음),
