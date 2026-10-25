@@ -68,8 +68,8 @@ namespace VideoEditor.Core
             }
             if (style.Glow != null && style.Glow.Enabled)
             {
-                // 광선 = 크기만큼 넓힌 윤곽 + 같은 반경의 흐림
-                var glow = outline + 2 * Length(style.Glow.Size) * scale;
+                // 광선 = 본문(윤곽선 포함)을 크기만큼 넓힌 모양 + 크기 절반의 흐림 — 그리개와 같은 값(흐림 상한 포함)
+                var glow = outline + TextEffects.GlowExtent(style.Glow.Size, scale);
                 left = Math.Max(left, glow);
                 right = Math.Max(right, glow);
                 top = Math.Max(top, glow);
