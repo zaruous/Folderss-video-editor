@@ -90,6 +90,7 @@ namespace VideoEditor.Core
             clip.TransitionIn = 0;
             clip.X = clip.Y = clip.Rotation = 0;
             clip.Scale = clip.Opacity = 1;
+            clip.Effects = null;
         }
 
         // ---------- 놓기·옮기기 ----------

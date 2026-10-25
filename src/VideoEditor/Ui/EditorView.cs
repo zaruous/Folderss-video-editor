@@ -136,6 +136,7 @@ namespace VideoEditor.Ui
             _timeline.Canvas.StatusMessage += _commands.Status;
             _timeline.Canvas.MediaDropped += (paths, track, frame) => _ = _commands.ImportPaths(paths, track, frame);
             _timeline.Canvas.TransitionDropped += _commands.DropTransition;
+            _timeline.Canvas.VideoEffectDropped += _commands.DropVideoEffect;
             _commands.TransitionsApplied += _timeline.Canvas.FlashTransitions;
             _timeline.Canvas.ContextRequested += OpenClipMenu;
             _session.Changed += (s, e) =>

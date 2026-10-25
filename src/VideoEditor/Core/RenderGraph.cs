@@ -20,6 +20,8 @@ namespace VideoEditor.Core
         public bool Preview { get; set; }
         /// <summary>글자 클립에 쓸 글꼴 파일(.ttf/.ttc).</summary>
         public string FontFile { get; set; }
+        /// <summary>인물 마스크 제공자(없으면 null — "사람에게만" 효과는 클립 전체에 칠한다).</summary>
+        public IPersonMaskProvider PersonMasks { get; set; }
         /// <summary>글자 클립의 글을 담을 임시 파일 폴더. 꾸민 글자 PNG 캐시는 그 아래 styled-text 폴더.</summary>
         public string TempFolder { get; set; }
         /// <summary>쓰는 FFmpeg 주 버전(0이면 모름) — 이보다 새 버전이 필요한 전환 효과는 디졸브로 그린다.</summary>
@@ -201,6 +203,9 @@ namespace VideoEditor.Core
                     var boxWidth = Math.Max(2, (int)Math.Round(options.Width * scale / shrink));
                     var boxHeight = Math.Max(2, (int)Math.Round(options.Height * scale / shrink));
                     var fit = clip.Kind == ClipKind.Media ? clip.Fit : ClipFit.Fit;
+                    // 동영상 효과가 있으면 틀 계산이 바로 gbrap으로 내보낸다(효과의 섞기가 쓰는 형식 — 크기 바꾸기 바로 뒤에 형식 바꾸기를 따로 잇지 않게)
+                    var effects = VideoEffects.Renderable(clip);
+                    var pixels = effects.Count > 0 ? "gbrap" : "rgba";
                     if (UsesRasterizer(clip, options))
                     {
                         // 꾸민 글자 PNG는 가운데 = 글자 상자 가운데이고 크기는 그림 따라 다르다(화면보다 클 수도) — 화면 크기로 맞추지 않고
@@ -217,17 +222,20 @@ namespace VideoEditor.Core
                         chain.AppendFormat(CultureInfo.InvariantCulture,
                             ",split[ba{0}][bb{0}];[ba{0}]scale=w={1}:h={2}:force_original_aspect_ratio=increase,crop={1}:{2},scale={3}:{4},boxblur={5}:2,scale={1}:{2},"
                             + "colorchannelmixer=rr=0.8:gg=0.8:bb=0.8,format=rgba[bg{0}];[bb{0}]scale=w={1}:h={2}:force_original_aspect_ratio=decrease,format=rgba[bf{0}];"
-                            + "[bg{0}][bf{0}]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2:format=auto,format=rgba",
-                            n, boxWidth, boxHeight, smallWidth, smallHeight, radius);
+                            + "[bg{0}][bf{0}]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2:format=auto,format={6}",
+                            n, boxWidth, boxHeight, smallWidth, smallHeight, radius, pixels);
                     }
                     else
                     {
                         chain.AppendFormat(CultureInfo.InvariantCulture,
-                            fit == ClipFit.Fill ? ",scale=w={0}:h={1}:force_original_aspect_ratio=increase,crop={0}:{1},format=rgba"
-                            : fit == ClipFit.Stretch ? ",scale=w={0}:h={1},setsar=1,format=rgba"
-                            : ",scale=w={0}:h={1}:force_original_aspect_ratio=decrease,format=rgba",
-                            boxWidth, boxHeight);
+                            fit == ClipFit.Fill ? ",scale=w={0}:h={1}:force_original_aspect_ratio=increase,crop={0}:{1},format={2}"
+                            : fit == ClipFit.Stretch ? ",scale=w={0}:h={1},setsar=1,format={2}"
+                            : ",scale=w={0}:h={1}:force_original_aspect_ratio=decrease,format={2}",
+                            boxWidth, boxHeight, pixels);
                     }
+                    // 동영상 효과: 틀 크기에서(맞춤 뒤, 회전 앞) — 클립과 함께 옮기고 돌고 흐려지고 전환된다
+                    if (effects.Count > 0)
+                        chain.Append(EffectChain(project, options, plan, filters, clip, effects, fit, segStart, segEnd, boxWidth, boxHeight, k * scale / shrink, n));
                     if (Math.Abs(clip.Rotation) > 0.01)
                     {
                         var radians = N(clip.Rotation * Math.PI / 180);
@@ -330,9 +338,20 @@ namespace VideoEditor.Core
                     DrawtextBorder(clip.Style?.Outline, (double)options.Width / project.Width),
                     DrawtextShadow(clip.Style?.Shadow, (double)options.Width / project.Width));
             }
+            return MediaSource(project, plan, clip, clip.Path, segStart, segEnd);
+        }
+
+        /// <summary>
+        /// 파일 클립의 화면 원본(입력 + 시간 맞춤). path는 클립 원본 또는 원본과 같은 시간축의 파일(인물 마스크) — 같은 -ss·-t·속도·사진 반복으로 읽어 프레임이 맞는다.
+        /// </summary>
+        private static string MediaSource(Project project, RenderPlan plan, Clip clip, string path, long segStart, long segEnd)
+        {
+            var rate = project.Rate;
+            var fps = rate.Rational;
+            var segFrames = segEnd - segStart;
             if (clip.MediaKind == MediaKind.Image)
             {
-                var index = AddInput(plan, "-loop", "1", "-framerate", fps, "-t", N(rate.ToSeconds(segFrames)), "-i", clip.Path);
+                var index = AddInput(plan, "-loop", "1", "-framerate", fps, "-t", N(rate.ToSeconds(segFrames)), "-i", path);
                 return "[" + index + ":v]setpts=PTS-STARTPTS";
             }
             // 동영상: 원본 위치 = SourceIn + (그리는 시작 - 클립 시작) × 속도
@@ -343,15 +362,88 @@ namespace VideoEditor.Core
             if (sourceStart >= clip.SourceLength - 1)
             {
                 // 원본이 이미 끝난 뒤(크로스페이드 꼬리)부터 그림: 파일 끝 근처를 읽어 마지막 한 장만 남겨 멈춰 둔다
-                var last = AddInput(plan, "-sseof", "-0.3", "-i", clip.Path);
+                var last = AddInput(plan, "-sseof", "-0.3", "-i", path);
                 return "[" + last + ":v]reverse,trim=end_frame=1,setpts=PTS-STARTPTS,fps=" + fps + hold;
             }
             var sourceFrames = Math.Max(1, Math.Min((long)Math.Round(segFrames * clip.Speed), clip.SourceLength - sourceStart));
-            var input = AddInput(plan, "-ss", N(rate.ToSeconds(sourceStart)), "-t", N(rate.ToSeconds(sourceFrames)), "-i", clip.Path);
+            var input = AddInput(plan, "-ss", N(rate.ToSeconds(sourceStart)), "-t", N(rate.ToSeconds(sourceFrames)), "-i", path);
             var chain = "[" + input + ":v]setpts=PTS-STARTPTS";
             if (Math.Abs(clip.Speed - 1) > 1e-9)
                 chain += ",setpts=PTS/" + N(clip.Speed);
             return chain + ",fps=" + fps + hold;
+        }
+
+        /// <summary>
+        /// 클립의 동영상 효과(<see cref="VideoEffects"/>)를 차례로 잇는 필터 조각(앞에 ","). 받는 흐름은 틀 계산 뒤의 gbrap — 맞춤은 남는 곳이 비어 틀보다 작으므로
+        /// 먼저 투명하게 틀 크기로 채운다(그림 자리는 그대로). 그러면 효과는 늘 틀 크기 그림을 받는다.
+        /// "사람에게만" 효과는 원본의 인물 마스크가 있으면(<see cref="RenderOptions.PersonMasks"/>) 그 마스크를 원본과 똑같이 읽고(<see cref="MediaSource"/>)
+        /// 클립과 같은 맞춤으로 틀 크기에 맞춰(크기 바꾸기 한 번) 사람 자리에만 칠한다. 마스크가 없으면 클립 전체에 칠한다.
+        /// </summary>
+        private static string EffectChain(Project project, RenderOptions options, RenderPlan plan, List<string> filters, Clip clip,
+            List<(ClipEffect Effect, VideoEffectDef Def)> effects, ClipFit fit, long segStart, long segEnd, int boxWidth, int boxHeight, double pixelScale, int n)
+        {
+            var rate = project.Rate;
+            var masks = new Queue<string>();
+            var personal = effects.Count(e => e.Effect.PersonOnly);
+            var mask = personal > 0 ? FindMask(options, clip) : null;
+            if (mask != null)
+            {
+                // 마스크 흐름은 효과마다 하나씩(틀 크기 gbrap, 흰색 = 사람)
+                var labels = Enumerable.Range(0, personal).Select(i => "fx" + n + "m" + i).ToList();
+                filters.Add(MediaSource(project, plan, clip, mask, segStart, segEnd) + MaskFit(fit, boxWidth, boxHeight) + ",format=gbrap"
+                    + (personal > 1 ? ",split=" + personal : "") + string.Concat(labels.Select(l => "[" + l + "]")));
+                foreach (var label in labels)
+                    masks.Enqueue(label);
+            }
+            var text = new StringBuilder();
+            if (fit == ClipFit.Fit)
+                text.AppendFormat(CultureInfo.InvariantCulture, ",pad={0}:{1}:(ow-iw)/2:(oh-ih)/2:color=black@0", boxWidth, boxHeight);
+            for (var i = 0; i < effects.Count; i++)
+            {
+                var (effect, def) = effects[i];
+                text.Append(def.Recipe(new EffectRender
+                {
+                    Effect = effect,
+                    Def = def,
+                    Width = boxWidth,
+                    Height = boxHeight,
+                    PixelScale = pixelScale,
+                    Rate = rate.Rational,
+                    Fps = rate.Fps,
+                    Seconds = rate.ToSeconds(segEnd - segStart),
+                    // 흐름의 0초 = 그리기 시작(segStart) — 효과 시각은 클립 안 시각이라 어디서부터 그려도(멈춘 화면·재생·내보내기) 같은 프레임은 같다
+                    TimeOffset = rate.ToSeconds(segStart - clip.Start),
+                    Label = "fx" + n + "e" + i,
+                    Mask = effect.PersonOnly && masks.Count > 0 ? masks.Dequeue() : null
+                }));
+            }
+            return text.ToString();
+        }
+
+        /// <summary>마스크를 클립 그림과 같은 자리·크기로(크기 바꾸기 한 번). 맞춤·흐린 배경은 가운데에 두고 남는 곳은 검정(사람 아님).</summary>
+        private static string MaskFit(ClipFit fit, int width, int height)
+        {
+            var format = fit == ClipFit.Fill ? ",scale=w={0}:h={1}:force_original_aspect_ratio=increase,crop={0}:{1}"
+                : fit == ClipFit.Stretch ? ",scale=w={0}:h={1}"
+                : ",scale=w={0}:h={1}:force_original_aspect_ratio=decrease,pad={0}:{1}:(ow-iw)/2:(oh-ih)/2";
+            return string.Format(CultureInfo.InvariantCulture, format, width, height);
+        }
+
+        /// <summary>클립 원본의 준비된 인물 마스크 경로(없으면 null — 효과는 클립 전체에).</summary>
+        private static string FindMask(RenderOptions options, Clip clip)
+        {
+            if (options.PersonMasks == null || string.IsNullOrEmpty(clip.Path))
+                return null;
+            try
+            {
+                var path = options.PersonMasks.Find(clip.Path);
+                return string.IsNullOrEmpty(path) ? null : path;
+            }
+            catch (Exception)
+            {
+                // 마스크 제공자의 오류로 미리 보기·내보내기가 멈추지 않게 — 마스크 없이(클립 전체에) 그린다
+                return null;
+            }
         }
 
         /// <summary>
