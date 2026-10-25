@@ -435,7 +435,7 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
-        /// [꾸미기] 꾸민 글자 스타일 — 지금은 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬).
+        /// [꾸미기] 꾸민 글자 스타일 — 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬)과 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
         /// </summary>
         private UIElement StyleTab(string id)
@@ -495,6 +495,103 @@ namespace VideoEditor.Ui
             };
             panel.Children.Add(Row("정렬", align));
 
+            // 채우기: 단색·선형·원형 그라데이션·없음 — 색은 1개(단색) 또는 2~4개(그라데이션), 선형은 각도
+            panel.Children.Add(Section("채우기"));
+            var fillKinds = new[] { FillKind.Solid, FillKind.Linear, FillKind.Radial, FillKind.None };
+            var fillKind = new ComboBox();
+            AutomationProperties.SetAutomationId(fillKind, "StyleFillKind");
+            AutomationProperties.SetName(fillKind, "채우기");
+            foreach (var name in new[] { "단색", "선형 그라데이션", "원형 그라데이션", "없음" })
+                fillKind.Items.Add(name);
+            fillKind.SelectionChanged += (s, e) =>
+            {
+                if (_updating || fillKind.SelectedIndex < 0)
+                    return;
+                var kind = fillKinds[fillKind.SelectedIndex];
+                Edit(id, c =>
+                {
+                    var fill = FillOf(c);
+                    fill.Kind = kind;
+                    // 그라데이션은 색이 둘 이상이어야 보인다 — 하나뿐이면 첫 색과 대비되는 색을 더한다
+                    if ((kind == FillKind.Linear || kind == FillKind.Radial) && fill.Colors.Count < 2)
+                        fill.Colors.Add(IsLight(fill.Colors.FirstOrDefault()) ? "#3B82F6" : "#FFFFFF");
+                }, null);
+            };
+            panel.Children.Add(Row("종류", fillKind));
+            var colorRows = new List<ColorRow>();
+            for (var i = 0; i < TextStyle.MaxFillColors; i++)
+            {
+                var index = i;
+                var row = UiKit.ColorRow("색 " + (i + 1), "StyleFillColor" + (i + 1),
+                    () =>
+                    {
+                        var c = _session.Project.FindClip(id);
+                        var colors = c?.Style?.Fill?.Colors;
+                        return colors != null && colors.Count > 0 ? colors[Math.Min(index, colors.Count - 1)] : c?.TextColor ?? "#FFFFFF";
+                    },
+                    hex => Edit(id, c =>
+                    {
+                        var fill = FillOf(c);
+                        while (fill.Colors.Count <= index)
+                            fill.Colors.Add(fill.Colors.LastOrDefault() ?? "#FFFFFF");
+                        fill.Colors[index] = hex;
+                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
+                        if (index == 0)
+                            c.TextColor = hex;
+                    }, null));
+                colorRows.Add(row);
+                panel.Children.Add(row);
+            }
+            var addColor = UiKit.TextButton("색 추가", "StyleFillAdd", () => Edit(id, c =>
+            {
+                var fill = FillOf(c);
+                if (fill.Colors.Count < TextStyle.MaxFillColors)
+                    fill.Colors.Add(fill.Colors.LastOrDefault() ?? "#FFFFFF");
+            }, null));
+            var removeColor = UiKit.TextButton("색 빼기", "StyleFillRemove", () => Edit(id, c =>
+            {
+                var fill = FillOf(c);
+                if (fill.Colors.Count > 2)
+                    fill.Colors.RemoveAt(fill.Colors.Count - 1);
+            }, null));
+            var colorButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(80, 2, 0, 2) };
+            colorButtons.Children.Add(addColor);
+            colorButtons.Children.Add(removeColor);
+            panel.Children.Add(colorButtons);
+            var angleRow = NumberRow("각도", "StyleFillAngle", 0, 360, "°", id,
+                c => c.Style?.Fill?.Angle ?? 0, (c, v) => FillOf(c).Angle = Math.Max(0, Math.Min(360, v)));
+            panel.Children.Add(angleRow);
+            _refreshers.Add(() =>
+            {
+                var c = _session.Project.FindClip(id);
+                if (c == null)
+                    return;
+                var was = _updating;
+                _updating = true;
+                try
+                {
+                    var kind = c.Style?.Fill?.Kind ?? FillKind.Solid;
+                    var count = c.Style?.Fill?.Colors?.Count ?? 1;
+                    var gradient = kind == FillKind.Linear || kind == FillKind.Radial;
+                    fillKind.SelectedIndex = Array.IndexOf(fillKinds, kind);
+                    // 단색은 색 1, 그라데이션은 색 수만큼, 없음은 색 칸 없음
+                    var shown = kind == FillKind.None ? 0 : gradient ? Math.Max(2, count) : 1;
+                    for (var i = 0; i < colorRows.Count; i++)
+                    {
+                        colorRows[i].Visibility = i < shown ? Visibility.Visible : Visibility.Collapsed;
+                        colorRows[i].Refresh();
+                    }
+                    colorButtons.Visibility = gradient ? Visibility.Visible : Visibility.Collapsed;
+                    addColor.IsEnabled = count < TextStyle.MaxFillColors;
+                    removeColor.IsEnabled = count > 2;
+                    angleRow.IsEnabled = kind == FillKind.Linear;
+                }
+                finally
+                {
+                    _updating = was;
+                }
+            });
+
             _refreshers.Add(() =>
             {
                 var c = _session.Project.FindClip(id);
@@ -524,6 +621,23 @@ namespace VideoEditor.Ui
         private static TextStyle StyleOf(Clip clip)
         {
             return clip.Style ??= TextStyle.FromLegacy(clip);
+        }
+
+        /// <summary>고칠 클립의 채우기(스타일·채우기가 없으면 만든다, 색이 없으면 흰색 하나).</summary>
+        private static TextFill FillOf(Clip clip)
+        {
+            var fill = StyleOf(clip).Fill ??= new TextFill();
+            fill.Colors ??= new List<string>();
+            if (fill.Colors.Count == 0)
+                fill.Colors.Add("#FFFFFF");
+            return fill;
+        }
+
+        /// <summary>밝은 색인지(사람 눈 밝기 0.6 넘음) — 그라데이션 둘째 색을 대비되게 고를 때.</summary>
+        private static bool IsLight(string hex)
+        {
+            var color = UiKit.ParseColor(TextStyle.NormalizeColor(hex, "#FFFFFF"), System.Windows.Media.Colors.White);
+            return (0.2126 * color.R + 0.7152 * color.G + 0.0722 * color.B) / 255 > 0.6;
         }
 
         // ---------- 공통 ----------
@@ -579,6 +693,8 @@ namespace VideoEditor.Ui
             AutomationProperties.SetName(slider, label);
             row.Children.Add(slider);
             var mergeKey = automationId + ":" + id;
+            // 칸에 마지막으로 보인 값 — 적은 글이 이것과 다를 때만 편집한다(포커스를 둔 채 실행 취소한 뒤 칸을 떠나도 옛 값을 다시 적용하지 않게)
+            string shown = null;
             void Apply(double value, string merge)
             {
                 if (edit != null)
@@ -596,13 +712,15 @@ namespace VideoEditor.Ui
                 double value;
                 if (_updating)
                     return;
+                // 보이던 값 그대로면 편집하지 않는다(칸을 지나가기만 해도 실행 취소 단계·꾸민 글자 스타일이 생기지 않게), 꺼진·숨은 칸도
+                if (box.Text.Trim() == shown || !box.IsEnabled || !box.IsVisible)
+                    return;
                 if (UiKit.TryNumber(box.Text, out value))
                 {
-                    // 보이던 값 그대로면 편집하지 않는다(칸을 지나가기만 해도 실행 취소 단계·꾸민 글자 스타일이 생기지 않게)
-                    var current = _session.Project.FindClip(id);
-                    if (current != null && box.Text.Trim() == UiKit.Number(get(current)))
-                        return;
                     Apply(value, null);
+                    var applied = _session.Project.FindClip(id);
+                    if (applied != null)
+                        box.Text = shown = UiKit.Number(get(applied));
                 }
                 else
                 {
@@ -629,8 +747,10 @@ namespace VideoEditor.Ui
                 try
                 {
                     slider.Value = Math.Max(min, Math.Min(max, value));
-                    if (!box.IsKeyboardFocusWithin)
+                    // 포커스가 있어도 사용자가 고치지 않은 글이면 새 값으로(실행 취소가 칸에 보이게)
+                    if (!box.IsKeyboardFocusWithin || box.Text == shown)
                         box.Text = UiKit.Number(value);
+                    shown = UiKit.Number(value);
                 }
                 finally
                 {
