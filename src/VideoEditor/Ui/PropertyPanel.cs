@@ -904,15 +904,6 @@ namespace VideoEditor.Ui
             return panel;
         }
 
-        // 스타일 모음 단추: 어두운 바탕(흰 글자·속 빈 글자도 보이게)에 썸네일을 줄여 놓는다(배율은 모두 같고, 칠한 곳이 틀보다 크면 그것만 더 줄임).
-        // 16개라 좁은 속성 패널(안쪽 약 200px)에도 한 줄에 셋씩 들어가게 — 단추 한 칸 = 틀 56 + 안쪽 여백·테두리 4 + 사이 3 = 63px
-        private const double PresetTileWidth = 56;
-        private const double PresetTileHeight = 38;
-        private const double PresetThumbnailScale = 0.34;
-        // 칠한 곳을 잴 때 이 알파 이하(옅은 흐림·광선 끝)는 빼고 잰다 — 틀 밖으로 나가면 잘린다
-        private const byte ThumbnailInkAlpha = 24;
-        private static readonly System.Windows.Media.Brush PresetBackdrop = FrozenBrush(System.Windows.Media.Color.FromRgb(0x50, 0x50, 0x50));
-
         /// <summary>
         /// 스타일 모음: 미리 만든 스타일 단추(<see cref="TextStylePresets"/>). 누르면 글자 내용·크기는 그대로 두고 스타일을 통째로 바꾼다(실행 취소 한 단계).
         /// 단추 그림은 그리개로 그린 썸네일 — 탭이 처음 보일 때 배경에서 그리고, 다 그리기 전이나 실패하면 이름 글자만 보인다.
@@ -926,7 +917,7 @@ namespace VideoEditor.Ui
             for (var i = 0; i < presets.Count; i++)
             {
                 var (name, style) = presets[i];
-                var (button, frame) = StyleTile(name, "StylePreset" + i);
+                var (button, frame) = StyleTiles.Tile(name, "StylePreset" + i);
                 button.Click += (s, e) => Edit(id, c =>
                 {
                     c.Style = style.Clone();
@@ -944,88 +935,9 @@ namespace VideoEditor.Ui
                     return;
                 requested = true;
                 foreach (var tile in tiles)
-                    ShowThumbnail(tile.Frame, tile.Style, tile.ImageId);
+                    StyleTiles.ShowThumbnail(_services, tile.Frame, tile.Style, tile.ImageId);
             };
             return gallery;
-        }
-
-        /// <summary>
-        /// 썸네일을 단추 틀(Width·Height를 정한 Border)에 넣는다(이미 그려 둔 것이면 바로, 아니면 다 그린 뒤 UI 스레드에서). 그리개가 없거나 실패하면 이름 글자를 그대로 둔다.
-        /// 썸네일 PNG의 가운데는 배치 상자 가운데라 반사·휘기는 칠한 곳이 한쪽으로 치우친다 — 칠한 곳의 가운데를 틀 가운데에 두고,
-        /// 칠한 곳이 틀(양옆 2px 남김)보다 크면 그만큼 더 줄인다(기본 배율보다 키우지는 않음).
-        /// </summary>
-        private void ShowThumbnail(Border frame, TextStyle style, string automationId)
-        {
-            void Show(System.Windows.Media.Imaging.BitmapSource picture)
-            {
-                var ink = InkBounds(picture);
-                var scale = Math.Min(PresetThumbnailScale, Math.Min((frame.Width - 4) / ink.Width, (frame.Height - 4) / ink.Height));
-                var image = new Image
-                {
-                    Source = picture,
-                    Width = picture.PixelWidth * scale,
-                    Height = picture.PixelHeight * scale,
-                    Stretch = System.Windows.Media.Stretch.Fill
-                };
-                System.Windows.Media.RenderOptions.SetBitmapScalingMode(image, System.Windows.Media.BitmapScalingMode.HighQuality);
-                AutomationProperties.SetAutomationId(image, automationId);
-                // Canvas는 틀보다 큰 그림을 자기 자리로 자르지 않는다 — 넘치는 곳은 틀(ClipToBounds)이 자른다
-                Canvas.SetLeft(image, frame.Width / 2 - (ink.X + ink.Width / 2) * scale);
-                Canvas.SetTop(image, frame.Height / 2 - (ink.Y + ink.Height / 2) * scale);
-                frame.Child = new Canvas { Children = { image } };
-            }
-            var task = _services.TextStylePreview(style);
-            if (task.IsCompleted)
-            {
-                if (task.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && task.Result != null)
-                    Show(task.Result);
-                return;
-            }
-            task.ContinueWith(t =>
-            {
-                if (t.Status != System.Threading.Tasks.TaskStatus.RanToCompletion || t.Result == null)
-                    return;
-                Dispatcher.BeginInvoke(new Action(() => Show(t.Result)));
-            }, System.Threading.Tasks.TaskScheduler.Default);
-        }
-
-        /// <summary>썸네일에서 알파가 <see cref="ThumbnailInkAlpha"/>를 넘는 픽셀의 경계(픽셀 단위). 그런 픽셀이 없으면 그림 전체.</summary>
-        // 썸네일마다 칠한 곳은 한 번만 잰다(탭을 볼 때마다 UI 스레드에서 다시 재지 않게) — 썸네일 그림이 캐시에서 빠지면 함께 사라진다
-        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<System.Windows.Media.Imaging.BitmapSource, object> InkCache =
-            new System.Runtime.CompilerServices.ConditionalWeakTable<System.Windows.Media.Imaging.BitmapSource, object>();
-
-        private static Rect InkBounds(System.Windows.Media.Imaging.BitmapSource picture)
-        {
-            return (Rect)InkCache.GetValue(picture, p => MeasureInk(p));
-        }
-
-        private static Rect MeasureInk(System.Windows.Media.Imaging.BitmapSource picture)
-        {
-            var bgra = new System.Windows.Media.Imaging.FormatConvertedBitmap(picture, System.Windows.Media.PixelFormats.Bgra32, null, 0);
-            int width = bgra.PixelWidth, height = bgra.PixelHeight;
-            var pixels = new byte[width * height * 4];
-            bgra.CopyPixels(pixels, width * 4, 0);
-            int left = width, top = height, right = -1, bottom = -1;
-            for (var y = 0; y < height; y++)
-            {
-                for (var x = 0; x < width; x++)
-                {
-                    if (pixels[(y * width + x) * 4 + 3] <= ThumbnailInkAlpha)
-                        continue;
-                    left = Math.Min(left, x);
-                    right = Math.Max(right, x);
-                    top = Math.Min(top, y);
-                    bottom = Math.Max(bottom, y);
-                }
-            }
-            return right < 0 ? new Rect(0, 0, width, height) : new Rect(left, top, right - left + 1, bottom - top + 1);
-        }
-
-        private static System.Windows.Media.Brush FrozenBrush(System.Windows.Media.Color color)
-        {
-            var brush = new System.Windows.Media.SolidColorBrush(color);
-            brush.Freeze();
-            return brush;
         }
 
         /// <summary>
@@ -1054,7 +966,7 @@ namespace VideoEditor.Ui
                 for (var i = 0; i < styles.Count; i++)
                 {
                     var (name, style) = styles[i];
-                    var (button, frame) = StyleTile(name, "StyleMine" + i);
+                    var (button, frame) = StyleTiles.Tile(name, "StyleMine" + i);
                     button.Click += (s, e) => Edit(id, c =>
                     {
                         c.Style = style.Clone();
@@ -1067,7 +979,7 @@ namespace VideoEditor.Ui
                     button.ContextMenu.Items.Add(remove);
                     row.Children.Add(button);
                     if (shown)
-                        ShowThumbnail(frame, style, "StyleMine" + i + "Image");
+                        StyleTiles.ShowThumbnail(_services, frame, style, "StyleMine" + i + "Image");
                 }
                 row.Visibility = styles.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
                 hint.Visibility = styles.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -1083,26 +995,6 @@ namespace VideoEditor.Ui
             save.Margin = new Thickness(0, 0, 0, 6);
             box.Children.Add(save);
             return box;
-        }
-
-        /// <summary>스타일 단추 하나(스타일 모음·내 스타일 공용 — 어두운 틀 + 이름 글자, 썸네일은 <see cref="ShowThumbnail"/>로 틀에 넣는다). 화면 낭독 이름·툴팁 = 스타일 이름.</summary>
-        private static (Button Button, Border Frame) StyleTile(string name, string automationId)
-        {
-            var fallback = new TextBlock
-            {
-                Text = name,
-                Foreground = System.Windows.Media.Brushes.White,
-                FontSize = 10,
-                TextWrapping = TextWrapping.Wrap,
-                TextAlignment = TextAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(2, 0, 2, 0)
-            };
-            var frame = new Border { Width = PresetTileWidth, Height = PresetTileHeight, Background = PresetBackdrop, CornerRadius = new CornerRadius(3), ClipToBounds = true, Child = fallback };
-            var button = new Button { Content = frame, Padding = new Thickness(1), Margin = new Thickness(0, 0, 3, 3), ToolTip = name };
-            AutomationProperties.SetAutomationId(button, automationId);
-            AutomationProperties.SetName(button, name);
-            return (button, frame);
         }
 
         /// <summary>

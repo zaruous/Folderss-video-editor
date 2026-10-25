@@ -966,8 +966,11 @@ namespace VideoEditor.Ui
             }
         }
 
-        /// <summary>글자 클립을 재생 헤드에 덮어 쓰기 트랙으로 넣는다(빈 덮어 쓰기 트랙이 없으면 새로 만듦).</summary>
-        public void AddText(string text)
+        /// <summary>
+        /// 글자 클립을 재생 헤드에 덮어 쓰기 트랙으로 넣는다(빈 덮어 쓰기 트랙이 없으면 새로 만듦). style을 주면 그 꾸민 글자 스타일의 사본으로
+        /// (글자 색 = 채우기 색 1), 없으면 꾸미지 않은 글자. 실행 취소 한 번에 사라진다.
+        /// </summary>
+        public void AddText(string text, TextStyle style = null)
         {
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -979,6 +982,12 @@ namespace VideoEditor.Ui
             if (Run(p =>
                 {
                     var clip = TimelineEdits.CreateText(text.Trim(), playhead, p.Rate.ToFrames(_services.ImageSeconds));
+                    if (style != null)
+                    {
+                        clip.Style = style.Clone();
+                        clip.Style.Normalize();
+                        clip.TextColor = clip.Style.Fill.Colors[0];
+                    }
                     id = clip.Id;
                     var track = p.VideoTracks.Skip(1).FirstOrDefault(t => !t.Locked && !t.Subtitles && !t.Clips.Any(c => c.Start < clip.End && c.End > clip.Start))
                                 ?? TimelineEdits.AddTrack(p, TrackKind.Video);
