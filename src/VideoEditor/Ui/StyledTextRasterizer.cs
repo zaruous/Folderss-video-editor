@@ -202,12 +202,10 @@ namespace VideoEditor.Ui
             if ((double)layout.Width * layout.Height > StyledTextLayout.MaxPixels)
                 throw new InvalidOperationException("꾸민 글자 그림이 너무 큽니다: " + layout.Width + "×" + layout.Height);
 
-            // 층을 아래에서 위로 하나씩 그려 겹친다: (반사) → 그림자 → (광선) → 본문(윤곽선 → 채우기). 괄호는 다음 작업에서 이 자리에 더한다
+            // 층을 아래에서 위로 하나씩 그려 겹친다: (반사) → 그림자 → 앞쪽 층((광선) → 본문(윤곽선 → 채우기)). 괄호는 다음 작업에서 이 자리에 더한다.
+            // 반사는 앞쪽 층만 뒤집어 비춘다(그림자는 비추지 않음)
             var origin = new Vector(layout.OriginX + halfWidth - centerX, layout.OriginY + halfHeight - centerY);
-            var layers = new List<Visual>();
-            var shadow = ShadowLayer(geometry, ink, style, request.EffectScale, origin);
-            if (shadow != null)
-                layers.Add(shadow);
+            var front = new List<Visual>();
             var body = new DrawingVisual();
             using (var context = body.RenderOpen())
             {
@@ -215,7 +213,12 @@ namespace VideoEditor.Ui
                 DrawBody(context, geometry, ink, style, request.EffectScale, null);
                 context.Pop();
             }
-            layers.Add(body);
+            front.Add(body);
+            var layers = new List<Visual>();
+            var shadow = ShadowLayer(geometry, ink, style, request.EffectScale, origin);
+            if (shadow != null)
+                layers.Add(shadow);
+            layers.AddRange(front);
             var bitmap = new RenderTargetBitmap(layout.Width, layout.Height, 96, 96, PixelFormats.Pbgra32);
             foreach (var layer in layers)
             {
