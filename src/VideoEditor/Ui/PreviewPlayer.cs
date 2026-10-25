@@ -133,7 +133,7 @@ namespace VideoEditor.Ui
             var size = OutputSize(copy);
             EnsureBitmap(size.Width, size.Height);
             var rasterizer = _services.TextRasterizer;
-            if (!copy.AllClips.Any(c => c.Kind == ClipKind.Text && c.Style != null))
+            if (!copy.AllClips.Any(c => c.Kind == ClipKind.Text && (c.Style != null || ClipLayout.HasTextBox(c))))
             {
                 Start(tool, copy, from, to, size.Width, size.Height, rasterizer);
                 return;

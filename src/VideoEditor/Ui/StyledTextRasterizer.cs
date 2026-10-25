@@ -30,7 +30,7 @@ namespace VideoEditor.Ui
         private bool _disposed;
 
         /// <summary>그리는 방식을 바꾸면 올린다(캐시 키에 들어가 예전 PNG를 쓰지 않게).</summary>
-        public int Version { get { return 7; } }
+        public int Version { get { return 8; } }
 
         /// <summary>어느 스레드에서 불러도 된다. 배경 그리기 스레드에 맡기고 끝날 때까지(최대 30초) 기다린다.</summary>
         public void Render(TextImageRequest request, string pngPath, CancellationToken cancellation)
@@ -165,34 +165,28 @@ namespace VideoEditor.Ui
             var style = request.Style?.Clone() ?? new TextStyle();
             style.Normalize();
             var size = Clamp(request.FontPixelSize, 0.5, 4000, 1);
-            var typeface = new Typeface(new FontFamily(Resolve(style.FontFamily)),
-                style.Italic ? FontStyles.Italic : FontStyles.Normal, style.Bold ? FontWeights.Bold : FontWeights.Normal, FontStretches.Normal);
-            var lineHeight = size * style.LineSpacing;
-            var spacing = style.LetterSpacing / 1000 * size;
 
-            // 줄마다 조각(자간이 0이면 줄 통째 — 커닝을 살린다, 아니면 글자 단위)을 재고 정렬해 놓는다
-            var lines = Lines(request.Text).Select(line => Measure(line, typeface, size, spacing)).ToList();
-            var boxWidth = lines.Select(l => l.Width).DefaultIfEmpty(0).Max();
-            var boxHeight = lines.Count * lineHeight;
+            // 줄을 나누고 상자 안에 놓는다(재기와 같은 함수) — 조각들은 기준선을 맞춘다
+            var arranged = Arrange(request.Text, style, size, request.WrapWidth, request.BoxHeight, request.VerticalAlign);
+            var boxWidth = arranged.BoxWidth;
+            var boxHeight = arranged.BoxHeight;
             var geometry = new GeometryGroup { FillRule = FillRule.Nonzero };
-            for (var i = 0; i < lines.Count; i++)
+            foreach (var line in arranged.Lines)
             {
-                var line = lines[i];
-                var x = style.Align == TextAlign.Left ? 0 : style.Align == TextAlign.Right ? boxWidth - line.Width : (boxWidth - line.Width) / 2;
-                // 글꼴 줄 높이를 행간 칸 가운데에 두고, 조각들은 기준선을 맞춘다
-                var top = i * lineHeight + (lineHeight - line.Height) / 2;
                 foreach (var piece in line.Pieces)
-                    geometry.Children.Add(piece.Text.BuildGeometry(new Point(x + piece.Offset, top + line.Baseline - piece.Text.Baseline)));
+                    geometry.Children.Add(piece.Text.BuildGeometry(new Point(line.X + piece.Offset, line.Top + line.Baseline - piece.Text.Baseline)));
             }
             cancellation.ThrowIfCancellationRequested();
-            // 휘기는 효과를 칠하기 전에 글자 윤곽에 먼저 — 채우기·윤곽선(뒤에 더할 효과도)이 모두 휘어진 윤곽을 쓴다. 없음·정도 0이면 그대로(바이트까지 같게)
-            if (style.Warp.Kind != WarpKind.None && style.Warp.Amount != 0 && boxWidth > 0 && boxHeight > 0)
+            // 휘기는 효과를 칠하기 전에 글자 윤곽에 먼저 — 채우기·윤곽선(뒤에 더할 효과도)이 모두 휘어진 윤곽을 쓴다. 없음·정도 0이면 그대로(바이트까지 같게).
+            // 기준은 글 덩어리(상자가 없으면 상자와 같다 — 상자가 글보다 크면 줄들이 차지한 곳)
+            var block = arranged.Block;
+            if (style.Warp.Kind != WarpKind.None && style.Warp.Amount != 0 && block.Width > 0 && block.Height > 0)
             {
-                geometry = Warp(geometry, style.Warp, boxWidth, boxHeight, cancellation);
+                geometry = Warp(geometry, style.Warp, block, cancellation);
                 cancellation.ThrowIfCancellationRequested();
             }
 
-            // PNG 가운데 = 배치 상자 가운데. 글자 모양이 상자 밖으로 나가도(기울임·행간이 좁을 때·휘기) 잘리지 않게 대칭으로 넓힌다
+            // PNG 가운데 = 배치 상자 가운데. 글자 모양이 상자 밖으로 나가도(기울임·행간이 좁을 때·휘기·상자보다 긴 글) 잘리지 않게 대칭으로 넓힌다
             var ink = geometry.Bounds;
             var centerX = boxWidth / 2;
             var centerY = boxHeight / 2;
@@ -255,14 +249,144 @@ namespace VideoEditor.Ui
             return false;
         }
 
-        private static Line Measure(string text, Typeface typeface, double size, double spacing)
+        /// <summary>
+        /// 글자 배치(그리기와 재기가 같이 쓰는 한 곳): 줄마다 조각을 재고(자간이 0이면 줄 통째 — 커닝을 살린다, 아니면 글자 단위),
+        /// 글자 상자 너비가 있으면 그 폭에서 줄을 나눠 상자 안에서 정렬하고, 높이가 있으면 세로 자리대로 놓는다(글이 더 길면 넘친다).
+        /// 길이는 size와 같은 단위(픽셀). 상자가 없으면(0) 상자 = 글을 감싼 크기로 예전과 같은 계산이다(바이트까지 같은 그림).
+        /// </summary>
+        private static Arrangement Arrange(string text, TextStyle style, double size, double wrapWidth, double boxHeight, TextVerticalAlign align)
+        {
+            var typeface = new Typeface(new FontFamily(Resolve(style.FontFamily)),
+                style.Italic ? FontStyles.Italic : FontStyles.Normal, style.Bold ? FontWeights.Bold : FontWeights.Normal, FontStretches.Normal);
+            var lineHeight = size * style.LineSpacing;
+            var spacing = style.LetterSpacing / 1000 * size;
+            var wrap = BoxLength(wrapWidth);
+            var height = BoxLength(boxHeight);
+            // 줄 나눔은 같은 글을 여러 번 재므로 잰 것을 기억해 둔다(상자 너비가 없으면 예전처럼 그때그때)
+            var cache = wrap > 0 ? new Dictionary<string, FormattedText>(StringComparer.Ordinal) : null;
+            var lines = new List<Line>();
+            foreach (var hard in Lines(text))
+            {
+                if (wrap > 0)
+                    lines.AddRange(Wrap(hard, typeface, size, spacing, wrap, cache));
+                else
+                    lines.Add(Measure(hard, typeface, size, spacing, null));
+            }
+            var result = new Arrangement
+            {
+                Lines = lines,
+                BoxWidth = wrap > 0 ? wrap : lines.Select(l => l.Width).DefaultIfEmpty(0).Max(),
+                TextHeight = lines.Count * lineHeight
+            };
+            result.BoxHeight = height > 0 ? height : result.TextHeight;
+            // 글보다 높은 상자에서 위·가운데·아래(낮은 상자면 넘친다 — 위는 아래로, 아래는 위로, 가운데는 위아래로)
+            var offset = height <= 0 || align == TextVerticalAlign.Top ? 0
+                : align == TextVerticalAlign.Bottom ? height - result.TextHeight : (height - result.TextHeight) / 2;
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var line = lines[i];
+                line.X = style.Align == TextAlign.Left ? 0 : style.Align == TextAlign.Right ? result.BoxWidth - line.Width : (result.BoxWidth - line.Width) / 2;
+                // 글꼴 줄 높이를 행간 칸 가운데에 둔다
+                line.Top = i * lineHeight + (lineHeight - line.Height) / 2 + offset;
+            }
+            if (wrap > 0)
+            {
+                // 상자가 글보다 넓을 수 있다 — 글 덩어리는 줄들이 차지한 곳
+                var left = lines.Min(l => l.X);
+                result.Block = (left, offset, Math.Max(0, lines.Max(l => l.X + l.Width) - left), result.TextHeight);
+            }
+            else
+            {
+                result.Block = (0, offset, result.BoxWidth, result.TextHeight);
+            }
+            return result;
+        }
+
+        /// <summary>줄을 나눌 수 있는 빈칸(띄어쓰기·탭·전각 빈칸). 줄 바꿈 없는 빈칸(U+00A0 등)은 낱말의 일부.</summary>
+        private static bool IsBreakSpace(char ch)
+        {
+            return ch == ' ' || ch == '\t' || ch == '\u3000';
+        }
+
+        /// <summary>
+        /// 줄 하나(줄 바꿈 없는 글)를 width 안에 들게 나눈다: 빈칸에서 나누고 나눈 자리의 빈칸은 버린다(줄 끝 빈칸은 폭에 넣지 않고, 글 맨 앞 들여쓰기는 남김).
+        /// 낱말 하나가 상자보다 넓으면 그 낱말만 글자 요소 단위로 나눈다(<see cref="BreakWord"/>). 폭은 그릴 때와 같은 <see cref="Measure"/>로 잰다 —
+        /// 자간이 0이면 줄 통째(커닝 그대로), 아니면 글자 단위 조각. 오른쪽→왼쪽 글자가 든 줄도 논리 순서대로 빈칸에서 나눠 줄마다 통째로 놓는다
+        /// (줄 안 순서는 FormattedText가 정한다. 너무 긴 낱말을 글자 단위로 나누면 그 자리에서 아랍어 이음이 끊긴다).
+        /// </summary>
+        private static List<Line> Wrap(string text, Typeface typeface, double size, double spacing, double width, Dictionary<string, FormattedText> cache)
+        {
+            var lines = new List<Line>();
+            // (앞 빈칸, 낱말) — 줄 끝 빈칸은 버린다. 빈칸은 대리 쌍의 반쪽일 수 없어 글자 단위로 끊어도 된다
+            var words = new List<(string Space, string Word)>();
+            var i = 0;
+            while (i < text.Length)
+            {
+                var start = i;
+                while (i < text.Length && IsBreakSpace(text[i]))
+                    i++;
+                var space = text.Substring(start, i - start);
+                start = i;
+                while (i < text.Length && !IsBreakSpace(text[i]))
+                    i++;
+                if (i > start)
+                    words.Add((space, text.Substring(start, i - start)));
+            }
+            var line = "";
+            for (var w = 0; w < words.Count; w++)
+            {
+                var (space, word) = words[w];
+                // 나눈 뒤 줄 맨 앞이면 앞 빈칸을 버린다
+                var candidate = line.Length > 0 ? line + space + word : w == 0 ? space + word : word;
+                var fits = Measure(candidate, typeface, size, spacing, cache).Width <= width;
+                if (!fits && line.Length > 0)
+                {
+                    lines.Add(Measure(line, typeface, size, spacing, cache));
+                    candidate = word;
+                    fits = Measure(candidate, typeface, size, spacing, cache).Width <= width;
+                }
+                line = fits ? candidate : BreakWord(candidate, typeface, size, spacing, width, cache, lines);
+            }
+            // 빈 줄·빈칸뿐인 줄은 빈 줄(높이만)
+            lines.Add(Measure(line, typeface, size, spacing, cache));
+            return lines;
+        }
+
+        /// <summary>상자보다 넓은 글을 글자 요소(StringInfo) 단위로 나눈다: 들어가는 만큼(적어도 한 요소)씩 lines에 줄로 더하고 마지막 남은 조각을 돌려준다.</summary>
+        private static string BreakWord(string text, Typeface typeface, double size, double spacing, double width, Dictionary<string, FormattedText> cache, List<Line> lines)
+        {
+            var elements = new List<string>();
+            var enumerator = StringInfo.GetTextElementEnumerator(text);
+            while (enumerator.MoveNext())
+                elements.Add(enumerator.GetTextElement());
+            var start = 0;
+            while (true)
+            {
+                var piece = elements[start];
+                var count = 1;
+                while (start + count < elements.Count)
+                {
+                    var longer = piece + elements[start + count];
+                    if (Measure(longer, typeface, size, spacing, cache).Width > width)
+                        break;
+                    piece = longer;
+                    count++;
+                }
+                if (start + count >= elements.Count)
+                    return piece;
+                lines.Add(Measure(piece, typeface, size, spacing, cache));
+                start += count;
+            }
+        }
+
+        private static Line Measure(string text, Typeface typeface, double size, double spacing, Dictionary<string, FormattedText> cache)
         {
             var line = new Line();
             // 오른쪽→왼쪽 글자가 든 줄은 자간을 넣지 않고 통째로 놓는다
             if (spacing == 0 || HasRightToLeft(text))
             {
                 if (text.Length > 0)
-                    line.Add(Format(text, typeface, size), 0);
+                    line.Add(Format(text, typeface, size, cache), 0);
             }
             else
             {
@@ -271,7 +395,7 @@ namespace VideoEditor.Ui
                 var elements = StringInfo.GetTextElementEnumerator(text);
                 while (elements.MoveNext())
                 {
-                    var piece = Format(elements.GetTextElement(), typeface, size);
+                    var piece = Format(elements.GetTextElement(), typeface, size, cache);
                     if (line.Pieces.Count > 0)
                         offset += spacing;
                     line.Add(piece, offset);
@@ -281,14 +405,72 @@ namespace VideoEditor.Ui
             if (line.Pieces.Count == 0)
             {
                 // 빈 줄도 높이는 같게
-                line.Fit(Format(" ", typeface, size));
+                line.Fit(Format(" ", typeface, size, cache));
             }
             return line;
         }
 
-        private static FormattedText Format(string text, Typeface typeface, double size)
+        /// <summary>글 하나의 FormattedText. cache가 있으면 같은 글은 한 번만 만든다(줄 나눔 — 그릴 때 같은 것을 여러 조각에 써도 된다).</summary>
+        private static FormattedText Format(string text, Typeface typeface, double size, Dictionary<string, FormattedText> cache)
         {
-            return new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, typeface, size, Brushes.Black, 1.0);
+            if (cache != null && cache.TryGetValue(text, out var known))
+                return known;
+            var formatted = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, typeface, size, Brushes.Black, 1.0);
+            if (cache != null)
+                cache[text] = formatted;
+            return formatted;
+        }
+
+        /// <summary>상자 길이로 쓸 수 없는 값(0 이하·NaN·무한대)은 0(자동).</summary>
+        private static double BoxLength(double value)
+        {
+            return double.IsFinite(value) && value > 0 ? value : 0;
+        }
+
+        // ---------- 재기(미리 보기 틀·[글자] 탭) ----------
+
+        private static readonly object MeasureGate = new object();
+        private static readonly Dictionary<string, (double Width, double Height, double TextHeight)> Measured = new Dictionary<string, (double, double, double)>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// 글자 상자 크기와 글 높이(줄 수 × 줄 간격) — 그리기와 같은 배치 함수(<see cref="Arrange"/>)로 잰다. 길이는 fontSize와 같은 단위(프로젝트 픽셀을 주면 프로젝트 픽셀).
+        /// 미리 보기 틀·넘침 안내용으로 UI 스레드에서 부르고(어느 스레드든 된다), 같은 값은 기억해 둔다. 세로 자리는 크기에 영향이 없어 받지 않는다.
+        /// </summary>
+        public static (double Width, double Height, double TextHeight) MeasureBox(string text, TextStyle style, double fontSize, double boxWidth, double boxHeight)
+        {
+            var normalized = style?.Clone() ?? new TextStyle();
+            normalized.Normalize();
+            var size = Clamp(fontSize, 0.5, 4000, 1);
+            string N(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+            var key = string.Join("\u0001", text ?? "", normalized.FontFamily, normalized.Bold ? "1" : "0", normalized.Italic ? "1" : "0",
+                N(normalized.LetterSpacing), N(normalized.LineSpacing), N(size), N(BoxLength(boxWidth)), N(BoxLength(boxHeight)));
+            lock (MeasureGate)
+            {
+                if (Measured.TryGetValue(key, out var known))
+                    return known;
+            }
+            var arranged = Arrange(text, normalized, size, boxWidth, boxHeight, TextVerticalAlign.Middle);
+            var result = (arranged.BoxWidth, arranged.BoxHeight, arranged.TextHeight);
+            lock (MeasureGate)
+            {
+                // 끄는 동안 값이 계속 바뀌므로 너무 쌓이면 비운다
+                if (Measured.Count >= 256)
+                    Measured.Clear();
+                Measured[key] = result;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 글자 클립의 상자 크기(프로젝트 픽셀, 크기 배율 전). boxWidth·boxHeight는 상자 값(0 = 자동 — 끄는 동안의 값을 넣을 수 있다).
+        /// 스타일이 없으면 처음 꾸밀 때의 스타일(<see cref="TextStyle.FromLegacy"/>)로 잰다 — 상자도 스타일도 없는 글자는 아직 drawtext로 그리므로 그때는 어림값이다.
+        /// 긴 글(<see cref="RenderGraph.MaxStyledTextLength"/> 넘음)은 drawtext가 상자를 무시하므로 상자 없이 잰다.
+        /// </summary>
+        public static (double Width, double Height, double TextHeight) MeasureClip(Clip clip, double boxWidth, double boxHeight)
+        {
+            var text = clip.Text ?? "";
+            var boxed = text.Length <= RenderGraph.MaxStyledTextLength;
+            return MeasureBox(text, clip.Style ?? TextStyle.FromLegacy(clip), clip.FontSize, boxed ? ClipLayout.TextBoxLength(boxWidth) : 0, boxed ? ClipLayout.TextBoxLength(boxHeight) : 0);
         }
 
         /// <summary>
@@ -467,13 +649,14 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
-        /// 휘기: 글자 윤곽을 꺾은선으로 펴고(허용 오차 0.25px) 그림마다 점을 배치 상자 기준 0~1로 정규화해 <see cref="TextWarp.Map"/>으로 옮긴 뒤 픽셀로 되돌린다.
-        /// 긴 직선도 휘게 변을 상자 폭의 1% 이하로 쪼갠다(<see cref="TextWarp.Subdivide"/>) — 가로세로 같은 길이로 쪼개야 한 줄짜리 긴 글에서
+        /// 휘기: 글자 윤곽을 꺾은선으로 펴고(허용 오차 0.25px) 그림마다 점을 글 덩어리(block — 상자가 없으면 배치 상자) 기준 0~1로 정규화해 <see cref="TextWarp.Map"/>으로 옮긴 뒤 픽셀로 되돌린다.
+        /// 긴 직선도 휘게 변을 덩어리 폭의 1% 이하로 쪼갠다(<see cref="TextWarp.Subdivide"/>) — 가로세로 같은 길이로 쪼개야 한 줄짜리 긴 글에서
         /// 세로 변이 픽셀마다 쪼개지지 않는다(휘기는 세로 변을 곧게 두므로 쪼갤 필요도 없다). 채우기 규칙은 원래 것 — 글자 속 구멍이 그대로 남는다.
         /// </summary>
-        private static GeometryGroup Warp(GeometryGroup geometry, TextWarpSetting warp, double boxWidth, double boxHeight, CancellationToken cancellation)
+        private static GeometryGroup Warp(GeometryGroup geometry, TextWarpSetting warp, (double Left, double Top, double Width, double Height) block, CancellationToken cancellation)
         {
             var flat = geometry.GetFlattenedPathGeometry(0.25, ToleranceType.Absolute);
+            var (left, top, boxWidth, boxHeight) = block;
             var aspect = boxHeight / boxWidth;
             var maxLength = boxWidth * 0.01;
             var path = new PathGeometry { FillRule = geometry.FillRule };
@@ -501,8 +684,8 @@ namespace VideoEditor.Ui
                 var rest = new PointCollection(divided.Count - 1);
                 for (var i = 0; i < divided.Count; i++)
                 {
-                    var (u, v) = TextWarp.Map(warp.Kind, warp.Amount, divided[i].U / boxWidth, divided[i].V / boxHeight, aspect);
-                    var point = new Point(u * boxWidth, v * boxHeight);
+                    var (u, v) = TextWarp.Map(warp.Kind, warp.Amount, (divided[i].U - left) / boxWidth, (divided[i].V - top) / boxHeight, aspect);
+                    var point = new Point(left + u * boxWidth, top + v * boxHeight);
                     if (i == 0)
                         bent.StartPoint = point;
                     else
@@ -608,6 +791,16 @@ namespace VideoEditor.Ui
             return double.IsFinite(value) ? Math.Max(min, Math.Min(max, value)) : fallback;
         }
 
+        /// <summary>배치 결과(<see cref="Arrange"/>): 놓은 줄들, 상자 크기, 글 높이(줄 수 × 줄 간격), 글 덩어리(휘기 기준 — 줄들이 차지한 곳).</summary>
+        private sealed class Arrangement
+        {
+            public List<Line> Lines { get; set; }
+            public double BoxWidth { get; set; }
+            public double BoxHeight { get; set; }
+            public double TextHeight { get; set; }
+            public (double Left, double Top, double Width, double Height) Block { get; set; }
+        }
+
         /// <summary>
         /// 한 줄: 조각(글 + 줄 안 x 위치)들과 폭, 글꼴 줄 높이·기준선. 조각마다 글꼴이 다를 수 있어(대체 글꼴)
         /// 기준선 위는 가장 높은 것, 아래는 가장 깊은 것으로 잰다 — 자간이 있든 없든 세로 위치가 같게.
@@ -620,6 +813,9 @@ namespace VideoEditor.Ui
             public double Width { get; private set; }
             public double Baseline { get; private set; }
             public double Height { get { return Baseline + _descent; } }
+            /// <summary>놓은 자리(<see cref="Arrange"/>): 상자 왼쪽에서 줄 왼쪽까지, 상자 위에서 글꼴 줄 높이 위까지.</summary>
+            public double X { get; set; }
+            public double Top { get; set; }
 
             public void Add(FormattedText text, double offset)
             {

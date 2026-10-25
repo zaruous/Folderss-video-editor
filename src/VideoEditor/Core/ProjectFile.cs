@@ -145,6 +145,11 @@ namespace VideoEditor.Core
                     clip.Style = null;
                 else
                     clip.Style?.Normalize();
+                // 글자 상자: 글자 클립에만, NaN·무한대·음수는 자동(0), 너무 큰 값은 상한까지, 모르는 세로 자리는 가운데
+                clip.TextBoxWidth = clip.Kind == ClipKind.Text ? ClipLayout.TextBoxLength(clip.TextBoxWidth) : 0;
+                clip.TextBoxHeight = clip.Kind == ClipKind.Text ? ClipLayout.TextBoxLength(clip.TextBoxHeight) : 0;
+                if (clip.Kind != ClipKind.Text || !Enum.IsDefined(clip.TextVerticalAlign))
+                    clip.TextVerticalAlign = TextVerticalAlign.Middle;
                 clip.Words = CleanWords(clip);
             }
             // 사운드 분리 링크: 같은 원본의 영상·사운드 짝만(예전 프로젝트는 링크 없음)

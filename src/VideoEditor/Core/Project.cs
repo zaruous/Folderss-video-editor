@@ -176,6 +176,19 @@ namespace VideoEditor.Core
         public string TextColor { get; set; } = "#FFFFFF";
         /// <summary>꾸밈 스타일. null이면 꾸미지 않은 글자(예전 방식).</summary>
         public TextStyle Style { get; set; }
+        /// <summary>
+        /// 글자 상자 너비(프로젝트 픽셀). 0 = 자동(줄을 나누지 않고 가장 긴 줄 폭). 정하면 줄마다 이 폭에서 낱말 단위로 나누고 정렬은 상자 안에서.
+        /// 위치·크기처럼 클립의 값이라 스타일을 바꿔도(스타일 모음·내 스타일) 그대로 남는다.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public double TextBoxWidth { get; set; }
+        /// <summary>글자 상자 높이(프로젝트 픽셀). 0 = 자동(글 높이). 글이 더 길면 상자 밖으로 넘쳐 그린다(글자 크기는 그대로).</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public double TextBoxHeight { get; set; }
+        /// <summary>글보다 높은 상자에서 글을 놓는 자리(위·가운데·아래). 예전 프로젝트는 가운데.</summary>
+        [JsonConverter(typeof(LenientEnumConverter<TextVerticalAlign>))]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public TextVerticalAlign TextVerticalAlign { get; set; }
 
         [JsonIgnore]
         public long Duration
@@ -254,6 +267,17 @@ namespace VideoEditor.Core
         Stretch,
         /// <summary>흐린 배경으로 채우기: 비율을 지켜 다 보이게 하고, 남는 곳은 같은 그림을 채우기로 키워 흐리게 깔아 채움(세로 쇼츠에 가로 사진 등).</summary>
         Blur
+    }
+
+    /// <summary>글자 상자 안 세로 자리. 기본(0)이 가운데라 예전 프로젝트·저장하지 않은 값은 가운데.</summary>
+    public enum TextVerticalAlign
+    {
+        /// <summary>가운데(기본).</summary>
+        Middle,
+        /// <summary>위.</summary>
+        Top,
+        /// <summary>아래.</summary>
+        Bottom
     }
 
     public sealed class ClipWord
