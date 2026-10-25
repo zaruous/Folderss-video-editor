@@ -427,6 +427,9 @@ namespace VideoEditor.Core
                     Mask = Personal(effects[i]) && masks.Count > 0 ? masks.Dequeue() : null
                 }));
             }
+            // 구간 길이로 자른다: 한 장 그림을 tpad로 늘인 효과 그림은 한 장이 더 길어(N+1장), blend·overlay가 둘 다 끝날 때까지 이어져
+            // 클립이 끝난 뒤 한 장이 더 보였다(빈 곳·아래 트랙 위에 번쩍 — 한 장 그리기와 이어 그리기도 달랐다)
+            text.AppendFormat(CultureInfo.InvariantCulture, ",trim=end_frame={0}", segEnd - segStart);
             return text.ToString();
         }
 

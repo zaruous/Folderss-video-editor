@@ -458,12 +458,13 @@ namespace VideoEditor.Tests
             Default(blue, SciFiScan.Id);
             Default(dark, RayScan.Id);
             Default(dark, GlitchScan.Id);
-            const int size = Width * Height * 4;
+            // 640×360: 수식 전환 묶음의 재생 축소가 일어나는 크기(320×240은 축소 1이라 그 길을 타지 않는다)
+            const int size = 640 * 360 * 4;
             for (var run = 0; run < 2; run++)
             {
                 List<string> files;
                 long read = 0;
-                using (var process = PreviewRenderer.StartVideo(FfmpegMedia.Tool, project, 40, 120, Width, Height, out files))
+                using (var process = PreviewRenderer.StartVideo(FfmpegMedia.Tool, project, 40, 120, 640, 360, out files))
                 {
                     var errors = process.StandardError.ReadToEndAsync();
                     var buffer = new byte[size];
@@ -513,7 +514,8 @@ namespace VideoEditor.Tests
             double Measure()
             {
                 var best = double.MaxValue;
-                for (var run = 0; run < 2; run++)
+                // 다른 FFmpeg 시험과 함께 돌면 흔들리므로 세 번 재 가장 빠른 값으로
+                for (var run = 0; run < 3; run++)
                 {
                     var plan = RenderGraph.Build(project, new RenderOptions { From = 0, To = 60, Width = 1920, Height = 1080, Audio = false, TempFolder = RenderEnvironment.TempFolder(), FfmpegMajor = tool.MajorVersion });
                     var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "null", "-" }, out var script);

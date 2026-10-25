@@ -302,6 +302,36 @@ namespace VideoEditor.Tests
             Assert.True(rightMax < 90);
         }
 
+        public static IEnumerable<object[]> EffectIds()
+        {
+            return VideoEffects.All.Select(d => new object[] { d.Id });
+        }
+
+        [Theory]
+        [MemberData(nameof(EffectIds))]
+        public void Effect_EndsWithTheClip_NoExtraFrameOverTheGap(string id)
+        {
+            if (FfmpegMedia.Tool == null)
+                return;
+            // 한 장 그림을 tpad로 늘인 효과 그림은 한 장이 길어, 클립이 끝난 뒤 빈 곳에 한 장이 더 보였다(이어 그리기만 — 한 장 그리기와도 달랐다)
+            var project = NewProject(magnetic: false);
+            var clip = Add(project, project.MainTrack, DarkImage, 0, 30);
+            Add(project, project.MainTrack, DarkImage, 45, 15);
+            clip.Effects = new List<ClipEffect> { VideoEffects.Create(VideoEffects.Find(id)) };
+            var frames = Render(project, 25, 35);
+            long Rgb(byte[] bgra, int frame)
+            {
+                long sum = 0;
+                for (var i = frame * Width * Height * 4; i < (frame + 1) * Width * Height * 4; i += 4)
+                    sum += bgra[i] + bgra[i + 1] + bgra[i + 2];
+                return sum;
+            }
+            Assert.True(Rgb(frames, 4) > 0, "마지막 장(29)에는 클립이 보여야 합니다");
+            for (var f = 5; f < 10; f++)
+                Assert.True(Rgb(frames, f) == 0, id + ": 클립이 끝난 뒤 " + (25 + f) + "번째 장에 그림이 남았습니다(" + Rgb(frames, f) + ")");
+            Assert.Equal(0, Rgb(Render(project, 30, 31), 0));
+        }
+
         [FfmpegFact]
         public void ClipAlpha_IsKept_TransparentPartsShowTheTrackBelow()
         {
@@ -491,7 +521,8 @@ namespace VideoEditor.Tests
             double Measure()
             {
                 var best = double.MaxValue;
-                for (var run = 0; run < 2; run++)
+                // 다른 FFmpeg 시험과 함께 돌면 흔들리므로 세 번 재 가장 빠른 값으로
+                for (var run = 0; run < 3; run++)
                 {
                     var plan = RenderGraph.Build(project, new RenderOptions { From = 0, To = 60, Width = 1920, Height = 1080, Audio = false, TempFolder = RenderEnvironment.TempFolder(), FfmpegMajor = tool.MajorVersion });
                     var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "null", "-" }, out var script);

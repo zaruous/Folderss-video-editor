@@ -424,12 +424,13 @@ namespace VideoEditor.Tests
             With(blue, BlockGlitch.Def, ("rate", 100));
             With(grad, RgbSplit.Def);
             With(grad, LineSlip.Def, ("rate", 100));
-            const int size = Width * Height * 4;
+            // 640×360: 수식 전환 묶음의 재생 축소가 일어나는 크기(320×240은 축소 1이라 그 길을 타지 않는다)
+            const int size = 640 * 360 * 4;
             for (var run = 0; run < 2; run++)
             {
                 List<string> files;
                 long read = 0;
-                using (var process = PreviewRenderer.StartVideo(FfmpegMedia.Tool, project, 40, 120, Width, Height, out files))
+                using (var process = PreviewRenderer.StartVideo(FfmpegMedia.Tool, project, 40, 120, 640, 360, out files))
                 {
                     var errors = process.StandardError.ReadToEndAsync();
                     var buffer = new byte[size];
@@ -488,7 +489,8 @@ namespace VideoEditor.Tests
             }
             var defs = new VideoEffectDef[] { null, RgbSplit.Def, BlockGlitch.Def, LineSlip.Def, BadSignal.Def };
             var best = defs.Select(_ => double.MaxValue).ToArray();
-            for (var round = 0; round < 2; round++)
+            // 다른 FFmpeg 시험과 함께 돌면 흔들리므로 세 번 재 가장 빠른 값으로
+            for (var round = 0; round < 3; round++)
             {
                 for (var i = 0; i < defs.Length; i++)
                 {

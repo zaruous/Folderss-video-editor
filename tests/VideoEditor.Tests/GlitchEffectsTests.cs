@@ -241,7 +241,10 @@ namespace VideoEditor.Tests
             // 잡음 판: 한 장(d = 반 프레임)을 수식으로 그려 구간 끝까지 늘이고 자른다 — 높이는 주사선 간격의 배수로만
             Assert.Equal(4, BadSignal.ScanPeriod(1));
             Assert.Equal(2, BadSignal.ScanPeriod(0.25));
-            Assert.Contains("color=c=black:s=768x488:r=30/1:d=0.016667,format=gray,geq=lum=", filter);
+            // 판(768×488)은 절반 크기로 그려 두 배로(가장 가까운 화소) 키운다 — 곁 사슬이라 클립 사슬의 scale 하나 규칙과 상관없다
+            Assert.Contains("color=c=black:s=384x244:r=30/1:d=0.016667,format=gray,geq=lum=", filter);
+            Assert.Contains(",scale=iw*2:ih*2:flags=neighbor,format=gbrap,tpad=", filter);
+            Assert.Contains("mod(2*Y,4)", filter);
             Assert.Contains("tpad=stop_mode=clone:stop_duration=2,crop=640:360:", filter);
             Assert.Contains("'4*floor(32*", filter);
             Assert.Contains(",colorchannelmixer=", filter);

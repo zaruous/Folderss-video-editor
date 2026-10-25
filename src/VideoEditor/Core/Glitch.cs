@@ -512,11 +512,13 @@ namespace VideoEditor.Core
                 var spare = NoiseSpare - NoiseSpare % period;
                 var once = N(0.5 / r.Fps);
                 var grain = noise > 0 ? "+" + N(240 * noise) + "*(" + H("X*12.9898+Y*78.233") + "-0.5)" : "";
-                var dark = scan > 0 ? "-if(lt(mod(Y," + period + ")," + period / 2 + "),0," + N(60 * scan) + ")" : "";
+                // 판은 절반 크기(잡음 알갱이 2×2)로 그려 두 배로 키운다 — 1080p에서 geq가 약 0.23초 → 약 0.06초(멈춘 화면마다 한 번)
+                // 주사선은 키운 뒤의 줄 번호(2·Y)로 정해 간격이 짝수면 그대로다
+                var dark = scan > 0 ? "-if(lt(mod(2*Y," + period + ")," + period / 2 + "),0," + N(60 * scan) + ")" : "";
                 var nf = Glitch.FrameExpr(r, "t");
                 text.AppendFormat(CultureInfo.InvariantCulture,
-                    "[{0}p];color=c=black:s={1}x{2}:r={3}:d={4},format=gray,geq=lum='clip(128{5}{6},0,255)',format=gbrap,tpad=stop_mode=clone:stop_duration={7},crop={8}:{9}:'floor({10}*{11})':'{12}*floor({13}*{14})'[{0}n]",
-                    p, w + spare, h + spare, r.Rate, once, grain, dark, N(r.Seconds), w, h, spare, H(nf + "*12.9898+0.1"), period, spare / period, H(nf + "*78.233+0.2"));
+                    "[{0}p];color=c=black:s={1}x{2}:r={3}:d={4},format=gray,geq=lum='clip(128{5}{6},0,255)',scale=iw*2:ih*2:flags=neighbor,format=gbrap,tpad=stop_mode=clone:stop_duration={7},crop={8}:{9}:'floor({10}*{11})':'{12}*floor({13}*{14})'[{0}n]",
+                    p, (w + spare + 1) / 2, (h + spare + 1) / 2, r.Rate, once, grain, dark, N(r.Seconds), w, h, spare, H(nf + "*12.9898+0.1"), period, spare / period, H(nf + "*78.233+0.2"));
                 text.AppendFormat(CultureInfo.InvariantCulture, ";[{0}p][{0}n]blend=c0_mode=grainmerge:c1_mode=grainmerge:c2_mode=grainmerge:c3_mode=normal", p);
             }
             text.Append(Glitch.Finish(r));

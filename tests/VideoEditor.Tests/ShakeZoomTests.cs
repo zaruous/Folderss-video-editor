@@ -135,8 +135,8 @@ namespace VideoEditor.Tests
                 Assert.Equal(1, CountOf(chain, "perspective="));
                 Assert.Contains(":eval=frame", chain);
                 Assert.Contains("crop=640:360,format=gbrap,perspective=", chain);
-                // 효과 뒤는 예전처럼 시각 맞춤(같은 흐름에 이어 붙음 — 라벨로 끊지 않음)
-                Assert.Matches(":eval=frame(,convolution=[^,]+)?,setpts=PTS-STARTPTS", chain);
+                // 효과 뒤는 구간 길이로 자르고(효과 사슬 끝) 예전처럼 시각 맞춤(같은 흐름에 이어 붙음 — 라벨로 끊지 않음)
+                Assert.Matches(":eval=frame(,convolution=[^,]+)?,trim=end_frame=\\d+,setpts=PTS-STARTPTS", chain);
                 foreach (var forbidden in new[] { "st(", "ld(", "random(", "time(", "scale" + "2ref", "zoompan" })
                     Assert.DoesNotContain(forbidden, chain);
                 // 시각은 프레임 번호로(perspective에는 t가 없다)
@@ -198,7 +198,7 @@ namespace VideoEditor.Tests
             // 기본값(세기 30px·흐림 40%): 가로 이웃 무게 round(8 × 0.4) = 3, 세로(24px) 3 — 가로 [3 8 3] × 세로 [3 8 3], R·G·B만
             Assert.Equal((3, 3), ShakeZoom.EarthquakeBlur(effect, 640, 360, 1));
             var filter = RenderGraph.Build(project, Options(project, 0, 30)).Filter;
-            Assert.Contains(":eval=frame,convolution=0m='9 24 9 24 64 24 9 24 9':1m='9 24 9 24 64 24 9 24 9':2m='9 24 9 24 64 24 9 24 9',setpts=", filter);
+            Assert.Contains(":eval=frame,convolution=0m='9 24 9 24 64 24 9 24 9':1m='9 24 9 24 64 24 9 24 9':2m='9 24 9 24 64 24 9 24 9',trim=end_frame=", filter);
             Assert.DoesNotContain("3m=", filter);
             Assert.DoesNotContain("avgblur", filter);
             VideoEffects.SetNumber(effect, "blur", 0);
