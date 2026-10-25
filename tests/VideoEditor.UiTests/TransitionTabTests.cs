@@ -77,6 +77,8 @@ namespace VideoEditor.UiTests
                 await Import(ui, window, "red.png");
                 var start = ui.Run(() => (long)Get(Red(window), "Start"));
                 Assert.Equal(90, start);
+                // 사진은 기본으로 화면을 꽉 채운다(설정 [사진을 타임라인에 놓을 때])
+                Assert.Equal("Fill", ui.Run(() => Get(Red(window), "Fit").ToString()));
 
                 // [효과] 탭: 닦아내기 1초를 모든 클립 사이에
                 ui.Run(() =>

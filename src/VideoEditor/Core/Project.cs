@@ -125,8 +125,12 @@ namespace VideoEditor.Core
         /// <summary>화면 가운데에서 떨어진 정도(프로젝트 픽셀).</summary>
         public double X { get; set; }
         public double Y { get; set; }
-        /// <summary>크기 배율(1 = 화면에 맞춤).</summary>
+        /// <summary>크기 배율(1 = 화면 크기의 틀).</summary>
         public double Scale { get; set; } = 1;
+        /// <summary>틀에 놓는 방식(맞춤·채우기·늘이기). 예전 프로젝트는 맞춤.</summary>
+        [JsonConverter(typeof(LenientEnumConverter<ClipFit>))]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public ClipFit Fit { get; set; }
         /// <summary>시계 방향 회전(도).</summary>
         public double Rotation { get; set; }
         public double Opacity { get; set; } = 1;
@@ -201,6 +205,17 @@ namespace VideoEditor.Core
     }
 
     /// <summary>자막 큐의 단어 하나와 그 시각(클립 시작부터의 프레임, [Start, End)).</summary>
+    /// <summary>화면 클립을 화면(또는 크기 배율만큼의 틀)에 놓는 방식.</summary>
+    public enum ClipFit
+    {
+        /// <summary>화면에 맞춤: 비율을 지켜 다 보이게(남는 곳은 비어 아래 트랙·검정이 보임).</summary>
+        Fit,
+        /// <summary>화면 채우기: 비율을 지켜 꽉 채우고 넘치는 곳은 가운데 기준으로 자름.</summary>
+        Fill,
+        /// <summary>늘이기: 비율을 무시하고 화면 크기로.</summary>
+        Stretch
+    }
+
     public sealed class ClipWord
     {
         public string Text { get; set; }

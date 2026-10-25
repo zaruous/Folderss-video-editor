@@ -157,6 +157,47 @@ namespace VideoEditor.Ui
             panel.Children.Add(NumberRow("위치 X", "PropX", -4000, 4000, "px", id, c => c.X, (c, v) => c.X = v));
             panel.Children.Add(NumberRow("위치 Y", "PropY", -4000, 4000, "px", id, c => c.Y, (c, v) => c.Y = v));
             panel.Children.Add(NumberRow("크기", "PropScale", 5, 400, "%", id, c => c.Scale * 100, (c, v) => c.Scale = Math.Max(0.05, v / 100)));
+            // 맞춤 방식(동영상·사진): 화면에 맞춤 · 화면 채우기 · 늘이기
+            if (_session.Project.FindClip(id)?.Kind == ClipKind.Media)
+            {
+                var fits = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
+                AutomationProperties.SetAutomationId(fits, "PropFit");
+                AutomationProperties.SetName(fits, "맞춤 방식");
+                var fitKinds = new[] { ClipFit.Fit, ClipFit.Fill, ClipFit.Stretch };
+                foreach (var kind in fitKinds)
+                    fits.Items.Add(new ComboBoxItem { Content = EditorServices.FitName(kind), ToolTip = EditorServices.FitHint(kind) });
+                fits.SelectionChanged += (s, e) =>
+                {
+                    if (_updating || fits.SelectedIndex < 0)
+                        return;
+                    var fit = fitKinds[fits.SelectedIndex];
+                    var current = _session.Project.FindClip(id);
+                    if (current != null && current.Fit != fit)
+                        Edit(id, c => c.Fit = fit, null);
+                };
+                _refreshers.Add(() =>
+                {
+                    var c = _session.Project.FindClip(id);
+                    if (c == null)
+                        return;
+                    var was = _updating;
+                    _updating = true;
+                    try
+                    {
+                        fits.SelectedIndex = Array.IndexOf(fitKinds, c.Fit);
+                    }
+                    finally
+                    {
+                        _updating = was;
+                    }
+                });
+                var fitRow = new DockPanel();
+                var fitLabel = UiKit.Label("맞춤 방식");
+                fitLabel.Width = 84;
+                fitRow.Children.Add(fitLabel);
+                fitRow.Children.Add(fits);
+                panel.Children.Add(fitRow);
+            }
             panel.Children.Add(NumberRow("회전", "PropRotation", -360, 360, "°", id, c => c.Rotation, (c, v) => c.Rotation = v));
             panel.Children.Add(NumberRow("불투명도", "PropOpacity", 0, 100, "%", id, c => c.Opacity * 100, (c, v) => c.Opacity = Math.Max(0, Math.Min(1, v / 100))));
             // 전환 효과 종류(길이는 아래 줄) — 효과 탭에서 고르거나 끌어 놓아도 된다

@@ -545,6 +545,21 @@ namespace VideoEditor.Core
             return track;
         }
 
+        /// <summary>화면 클립(동영상·사진)의 맞춤 방식을 바꾼다. 바꾼 클립 수.</summary>
+        public static int SetFit(Project project, IEnumerable<Clip> clips, ClipFit fit)
+        {
+            if (!Enum.IsDefined(fit))
+                throw new EditException("모르는 맞춤 방식입니다.");
+            var count = 0;
+            foreach (var clip in clips.Where(c => c != null && c.Kind == ClipKind.Media && c.IsVisual))
+            {
+                EnsureEditable(project.TrackOf(clip));
+                clip.Fit = fit;
+                count++;
+            }
+            return count;
+        }
+
         /// <summary>자막 트랙의 [말하는 단어 강조]를 켜거나 끈다.</summary>
         public static void SetWordHighlight(Project project, Track track, bool on)
         {

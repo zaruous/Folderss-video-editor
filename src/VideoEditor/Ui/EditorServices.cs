@@ -20,6 +20,7 @@ namespace VideoEditor.Ui
     {
         public const string FfmpegPathKey = "ffmpegPath";
         public const string ImageSecondsKey = "imageSeconds";
+        public const string PhotoFitKey = "photoFit";
         public const string PlayerMutedKey = "playerMuted";
         public const string PreviewScaleKey = "previewScale";
         public const string LastFolderKey = "lastFolder";
@@ -160,6 +161,26 @@ namespace VideoEditor.Ui
             {
                 return false;
             }
+        }
+
+        /// <summary>사진을 타임라인에 놓을 때 맞춤 방식(기본: 화면 채우기 — 사진이 화면을 꽉 채움).</summary>
+        public ClipFit PhotoFit
+        {
+            get { return Enum.TryParse<ClipFit>(Setting(PhotoFitKey), out var fit) && Enum.IsDefined(fit) ? fit : ClipFit.Fill; }
+        }
+
+        /// <summary>맞춤 방식의 보일 이름.</summary>
+        public static string FitName(ClipFit fit)
+        {
+            return fit == ClipFit.Fill ? "화면 채우기" : fit == ClipFit.Stretch ? "늘이기" : "화면에 맞춤";
+        }
+
+        /// <summary>맞춤 방식 설명(메뉴·툴팁).</summary>
+        public static string FitHint(ClipFit fit)
+        {
+            return fit == ClipFit.Fill ? "비율을 지켜 꽉 채우고 넘치는 곳은 잘라 냄"
+                : fit == ClipFit.Stretch ? "비율을 무시하고 화면 크기로"
+                : "비율을 지켜 다 보이게(남는 곳은 빔)";
         }
 
         /// <summary>이미지·사진 클립 기본 길이(초, 기본 5).</summary>

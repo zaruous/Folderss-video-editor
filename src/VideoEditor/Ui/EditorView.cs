@@ -422,6 +422,18 @@ namespace VideoEditor.Ui
                 menu.Items.Add(Item("속도·길이…", "Ctrl+R", _commands.ChangeSpeed));
                 if (clip.Kind == ClipKind.Media && clip.HasVideo && clip.HasAudio && !clip.AudioDetached)
                     menu.Items.Add(Item("오디오 분리", "Ctrl+Alt+D", _commands.DetachAudio));
+                if (clip.Kind == ClipKind.Media && clip.IsVisual)
+                {
+                    // 화면 맞춤 방식(고른 클립 모두에) — 지금 방식에 표시
+                    var fit = new MenuItem { Header = new TextBlock { Text = "화면 맞춤 방식" } };
+                    foreach (var kind in new[] { ClipFit.Fit, ClipFit.Fill, ClipFit.Stretch })
+                    {
+                        var option = Item(EditorServices.FitName(kind) + " — " + EditorServices.FitHint(kind), "", () => _commands.SetFit(kind, clip.Id));
+                        option.IsChecked = clip.Fit == kind;
+                        fit.Items.Add(option);
+                    }
+                    menu.Items.Add(fit);
+                }
                 if (clip.Kind == ClipKind.Media && clip.HasAudio)
                     menu.Items.Add(Item("이 클립 소리로 자막 만들기…", "", () => _ = _commands.SpeechToText(clip.Id)));
                 if (clip.Kind == ClipKind.Media)

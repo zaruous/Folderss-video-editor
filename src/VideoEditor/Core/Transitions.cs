@@ -426,4 +426,27 @@ namespace VideoEditor.Core
             JsonSerializer.Serialize(writer, value, options);
         }
     }
+
+    /// <summary>열거 값을 너그럽게 읽는다: 모르는 이름·숫자·다른 형식이면 예외 대신 기본값(첫 값) — 값 하나 때문에 프로젝트가 열리지 않는 일이 없게.</summary>
+    public sealed class LenientEnumConverter<T> : JsonConverter<T> where T : struct, Enum
+    {
+        public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            using (var document = JsonDocument.ParseValue(ref reader))
+            {
+                var element = document.RootElement;
+                if (element.ValueKind == JsonValueKind.String && Enum.TryParse<T>(element.GetString(), false, out var named) && Enum.IsDefined(named)
+                    && !int.TryParse(element.GetString(), out _))
+                    return named;
+                if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var number) && Enum.IsDefined(typeof(T), number))
+                    return (T)Enum.ToObject(typeof(T), number);
+                return default;
+            }
+        }
+
+        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+        {
+            writer.WriteStringValue(value.ToString());
+        }
+    }
 }

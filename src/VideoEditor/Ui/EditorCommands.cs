@@ -485,6 +485,20 @@ namespace VideoEditor.Ui
 사용자 효과를 넣은 클립은 프로젝트 파일에 효과 정의를 함께 저장하므로, 이 폴더가 없는 PC에서도 같게 그려집니다.
 ";
 
+        /// <summary>[화면 맞춤 방식]: 오른쪽 메뉴를 연 클립(고른 클립 가운데 있으면 고른 클립 모두)의 맞춤 방식을 바꾼다.</summary>
+        public void SetFit(ClipFit fit, string clipId = null)
+        {
+            var selected = _session.SelectedClips.Where(c => c.Kind == ClipKind.Media && c.IsVisual).Select(c => c.Id).ToList();
+            var ids = clipId == null || selected.Contains(clipId) ? selected : new List<string> { clipId };
+            if (ids.Count == 0)
+            {
+                Status("맞춤 방식을 바꿀 동영상·사진 클립을 고르세요.");
+                return;
+            }
+            Run(p => TimelineEdits.SetFit(p, ids.Select(p.FindClip), fit),
+                "'" + EditorServices.FitName(fit) + "'(으)로 바꿨습니다" + (ids.Count > 1 ? "(클립 " + ids.Count + "개)." : ".") + " — " + EditorServices.FitHint(fit));
+        }
+
         /// <summary>자막 트랙의 [말하는 단어 강조] 켜기·끄기.</summary>
         public void SetWordHighlight(string trackId, bool on)
         {
@@ -737,10 +751,19 @@ namespace VideoEditor.Ui
             return infos.Count;
         }
 
+        /// <summary>미디어 클립을 만든다(사진은 설정의 길이·맞춤 방식 — 기본은 화면 채우기).</summary>
+        private Clip NewClip(MediaInfo media, FrameRate rate, long frame)
+        {
+            var clip = TimelineEdits.CreateClip(media, rate, frame, rate.ToFrames(_services.ImageSeconds));
+            if (media.Kind == MediaKind.Image)
+                clip.Fit = _services.PhotoFit;
+            return clip;
+        }
+
         /// <summary>미디어를 트랙에 놓는다. 종류가 맞지 않으면 알맞은 트랙으로(오디오 → 오디오 트랙, 동영상을 오디오 트랙에 놓으면 소리만).</summary>
         private Clip PlaceMedia(Project p, MediaInfo media, Track target, long frame, ref Track newTrack)
         {
-            var clip = TimelineEdits.CreateClip(media, p.Rate, frame, p.Rate.ToFrames(_services.ImageSeconds));
+            var clip = NewClip(media, p.Rate, frame);
             var isAudio = media.Kind == MediaKind.Audio;
             // 빈 곳이나 자막 트랙에 놓으면 새 트랙(동영상은 자막 아래) — 앞서 만든 새 트랙은 종류가 같을 때만 다시 쓴다
             if (target == null || target.Subtitles)
@@ -767,7 +790,7 @@ namespace VideoEditor.Ui
         {
             Run(p =>
             {
-                var clip = TimelineEdits.CreateClip(media, p.Rate, 0, p.Rate.ToFrames(_services.ImageSeconds));
+                var clip = NewClip(media, p.Rate, 0);
                 var track = media.Kind == MediaKind.Audio
                     ? p.AudioTracks.FirstOrDefault(t => !t.Locked) ?? TimelineEdits.AddTrack(p, TrackKind.Audio)
                     : p.MainTrack;

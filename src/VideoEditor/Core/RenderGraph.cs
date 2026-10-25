@@ -150,11 +150,16 @@ namespace VideoEditor.Core
                         continue;
                     }
                     var chain = new StringBuilder(source);
-                    // 화면에 맞춤(비율 유지) × 크기 배율
+                    // 틀 = 화면 × 크기 배율. 맞춤(비율 유지, 다 보이게)·채우기(비율 유지, 넘치는 곳 가운데 기준으로 자름)·늘이기(비율 무시)
                     var scale = Math.Max(0.01, clip.Scale);
+                    var boxWidth = Math.Max(2, (int)Math.Round(options.Width * scale));
+                    var boxHeight = Math.Max(2, (int)Math.Round(options.Height * scale));
+                    var fit = clip.Kind == ClipKind.Media ? clip.Fit : ClipFit.Fit;
                     chain.AppendFormat(CultureInfo.InvariantCulture,
-                        ",scale=w={0}:h={1}:force_original_aspect_ratio=decrease,format=rgba",
-                        Math.Max(2, (int)Math.Round(options.Width * scale)), Math.Max(2, (int)Math.Round(options.Height * scale)));
+                        fit == ClipFit.Fill ? ",scale=w={0}:h={1}:force_original_aspect_ratio=increase,crop={0}:{1},format=rgba"
+                        : fit == ClipFit.Stretch ? ",scale=w={0}:h={1},setsar=1,format=rgba"
+                        : ",scale=w={0}:h={1}:force_original_aspect_ratio=decrease,format=rgba",
+                        boxWidth, boxHeight);
                     if (Math.Abs(clip.Rotation) > 0.01)
                     {
                         var radians = N(clip.Rotation * Math.PI / 180);
