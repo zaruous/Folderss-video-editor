@@ -20,7 +20,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 namespace VideoEditor.UiTests
 {
     /// <summary>
-    /// 꾸민 글자(이슈 #3·#13·#14·#15·#16·#17·#21): WPF 그리개의 픽셀, 꾸미기 탭(스타일 모음·글꼴·채우기·윤곽선·그림자·휘기), 미리 보기 = 내보내기.
+    /// 꾸민 글자(이슈 #3·#13·#14·#15·#16·#17·#19·#21): WPF 그리개의 픽셀, 꾸미기 탭(스타일 모음·글꼴·채우기·윤곽선·그림자·반사·휘기), 미리 보기 = 내보내기.
     /// 그리개·요청은 플러그인 형식이라 리플렉션으로 만들고, 요청은 JSON을 플러그인의 TextImageRequest로 역직렬화해 만든다.
     /// </summary>
     public class StyledTextTests
@@ -501,6 +501,180 @@ namespace VideoEditor.UiTests
             // 효과 배율 2: 거리는 두 배, 흐림 반지름은 상한 100
             var scaled = await Render(rasterizer, Request(rasterizer, "WAV가", 3840, 2160, 240, WhiteFill + "," + Shadow(200, 30, 100), 2), "shadow-max-scale-2");
             Assert.Equal(0, scaled.BorderInk());
+        }
+
+        private static string Reflection(double size, double gap, double opacity = 1, bool enabled = true)
+        {
+            string N(double value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return "\"Reflection\":{\"Enabled\":" + (enabled ? "true" : "false") + ",\"Size\":" + N(size) + ",\"Gap\":" + N(gap) + ",\"Opacity\":" + N(opacity) + "}";
+        }
+
+        /// <summary>조금이라도 칠한(알파 &gt; 0) 줄이 이어진 토막들 [Top, Bottom] — 글자와 반사 사이 빈 줄이 있으면 둘.</summary>
+        private static System.Collections.Generic.List<(int Top, int Bottom)> InkBands(Png png)
+        {
+            var bands = new System.Collections.Generic.List<(int Top, int Bottom)>();
+            var start = -1;
+            for (var y = 0; y <= png.Height; y++)
+            {
+                var ink = y < png.Height && Enumerable.Range(0, png.Width).Any(x => png.Alpha(x, y) > 0);
+                if (ink && start < 0)
+                    start = y;
+                else if (!ink && start >= 0)
+                {
+                    bands.Add((start, y - 1));
+                    start = -1;
+                }
+            }
+            return bands;
+        }
+
+        /// <summary>
+        /// y 줄에서 그 줄 가장 큰 알파의 절반 이상인 픽셀의 가장 왼쪽·오른쪽 x(없으면 -1) — 반사는 줄마다 같은 비율로 흐려지므로
+        /// 흐린 정도와 상관없이 글자 줄과 모양을 견줄 수 있다.
+        /// </summary>
+        private static (int Left, int Right) RowSpan(Png png, int y)
+        {
+            var max = Enumerable.Range(0, png.Width).Max(x => png.Alpha(x, y));
+            if (max == 0)
+                return (-1, -1);
+            var inside = Enumerable.Range(0, png.Width).Where(x => png.Alpha(x, y) * 2 >= max).ToList();
+            return (inside.First(), inside.Last());
+        }
+
+        [UiFact]
+        public async Task Rasterizer_Reflection_GapRowsThenMirroredShape()
+        {
+            // 흰 "▲"(아래로 갈수록 넓다) + 반사(크기 100%, 간격 20, 불투명도 100%):
+            // 글자 아래 간격만큼 알파 0인 줄이 있고, 그 아래에 위아래가 뒤집힌 같은 모양(반사 첫 줄 ≈ 글자 마지막 줄)
+            var rasterizer = NewRasterizer();
+            var png = await Render(rasterizer, Request(rasterizer, "▲", 1920, 1080, 200, WhiteFill + "," + Reflection(100, 20)), "reflection-mirror");
+            var bands = InkBands(png);
+            _out.WriteLine(png.Width + "×" + png.Height + " · 토막 " + string.Join(" ", bands.Select(b => b.Top + "~" + b.Bottom)));
+            Assert.Equal(2, bands.Count);
+            var (glyph, mirror) = (bands[0], bands[1]);
+            // 간격 20px: 글자 아래 끝이 픽셀 경계에 있지 않으면 걸친 줄을 빼고 19줄
+            Assert.InRange(mirror.Top - glyph.Bottom - 1, 19, 20);
+            var height = glyph.Bottom - glyph.Top + 1;
+            Assert.InRange(mirror.Bottom - mirror.Top + 1, height - 2, height + 1);
+            foreach (var k in new[] { 0, 1, 2, height / 4, height / 2, height * 3 / 4 })
+            {
+                var g = RowSpan(png, glyph.Bottom - k);
+                var m = RowSpan(png, mirror.Top + k);
+                _out.WriteLine("아래에서 " + k + "줄: 글자 " + g + " · 반사 위에서 " + k + "줄 " + m);
+                Assert.InRange(m.Left - g.Left, -2, 2);
+                Assert.InRange(m.Right - g.Right, -2, 2);
+            }
+            // 뒤집혔다: 반사 위쪽은 글자 아래쪽처럼 넓고, 글자 위쪽은 좁다
+            var top = RowSpan(png, glyph.Top + 2);
+            var first = RowSpan(png, mirror.Top + 2);
+            Assert.True(first.Right - first.Left > 5 * (top.Right - top.Left + 1), "반사 위쪽 폭 " + (first.Right - first.Left) + " · 글자 위쪽 폭 " + (top.Right - top.Left));
+            Assert.Equal(0, png.BorderInk());
+        }
+
+        [UiFact]
+        public async Task Rasterizer_Reflection_FadesDownward_SizeAndOpacity_ShadowNotMirrored()
+        {
+            var rasterizer = NewRasterizer();
+            // "■" + 반사(100%, 간격 10): 반사를 위에서 아래로 여덟 띠로 나누면 칠한 픽셀의 평균 알파가 띠마다 준다
+            var square = await Render(rasterizer, Request(rasterizer, "■", 1920, 1080, 200, WhiteFill + "," + Reflection(100, 10)), "reflection-fade");
+            var bands = InkBands(square);
+            Assert.Equal(2, bands.Count);
+            var mirror = bands[1];
+            var band = (mirror.Bottom - mirror.Top + 1) / 8;
+            var means = new double[8];
+            for (var b = 0; b < 8; b++)
+            {
+                long sum = 0;
+                var count = 0;
+                for (var y = mirror.Top + b * band; y < mirror.Top + (b + 1) * band; y++)
+                {
+                    for (var x = 0; x < square.Width; x++)
+                    {
+                        var alpha = square.Alpha(x, y);
+                        if (alpha == 0)
+                            continue;
+                        sum += alpha;
+                        count++;
+                    }
+                }
+                means[b] = count == 0 ? 0 : (double)sum / count;
+            }
+            _out.WriteLine("띠별 평균 알파 " + string.Join(" ", means.Select(m => m.ToString("F1"))));
+            for (var b = 1; b < 8; b++)
+                Assert.True(means[b] < means[b - 1] - 10, "띠 " + b + "가 위 띠보다 옅어야 한다");
+            Assert.True(means[0] > 200 && means[7] < 40, "위쪽은 진하고 아래쪽은 거의 투명");
+
+            // 불투명도 50%: 반사의 가장 진한 곳이 절반쯤, 글자는 그대로 불투명
+            var half = await Render(rasterizer, Request(rasterizer, "■", 1920, 1080, 200, WhiteFill + "," + Reflection(100, 10, 0.5)), "reflection-opacity-50");
+            var halfBands = InkBands(half);
+            var mirrorMax = Enumerable.Range(halfBands[1].Top, halfBands[1].Bottom - halfBands[1].Top + 1).Max(y => Enumerable.Range(0, half.Width).Max(x => half.Alpha(x, y)));
+            _out.WriteLine("불투명도 50% 반사 최대 알파 " + mirrorMax + " · 글자 " + half.MaxAlpha(false));
+            Assert.InRange(mirrorMax, 120, 136);
+            Assert.Equal(255, half.MaxAlpha(false));
+
+            // 크기 30%: 반사 높이가 글자 높이의 30%
+            var small = await Render(rasterizer, Request(rasterizer, "■", 1920, 1080, 200, WhiteFill + "," + Reflection(30, 10)), "reflection-size-30");
+            var smallBands = InkBands(small);
+            var glyphHeight = smallBands[0].Bottom - smallBands[0].Top + 1;
+            var mirrorHeight = smallBands[1].Bottom - smallBands[1].Top + 1;
+            _out.WriteLine("크기 30%: 글자 " + glyphHeight + "줄 · 반사 " + mirrorHeight + "줄");
+            Assert.InRange((double)mirrorHeight, glyphHeight * 0.3 - 2, glyphHeight * 0.3 + 2);
+
+            // 그림자는 비추지 않는다: 오른쪽으로 멀리(150px) 둔 빨간 그림자는 글자 줄에만 있고 반사 줄에는 없다(흰 반사만)
+            var shadowed = await Render(rasterizer, Request(rasterizer, "I", 1920, 1080, 200, WhiteFill + "," + Shadow(150, 0, 0, 1, "#FF0000") + "," + Reflection(100, 10)), "reflection-shadow");
+            var shadowBands = InkBands(shadowed);
+            Assert.Equal(2, shadowBands.Count);
+            int Count((int Top, int Bottom) rows, Func<(int R, int G, int B, int A), bool> match)
+            {
+                var count = 0;
+                for (var y = rows.Top; y <= rows.Bottom; y++)
+                {
+                    for (var x = 0; x < shadowed.Width; x++)
+                        count += match(shadowed.Pixel(x, y)) ? 1 : 0;
+                }
+                return count;
+            }
+            bool Red((int R, int G, int B, int A) p) => p.A > 0 && p.R > 100 && p.G < 60;
+            bool White((int R, int G, int B, int A) p) => p.A > 0 && p.R > 200 && p.G > 200 && p.B > 200;
+            _out.WriteLine("빨강 글자 줄 " + Count(shadowBands[0], Red) + " · 반사 줄 " + Count(shadowBands[1], Red) + " · 흰 반사 " + Count(shadowBands[1], White));
+            Assert.True(Count(shadowBands[0], Red) > 500, "그림자가 있어야 한다");
+            Assert.Equal(0, Count(shadowBands[1], Red));
+            Assert.True(Count(shadowBands[1], White) > 500, "글자 반사가 있어야 한다");
+        }
+
+        [UiFact]
+        public async Task Rasterizer_ReflectionOff_ByteIdentical_MaxStaysInside()
+        {
+            var rasterizer = NewRasterizer();
+            const string text = "가나다 ABC\n반사";
+            await Render(rasterizer, Request(rasterizer, text, style: Outline(4)), "reflection-base");
+            var expected = File.ReadAllBytes(Path.Combine(Folder(), "reflection-base.png"));
+            // 꺼져 있으면 크기·간격·불투명도를 바꿔도 반사 없이 그린 것과 바이트까지 같다
+            await Render(rasterizer, Request(rasterizer, text, style: Outline(4) + "," + Reflection(100, 100, 1, false)), "reflection-off");
+            Assert.True(expected.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "reflection-off.png"))), "꺼진 반사가 그림을 바꿨다");
+            // 켜면 다르다(비교가 헛돌지 않는지)
+            await Render(rasterizer, Request(rasterizer, text, style: Outline(4) + "," + Reflection(50, 4, 0.4)), "reflection-on");
+            Assert.False(expected.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "reflection-on.png"))));
+
+            // 가장 큰 반사(100%, 간격 100) + 가장 굵은 윤곽선(50)도 그림 가장자리 1px 줄에 닿지 않고 캔버스 이하(캔버스가 충분히 클 때) —
+            // 내림 글자·원 휘기·좁은 행간의 여러 줄·효과 배율 2도
+            foreach (var (name, line, fontSize, style, scale) in new[]
+            {
+                ("miter", "WAV가", 120.0, WhiteOutline(50, "Miter"), 1.0),
+                ("round", "WAV가", 120.0, WhiteOutline(50), 1.0),
+                ("descender", "gjpqy 가", 120.0, WhiteOutline(50, "Miter"), 1.0),
+                ("circle", "휘기 ABC", 120.0, WhiteOutline(20) + "," + Warp("Circle", 100), 1.0),
+                ("lines", "가나다\n둘째 줄\n셋", 120.0, WhiteOutline(50, "Miter") + ",\"LineSpacing\":0.5", 1.0),
+                ("scale-2", "WAV가", 240.0, WhiteOutline(50, "Miter"), 2.0)
+            })
+            {
+                var max = await Render(rasterizer, Request(rasterizer, line, 3840, 2160, fontSize, WhiteFill + "," + style + "," + Reflection(100, 100), scale), "reflection-max-" + name);
+                var bands = InkBands(max);
+                _out.WriteLine(name + " " + max.Width + "×" + max.Height + " · 토막 " + string.Join(" ", bands.Select(b => b.Top + "~" + b.Bottom)));
+                Assert.True(max.Width <= 3840 && max.Height <= 2160, name);
+                Assert.Equal(2, bands.Count);
+                Assert.Equal(0, max.BorderInk());
+            }
         }
 
         [UiFact]
@@ -1252,6 +1426,100 @@ namespace VideoEditor.UiTests
                 {
                     Assert.False(Ui.ById<CheckBox>(window, "StyleShadowOn").IsChecked == true);
                     Assert.False(Ui.ById<TextBox>(window, "StyleShadowDistance").IsEnabled);
+                });
+                Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        private static double ReflectionValue(Window window, object id, string name)
+        {
+            return (double)Get(Get(StyleOf(window, id), "Reflection"), name);
+        }
+
+        [EditorFact]
+        public async Task StyleTab_Reflection_ChangesPreview_SizeDragIsOneUndoStep()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                var id = await AddStyledText(ui, window, "반사 ABC");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                await ui.WaitFor(() => Ui.ById<CheckBox>(window, "StyleReflectionOn"), Wait, "반사 칸");
+                var fields = new[] { "StyleReflectionSize", "StyleReflectionGap", "StyleReflectionOpacity" };
+                var before = ui.Run(() =>
+                {
+                    // 꺼져 있으면 크기·간격·불투명도는 고칠 수 없고, 기본값만 보인다(보이기만 해서는 스타일이 생기지 않음)
+                    Assert.False(Ui.ById<CheckBox>(window, "StyleReflectionOn").IsChecked == true);
+                    foreach (var field in fields)
+                        Assert.False(Ui.ById<TextBox>(window, field).IsEnabled, field);
+                    Assert.Equal(new[] { "50", "4", "40" }, fields.Select(f => Ui.ById<TextBox>(window, f).Text).ToArray());
+                    return PreviewPixels(window);
+                });
+                Assert.Null(ui.Run(() => StyleOf(window, id)));
+
+                // 켜기 → 스타일이 생기고(크기 50%·간격 4·불투명도 40%) 흰 글자 아래에 흐린 반사가 생긴다 — 검정 미리 보기 바탕에서도 보인다
+                ui.Run(() => Ui.ClickToggle(Ui.ById<CheckBox>(window, "StyleReflectionOn")));
+                await ui.WaitUntil(() => StyleOf(window, id) is object style && (bool)Get(Get(style, "Reflection"), "Enabled"), Wait, "반사 켜기");
+                await ui.WaitUntil(() => Differs(before, PreviewPixels(window)), Wait, "반사 미리 보기");
+                await Task.Delay(500);
+                var on = ui.Run(() =>
+                {
+                    foreach (var field in fields)
+                        Assert.True(Ui.ById<TextBox>(window, field).IsEnabled, field);
+                    return PreviewPixels(window);
+                });
+
+                // 크기 슬라이더를 끄는 동안(값 여러 번)은 실행 취소 한 단계 — 미리 보기는 반사가 길어진다
+                ui.Run(() =>
+                {
+                    var slider = Ui.ById<Slider>(window, "StyleReflectionSizeSlider");
+                    foreach (var value in new[] { 60.0, 80.0, 100.0 })
+                        slider.Value = value;
+                });
+                await ui.WaitUntil(() => Math.Abs(ReflectionValue(window, id, "Size") - 100) < 1e-6, Wait, "크기 100");
+                await ui.WaitUntil(() => Differs(on, PreviewPixels(window)), Wait, "크기 미리 보기");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-tab-reflection"));
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => Math.Abs(ReflectionValue(window, id, "Size") - 50) < 1e-6, Wait, "실행 취소 한 번에 크기 50");
+                Assert.True(ui.Run(() => (bool)Get(Get(StyleOf(window, id), "Reflection"), "Enabled")));
+                await ui.WaitUntil(() => !Differs(on, PreviewPixels(window)), Wait, "크기 50 미리 보기로 돌아옴");
+
+                // 간격 칸에 30(px), 불투명도 칸에 100(%) → 1.0 — 미리 보기가 바뀐다
+                foreach (var (field, text) in new[] { ("StyleReflectionGap", "30"), ("StyleReflectionOpacity", "100") })
+                {
+                    ui.Run(() =>
+                    {
+                        var box = Ui.ById<TextBox>(window, field);
+                        Ui.Focus(box);
+                        box.Text = text;
+                        Ui.Press(box, System.Windows.Input.Key.Enter);
+                    });
+                }
+                await ui.WaitUntil(() => Math.Abs(ReflectionValue(window, id, "Gap") - 30) < 1e-6, Wait, "간격 30");
+                await ui.WaitUntil(() => Math.Abs(ReflectionValue(window, id, "Opacity") - 1) < 1e-6, Wait, "불투명도 100%");
+                ui.Run(() => Ui.Focus(Canvas(window)));
+                await ui.WaitUntil(() => Differs(on, PreviewPixels(window)), Wait, "간격·불투명도 미리 보기");
+
+                // 실행 취소 두 번(불투명도·간격) → 켠 직후 값, 한 번 더(켜기) → 스타일 없던 처음으로
+                foreach (var step in new[] { "불투명도", "간격" })
+                    ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => Math.Abs(ReflectionValue(window, id, "Gap") - 4) < 1e-6, Wait, "간격 실행 취소");
+                Assert.Equal(0.4, ui.Run(() => ReflectionValue(window, id, "Opacity")), 6);
+                await ui.WaitUntil(() => !Differs(on, PreviewPixels(window)), Wait, "켠 직후 미리 보기로 돌아옴");
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
+                await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+                ui.Run(() =>
+                {
+                    Assert.False(Ui.ById<CheckBox>(window, "StyleReflectionOn").IsChecked == true);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleReflectionSize").IsEnabled);
                 });
                 Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
                 Assert.Empty(ui.TakeErrors());

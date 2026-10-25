@@ -77,11 +77,23 @@ namespace VideoEditor.Core
             }
             if (style.Reflection != null && style.Reflection.Enabled)
             {
-                // 반사 = 글자(윤곽선 포함) 아래 간격을 두고 높이의 Size%만큼
-                var size = Math.Max(0, Math.Min(100, Length(style.Reflection.Size))) / 100;
-                bottom = Math.Max(bottom, outline + Length(style.Reflection.Gap) * scale + size * (boxHeight + 2 * outline));
+                // 반사 = 글자(윤곽선 포함) 아래 간격을 두고 높이의 Size%만큼 — 그리개와 같은 계산(ReflectionRect).
+                // 그리개가 넘기는 상자는 글자 모양을 다 담게 넓힌 것이고 윤곽선은 그 밖으로 outline까지 나가므로, 가장 크고 낮은 글자 = 상자를 위아래로 outline만큼 넓힌 것
+                var reflection = ReflectionRect(style.Reflection, scale, (0, -outline, 0, boxHeight + 2 * outline));
+                bottom = Math.Max(bottom, reflection.Top + reflection.Height - boxHeight);
             }
             return (Math.Max(left, right), Math.Max(top, bottom));
+        }
+
+        /// <summary>
+        /// 반사가 놓이는 사각형(픽셀): 간격 × 효과 배율을 <see cref="TextEffects.ReflectionRect"/>로(글자 아래 간격, 높이 = 글자 높이 × 크기%).
+        /// glyph는 글자(본문이 칠하는 모양) 경계 상자(픽셀).
+        /// </summary>
+        public static (double Left, double Top, double Width, double Height) ReflectionRect(TextReflection reflection, double effectScale, (double Left, double Top, double Width, double Height) glyph)
+        {
+            if (reflection == null)
+                return TextEffects.ReflectionRect(glyph, 0, 0);
+            return TextEffects.ReflectionRect(glyph, reflection.Size, Length(reflection.Gap) * Length(effectScale));
         }
 
         /// <summary>그림자가 글자에서 떨어진 거리(픽셀): 거리 × 효과 배율을 <see cref="TextEffects.ShadowOffset"/>로(0° = 오른쪽, 시계 방향).</summary>
