@@ -20,6 +20,8 @@ namespace VideoEditor.Core
         public bool Preview { get; set; }
         /// <summary>글자 클립에 쓸 글꼴 파일(.ttf/.ttc).</summary>
         public string FontFile { get; set; }
+        /// <summary>인물 마스크 제공자(없으면 null — "사람에게만" 효과는 클립 전체에 칠한다).</summary>
+        public IPersonMaskProvider PersonMasks { get; set; }
         /// <summary>글자 클립의 글을 담을 임시 파일 폴더. 꾸민 글자 PNG 캐시는 그 아래 styled-text 폴더.</summary>
         public string TempFolder { get; set; }
         /// <summary>쓰는 FFmpeg 주 버전(0이면 모름) — 이보다 새 버전이 필요한 전환 효과는 디졸브로 그린다.</summary>

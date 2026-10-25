@@ -55,6 +55,9 @@ namespace VideoEditor.Media
     /// <summary>글자 클립용 글꼴과 임시 파일 폴더.</summary>
     public static class RenderEnvironment
     {
+        /// <summary>미리 보기·재생·내보내기가 쓰는 인물 마스크 제공자(편집기가 시작할 때 정한다, 없으면 null).</summary>
+        public static IPersonMaskProvider PersonMasks { get; set; }
+
         /// <summary>한글이 나오는 글꼴(Windows: 맑은 고딕), 없으면 흔한 글꼴. 못 찾으면 null(FFmpeg 기본 글꼴).</summary>
         public static string DefaultFont()
         {
@@ -224,7 +227,8 @@ namespace VideoEditor.Media
                 FontFile = RenderEnvironment.DefaultFont(),
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
-                TextRasterizer = textRasterizer
+                TextRasterizer = textRasterizer,
+                PersonMasks = RenderEnvironment.PersonMasks
             });
             string script;
             // 만드는 동안은 옆의 .part에 쓰고 다 되면 바꿔 넣는다 — 실패·취소해도 원래 있던 파일(덮어쓰기로 고른 것)이 남는다
@@ -281,7 +285,8 @@ namespace VideoEditor.Media
                 FontFile = RenderEnvironment.DefaultFont(),
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
-                TextRasterizer = textRasterizer
+                TextRasterizer = textRasterizer,
+                PersonMasks = RenderEnvironment.PersonMasks
             });
             string script;
             var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script, cancellation);
@@ -315,7 +320,8 @@ namespace VideoEditor.Media
                 Audio = false,
                 Preview = true,
                 TempFolder = RenderEnvironment.TempFolder(),
-                TextRasterizer = textRasterizer
+                TextRasterizer = textRasterizer,
+                PersonMasks = RenderEnvironment.PersonMasks
             });
             RenderCommand.DrawTextImages(plan, cancellation);
         }
@@ -336,7 +342,8 @@ namespace VideoEditor.Media
                 FontFile = RenderEnvironment.DefaultFont(),
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
-                TextRasterizer = textRasterizer
+                TextRasterizer = textRasterizer,
+                PersonMasks = RenderEnvironment.PersonMasks
             });
             string script;
             var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script);

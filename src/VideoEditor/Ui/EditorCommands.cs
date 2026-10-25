@@ -724,6 +724,16 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
+        /// 클립 원본의 인물 마스크(사람만 따낸 흑백 동영상)를 만든다 — "사람에게만" 효과가 쓴다. 만들고 나면 미리 보기를 다시 그린다.
+        /// (인물 분리 작업에서 채운다 — 지금은 안내만)
+        /// </summary>
+        public Task BuildPersonMask(string clipId)
+        {
+            Status("인물 마스크 만들기는 아직 준비 중입니다.");
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// [음성 인식으로 자막 만들기]: 고른 클립 중 소리 있는 것이 있으면 그 클립만, 없으면 타임라인 전체 소리를 이 PC에서 인식해(whisper.cpp)
         /// 새 자막 트랙에 큐로 놓는다. 시각은 타임라인 위치(클립이면 클립 시작·속도에 맞춤). clipId를 주면 그 클립(오른쪽 메뉴).
         /// </summary>
