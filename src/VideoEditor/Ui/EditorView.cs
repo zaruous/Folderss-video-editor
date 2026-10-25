@@ -94,7 +94,7 @@ namespace VideoEditor.Ui
             Grid.SetColumn(player, 2);
             top.Children.Add(player);
             top.Children.Add(Splitter(3, true));
-            var properties = UiKit.Panel(new PropertyPanel(_session, _commands));
+            var properties = UiKit.Panel(new PropertyPanel(_session, services, _commands));
             Grid.SetColumn(properties, 4);
             top.Children.Add(properties);
 

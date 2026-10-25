@@ -20,7 +20,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 namespace VideoEditor.UiTests
 {
     /// <summary>
-    /// 꾸민 글자(이슈 #3·#13·#14·#15): WPF 그리개의 픽셀, 꾸미기 탭(글꼴·채우기·윤곽선), 미리 보기 = 내보내기.
+    /// 꾸민 글자(이슈 #3·#13·#14·#15·#17): WPF 그리개의 픽셀, 꾸미기 탭(스타일 모음·글꼴·채우기·윤곽선), 미리 보기 = 내보내기.
     /// 그리개·요청은 플러그인 형식이라 리플렉션으로 만들고, 요청은 JSON을 플러그인의 TextImageRequest로 역직렬화해 만든다.
     /// </summary>
     public class StyledTextTests
@@ -388,6 +388,75 @@ namespace VideoEditor.UiTests
             Assert.Equal(360, huge.Height);
         }
 
+        /// <summary>플러그인의 스타일 모음(이름, 스타일 객체) — 부를 때마다 새 사본.</summary>
+        private static System.Collections.Generic.List<(string Name, object Style)> Presets()
+        {
+            var all = (System.Collections.IEnumerable)PluginUnderTest.Load(UiThread.Instance).Assembly
+                .GetType("VideoEditor.Core.TextStylePresets", true).GetProperty("All").GetValue(null);
+            return all.Cast<object>()
+                .Select(p => ((string)p.GetType().GetField("Item1").GetValue(p), p.GetType().GetField("Item2").GetValue(p)))
+                .ToList();
+        }
+
+        /// <summary>스타일 객체의 JSON(값 비교용, 없으면 "null").</summary>
+        private static string StyleJson(object style)
+        {
+            if (style == null)
+                return "null";
+            var options = new JsonSerializerOptions();
+            options.Converters.Add(new JsonStringEnumConverter());
+            return JsonSerializer.Serialize(style, style.GetType(), options);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_StylePresets_EachDrawsItsThumbnail()
+        {
+            // 갤러리와 같은 요청(EditorServices.StylePreviewRequest: "가나Ab" 48px)으로 8개를 그린다
+            var rasterizer = NewRasterizer();
+            var services = rasterizer.GetType().Assembly.GetType("VideoEditor.Ui.EditorServices", true);
+            var presets = Presets();
+            Assert.Equal(8, presets.Count);
+            var drawn = new System.Collections.Generic.List<Png>();
+            for (var i = 0; i < presets.Count; i++)
+            {
+                var request = services.GetMethod("StylePreviewRequest").Invoke(null, new[] { presets[i].Style });
+                Assert.Equal("가나Ab", (string)Get(request, "Text"));
+                var png = await Render(rasterizer, request, "preset-" + i);
+                _out.WriteLine(presets[i].Name + " " + png.Width + "×" + png.Height + " · 칠한 픽셀 " + png.PaintedCount());
+                Assert.True(png.PaintedCount() > 300, presets[i].Name + " 칠한 픽셀 " + png.PaintedCount());
+                // 캔버스보다 작다 = 효과까지 잘리지 않고 다 들어갔다
+                Assert.True(png.Width < (int)Get(request, "CanvasWidth") && png.Height < (int)Get(request, "CanvasHeight"), presets[i].Name + " 잘림");
+                drawn.Add(png);
+            }
+            // 모두 다른 그림이다
+            for (var a = 0; a < drawn.Count; a++)
+            {
+                for (var b = a + 1; b < drawn.Count; b++)
+                    Assert.True(drawn[a].Width != drawn[b].Width || drawn[a].Height != drawn[b].Height || !drawn[a].Bgra.AsSpan().SequenceEqual(drawn[b].Bgra), presets[a].Name + " = " + presets[b].Name);
+            }
+
+            // 노란 자막은 노란 글자, 빨간 강조는 빨간 글자
+            int Count(Png png, Func<(int R, int G, int B, int A), bool> match)
+            {
+                var count = 0;
+                for (var y = 0; y < png.Height; y++)
+                {
+                    for (var x = 0; x < png.Width; x++)
+                        count += match(png.Pixel(x, y)) ? 1 : 0;
+                }
+                return count;
+            }
+            var yellow = drawn[presets.FindIndex(p => p.Name == "노란 자막")];
+            var red = drawn[presets.FindIndex(p => p.Name == "빨간 강조")];
+            Assert.True(Count(yellow, p => p.A == 255 && p.R > 220 && p.G > 180 && p.B < 60) > 100, "노란 픽셀");
+            Assert.True(Count(yellow, p => p.A == 255 && p.R < 40 && p.G < 40 && p.B < 40) > 100, "검정 윤곽선 픽셀");
+            Assert.True(Count(red, p => p.A == 255 && p.R > 200 && p.G < 100 && p.B < 100) > 100, "빨간 픽셀");
+            // 속 빈 글자: 칠한 픽셀은 흰 윤곽선뿐이다
+            var hollow = drawn[presets.FindIndex(p => p.Name == "속 빈 글자")];
+            Assert.Equal(0, Count(hollow, p => p.A > 128 && (p.R < 200 || p.G < 200 || p.B < 200)));
+            ((IDisposable)rasterizer).Dispose();
+        }
+
         // ---------- 화면 ----------
 
         /// <summary>미리 보기 화면의 픽셀(UI 스레드).</summary>
@@ -670,6 +739,86 @@ namespace VideoEditor.UiTests
                 Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
                 await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
                 Assert.False(ui.Run(() => Ui.ById<TextBox>(window, "StyleOutlineWidth").IsEnabled));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        [EditorFact]
+        public async Task StylePresets_ThumbnailsLoad_ClickAppliesInOneUndoStep()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                var id = await AddStyledText(ui, window, "모음 ABC");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                var presets = Presets();
+                Assert.Equal(8, presets.Count);
+                // 꾸미기 탭 맨 위에 단추 8개 — 화면 낭독·글자로 찾기는 스타일 이름으로
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StylePreset" + (presets.Count - 1)), Wait, "스타일 모음 단추");
+                ui.Run(() =>
+                {
+                    for (var i = 0; i < presets.Count; i++)
+                    {
+                        var button = Ui.ById<Button>(window, "StylePreset" + i);
+                        Assert.NotNull(button);
+                        Assert.Equal(presets[i].Name, System.Windows.Automation.AutomationProperties.GetName(button));
+                    }
+                    Assert.Null(Ui.ById<Button>(window, "StylePreset" + presets.Count));
+                });
+                // 썸네일이 시간 안에 채워진다(배경에서 그림)
+                await ui.WaitUntil(() => Enumerable.Range(0, presets.Count).All(i => Ui.ById<Image>(window, "StylePreset" + i + "Image")?.Source != null), Wait, "썸네일");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-presets"));
+                // 썸네일을 보이는 것만으로 스타일이 생기지 않는다
+                Assert.Null(ui.Run(() => StyleOf(window, id)));
+                var clipBefore = ui.Run(() => ProjectClips(window).First(c => Equals(Get(c, "Id"), id)));
+                var fontSize = ui.Run(() => (double)Get(clipBefore, "FontSize"));
+                var before = ui.Run(() => PreviewPixels(window));
+
+                // "노란 자막" → 스타일이 통째로 그 스타일, 글자 내용·크기는 그대로, [글자] 탭 글자 색 = 채우기 색 1, 미리 보기가 바뀐다
+                var yellow = presets.FindIndex(p => p.Name == "노란 자막");
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StylePreset" + yellow)));
+                await ui.WaitUntil(() => StyleOf(window, id) != null, Wait, "노란 자막");
+                ui.Run(() =>
+                {
+                    var style = StyleOf(window, id);
+                    Assert.Equal(StyleJson(presets[yellow].Style), StyleJson(style));
+                    Assert.Equal("#FACC15", (string)((System.Collections.IList)Get(Get(style, "Fill"), "Colors"))[0]);
+                    var clip = ProjectClips(window).First(c => Equals(Get(c, "Id"), id));
+                    Assert.Equal("모음 ABC", (string)Get(clip, "Text"));
+                    Assert.Equal(fontSize, (double)Get(clip, "FontSize"));
+                    Assert.Equal("#FACC15", (string)Get(clip, "TextColor"));
+                    // 꾸미기 탭 칸도 새 값(굵게·윤곽선 켜짐·두께 6)
+                    Assert.True(Ui.ById<CheckBox>(window, "StyleBold").IsChecked == true);
+                    Assert.True(Ui.ById<CheckBox>(window, "StyleOutlineOn").IsChecked == true);
+                    Assert.Equal("6", Ui.ById<TextBox>(window, "StyleOutlineWidth").Text);
+                });
+                await ui.WaitUntil(() => Differs(before, PreviewPixels(window)), Wait, "노란 자막 미리 보기");
+                await Task.Delay(500);
+                var applied = ui.Run(() => PreviewPixels(window));
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-presets-yellow"));
+
+                // 다른 스타일("속 빈 글자" — 흰 윤곽선은 검정 미리 보기 바탕에서도 보인다) → 실행 취소 한 번에 노란 자막, 한 번 더면 스타일 없던 처음으로
+                var hollow = presets.FindIndex(p => p.Name == "속 빈 글자");
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "StylePreset" + hollow)));
+                await ui.WaitUntil(() => StyleJson(StyleOf(window, id)) == StyleJson(presets[hollow].Style), Wait, "속 빈 글자");
+                await ui.WaitUntil(() => Differs(applied, PreviewPixels(window)), Wait, "속 빈 글자 미리 보기");
+                ui.Run(() =>
+                {
+                    Ui.Focus(Canvas(window));
+                    Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control);
+                });
+                await ui.WaitUntil(() => StyleJson(StyleOf(window, id)) == StyleJson(presets[yellow].Style), Wait, "실행 취소 한 번에 노란 자막");
+                await ui.WaitUntil(() => !Differs(applied, PreviewPixels(window)), Wait, "노란 자막 미리 보기로 돌아옴");
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
+                Assert.Equal("#FFFFFF", ui.Run(() => (string)Get(ProjectClips(window).First(c => Equals(Get(c, "Id"), id)), "TextColor")));
+                await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
                 Assert.Empty(ui.TakeErrors());
             }
             finally
