@@ -63,12 +63,19 @@ namespace VideoEditor.UiTests
                 Directory.CreateDirectory(Path.Combine(whisperFolder, "models"));
                 foreach (var file in Directory.GetFiles(whisper).Where(f => f.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
                     File.Copy(file, Path.Combine(whisperFolder, Path.GetFileName(file)), true);
-                File.Copy(model, Path.Combine(whisperFolder, "models", Path.GetFileName(model)), true);
-                ui.Run(() => Ui.Click(Ui.ById<Button>(dialog, "SpeechRunButton")));
+                // 모델과 말소리 구간 감지 모델(있으면 — 없으면 0.9MB를 받는다)
+                foreach (var file in Directory.GetFiles(Path.Combine(whisper, "models"), "ggml-*.bin").Where(f => f == model || f.Contains("silero")))
+                    File.Copy(file, Path.Combine(whisperFolder, "models", Path.GetFileName(file)), true);
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(dialog, "SpeechPrompt").Text = " 맹자, 반구저기 ";
+                    Ui.Click(Ui.ById<Button>(dialog, "SpeechRunButton"));
+                });
                 await ui.WaitUntil(() => Ui.Window("음성 인식으로 자막 만들기") == null, TimeSpan.FromMinutes(3), "인식이 끝나 창 닫힘");
                 await ui.WaitUntil(() => Status(window).StartsWith("말소리를 찾지 못했습니다(보통(추천) 모델)", StringComparison.Ordinal)
                                          || Status(window).StartsWith("음성 인식으로 자막", StringComparison.Ordinal), Wait, "인식 결과 알림");
                 Assert.Equal("small", plugin.Manager.GetSetting("speechModel"));
+                Assert.Equal("맹자, 반구저기", plugin.Manager.GetSetting("speechPrompt"));
                 Assert.Empty(ui.TakeErrors());
             }
             finally

@@ -47,6 +47,16 @@ namespace VideoEditor.Media
         }
     }
 
+    /// <summary>인식에 쓸 것: 모델·말소리 구간 감지 모델 경로, 말, 자주 나오는 낱말.</summary>
+    public sealed class SpeechOptions
+    {
+        public string Model { get; set; }
+        /// <summary>말소리 구간 감지(Silero VAD) 모델 경로 — 없으면 소리 전체를 인식.</summary>
+        public string Vad { get; set; }
+        public string Language { get; set; }
+        public string Prompt { get; set; }
+    }
+
     /// <summary>
     /// 음성 인식 자막(whisper.cpp, 이 PC에서만 — 소리를 인터넷으로 보내지 않는다).
     /// 실행 파일은 GitHub ggml-org/whisper.cpp 릴리스(SHA-256 digest 확인), 모델은 Hugging Face ggerganov/whisper.cpp(고정한 SHA-256 확인)에서 받는다.
@@ -169,24 +179,24 @@ namespace VideoEditor.Media
         /// <summary>
         /// 클립 하나(내레이션 등)의 소리를 인식해 타임라인 시각의 큐로. 원본의 클립 구간만 읽고, 속도를 바꾼 클립은 시각을 나눠 맞춘다.
         /// </summary>
-        public static Task<List<SubtitleCue>> RecognizeClip(FfmpegTool ffmpeg, WhisperTool whisper, string model, string language, Clip clip, FrameRate rate,
+        public static Task<List<SubtitleCue>> RecognizeClip(FfmpegTool ffmpeg, WhisperTool whisper, SpeechOptions options, Clip clip, FrameRate rate,
                                                             IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation)
         {
             var from = rate.ToSeconds(clip.SourceIn);
             var length = rate.ToSeconds(clip.SourceOut - clip.SourceIn);
             var args = new List<string> { "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-ss", RenderGraph.N(from), "-t", RenderGraph.N(length),
                 "-protocol_whitelist", "file", "-i", clip.Path, "-vn" };
-            return Recognize(ffmpeg, whisper, model, language, wav => { args.AddRange(WavArgs(wav)); return args; }, null,
+            return Recognize(ffmpeg, whisper, options, wav => { args.AddRange(WavArgs(wav)); return args; }, null,
                 rate.ToSeconds(clip.Start), clip.Speed, rate.ToSeconds(clip.End), progress, cancellation);
         }
 
         /// <summary>타임라인 전체 소리(모든 트랙을 섞은 것)를 인식한다 — 음악이 섞이면 정확도가 떨어진다.</summary>
-        public static Task<List<SubtitleCue>> RecognizeTimeline(FfmpegTool ffmpeg, WhisperTool whisper, string model, string language, Project project,
+        public static Task<List<SubtitleCue>> RecognizeTimeline(FfmpegTool ffmpeg, WhisperTool whisper, SpeechOptions options, Project project,
                                                                 IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation)
         {
             var plan = RenderGraph.Build(project, new RenderOptions { From = 0, To = project.Duration, Width = 16, Height = 16, Video = false });
             string script = null;
-            return Recognize(ffmpeg, whisper, model, language,
+            return Recognize(ffmpeg, whisper, options,
                 wav => RenderCommand.Arguments(ffmpeg, plan, new[] { "-map", "[aout]" }.Concat(WavArgs(wav)), out script),
                 () =>
                 {
@@ -202,7 +212,7 @@ namespace VideoEditor.Media
             return new[] { "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", wav };
         }
 
-        private static async Task<List<SubtitleCue>> Recognize(FfmpegTool ffmpeg, WhisperTool whisper, string model, string language, Func<string, IEnumerable<string>> extract,
+        private static async Task<List<SubtitleCue>> Recognize(FfmpegTool ffmpeg, WhisperTool whisper, SpeechOptions options, Func<string, IEnumerable<string>> extract,
                                                                Action cleanup, double start, double speed, double end,
                                                                IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation)
         {
@@ -217,12 +227,14 @@ namespace VideoEditor.Media
                 if (converted.ExitCode != 0 || !File.Exists(wav))
                     throw new FfmpegException("소리를 꺼내지 못했습니다.", converted.Error);
                 progress?.Report(new FfmpegDownloader.Status { Stage = "음성 인식 중", Done = 0, Total = 100 });
-                await Run(whisper, SpeechText.Arguments(model, wav, output, language, SpeechText.Threads(Environment.ProcessorCount)), progress, cancellation).ConfigureAwait(false);
+                var args = SpeechText.Arguments(options.Model, wav, output, options.Language, SpeechText.Threads(Environment.ProcessorCount), options.Vad, options.Prompt);
+                await Run(whisper, args, progress, cancellation).ConfigureAwait(false);
                 var srt = output + ".srt";
                 if (!File.Exists(srt))
                     throw new InvalidDataException("음성 인식 결과(SRT)가 없습니다.");
-                var cues = SubtitleFile.Parse(File.ReadAllText(srt, Encoding.UTF8));
-                return SpeechText.SplitLong(SpeechText.ToTimeline(cues, start, speed, end));
+                // 단어(어절)마다 한 큐로 받아 타임라인 시각으로 옮긴 뒤 자막 큐로 묶는다(단어 시각은 큐에 남긴다)
+                var words = SpeechText.ToTimeline(SubtitleFile.Parse(File.ReadAllText(srt, Encoding.UTF8)), start, speed, end);
+                return SpeechText.Group(words);
             }
             finally
             {

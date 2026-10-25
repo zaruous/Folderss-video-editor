@@ -78,6 +78,8 @@ namespace VideoEditor.Tests
                 Assert.StartsWith("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-", m.Url);
                 Assert.True(m.Size > 10_000_000);
             });
+            Assert.Equal("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin", SpeechText.VadModel.Url);
+            Assert.Matches("^[0-9a-f]{64}$", SpeechText.VadModel.Sha256);
             Assert.Same(SpeechText.Models[0], SpeechText.Model("nothing"));
             Assert.Equal("ko", SpeechText.Language("xx"));
         }
@@ -96,7 +98,11 @@ namespace VideoEditor.Tests
         public void Arguments_WriteSrtAndProgress()
         {
             var args = SpeechText.Arguments("m.bin", "a.wav", "out", "xx", 0);
-            Assert.Equal(new[] { "-m", "m.bin", "-f", "a.wav", "-l", "ko", "-t", "1", "-osrt", "-of", "out", "-pp" }, args);
+            Assert.Equal(new[] { "-m", "m.bin", "-f", "a.wav", "-l", "ko", "-t", "1", "-ml", "1", "-sow", "-osrt", "-of", "out", "-pp" }, args);
+            // 말소리 구간 감지와 자주 나오는 낱말(제어 문자는 공백, 200자까지 — 인수 하나로 넘겨 다른 옵션이 되지 않는다)
+            var more = SpeechText.Arguments("m.bin", "a.wav", "out", "ko", 4, "vad.bin", " 맹자,\n반구저기 -osrt ");
+            Assert.Equal(new[] { "--vad", "-vm", "vad.bin", "--prompt", "맹자, 반구저기 -osrt" }, more.Skip(15));
+            Assert.Equal(200, SpeechText.CleanPrompt(new string('가', 300)).Length);
             Assert.Equal(8, SpeechText.Threads(64));
             Assert.Equal(1, SpeechText.Threads(1));
         }
@@ -143,22 +149,50 @@ namespace VideoEditor.Tests
             Assert.Equal(expected, SpeechText.IsNoise(text));
         }
 
-        [Fact]
-        public void SplitLong_SplitsAtSentenceEnds_ProportionallyInTime()
+        private static SubtitleCue W(double start, double end, string text)
         {
-            var cue = new SubtitleCue { Start = 0, End = 10, Text = "십 년 넘게 형제처럼 지내던 후배가 거래처를 가로채 독립했습니다, 억울해서 피가 거꾸로 솟았습니다." };
-            var result = SpeechText.SplitLong(new[] { cue, new SubtitleCue { Start = 10, End = 12, Text = "짧은 큐" } });
-            Assert.Equal(3, result.Count);
-            Assert.Equal("십 년 넘게 형제처럼 지내던 후배가 거래처를 가로채 독립했습니다", result[0].Text);
-            Assert.Equal("억울해서 피가 거꾸로 솟았습니다.", result[1].Text);
-            Assert.Equal(0, result[0].Start);
-            Assert.Equal(result[0].End, result[1].Start);
-            Assert.Equal(10, result[1].End);
-            Assert.InRange(result[0].End, 6, 7.5);
-            Assert.Equal("짧은 큐", result[2].Text);
-            // 나눌 곳이 없으면 그대로
-            var single = SpeechText.SplitLong(new[] { new SubtitleCue { Start = 0, End = 3, Text = new string('가', 50) } });
-            Assert.Single(single);
+            return new SubtitleCue { Start = start, End = end, Text = text };
+        }
+
+        [Fact]
+        public void Group_BreaksAtSentenceEndsPausesAndLength_KeepingWordTimes()
+        {
+            var words = new[]
+            {
+                W(0.36, 1.06, "10년"), W(1.06, 1.25, "넘게"), W(1.25, 1.67, "형제처럼"), W(1.67, 2.40, "지내던"), W(2.40, 3.02, "후배가"),
+                W(3.02, 4.10, "거래처를"), W(4.10, 4.76, "가로채"), W(4.76, 6.11, "독립했습니다."),
+                // 문장 끝 뒤: 0.3초 쉼(다음 큐 시작까지 늘임)
+                W(6.41, 7.00, "억울해서"), W(7.00, 7.40, "피가"), W(7.40, 8.10, "거꾸로"), W(8.10, 9.80, "솟았습니다"),
+                // 1초 쉼 → 끊고, 늘이지 않는다
+                W(10.80, 11.20, "다음"), W(11.20, 11.60, "말"),
+                W(12.00, 12.50, "[음악]")
+            };
+            var cues = SpeechText.Group(words);
+            Assert.Equal(3, cues.Count);
+            Assert.Equal("10년 넘게 형제처럼 지내던 후배가 거래처를 가로채 독립했습니다.", cues[0].Text);
+            Assert.Equal((0.36, 6.41), (cues[0].Start, cues[0].End));
+            Assert.Equal(8, cues[0].Words.Count);
+            Assert.Equal(("억울해서 피가 거꾸로 솟았습니다", 6.41, 9.80), (cues[1].Text, cues[1].Start, cues[1].End));
+            Assert.Equal("다음 말", cues[2].Text);
+            Assert.Equal(11.60, cues[2].End);
+        }
+
+        [Fact]
+        public void Group_SplitsLongRunsAndHalfFullCommas()
+        {
+            // maxChars자를 넘는 문장은 비슷한 길이로 나누고 쉼표 뒤를 먼저 고른다(한 단어 꼬리 없음, 큐 끝 쉼표는 지움)
+            var text = "가나다라마바 사아자차카타, 파하가나다라 마바사아자차, 카타파하 가나다라마바사 아자차카타파하 가나다";
+            var words = text.Split(' ').Select((w, i) => W(i, i + 0.9, w)).ToList();
+            var cues = SpeechText.Group(words, maxChars: 20);
+            Assert.Equal(new[] { "가나다라마바 사아자차카타", "파하가나다라 마바사아자차", "카타파하 가나다라마바사", "아자차카타파하 가나다" }, cues.Select(c => c.Text));
+            // 쉼표가 없으면 이음 어미(-고) 뒤에서
+            var clause = SpeechText.Group("회사 문을 박차고 나가 멱살을 잡고 파렴치한 인간이라고 소문이라도 내고 싶었습니다.".Split(' ').Select((w, i) => W(i, i + 0.9, w)).ToList());
+            Assert.Equal(new[] { "회사 문을 박차고 나가 멱살을 잡고", "파렴치한 인간이라고 소문이라도 내고 싶었습니다." }, clause.Select(c => c.Text));
+            var connective = SpeechText.Group("그 사람 잡으러 다니지 말고 내 지난 3년치 결제 서류부터 다시 꺼내봐라.".Split(' ').Select((w, i) => W(i, i + 0.9, w)).ToList());
+            Assert.Equal("그 사람 잡으러 다니지 말고", connective[0].Text);
+            // 앞쪽 쉼표에서는 끊지 않는다
+            var early = SpeechText.Group(new[] { W(0, 0.5, "그래서,"), W(0.5, 1, "다음으로") }, maxChars: 20);
+            Assert.Equal("그래서, 다음으로", Assert.Single(early).Text);
         }
 
         // ---------- 내려받기(가짜 응답) ----------
@@ -280,7 +314,9 @@ namespace VideoEditor.Tests
             var clip = TimelineEdits.CreateClip(FfmpegMedia.Probe(FfmpegMedia.TestVideo), project.Rate, 0, 0);
             TimelineEdits.Place(project, project.MainTrack, clip, 30);
             var stages = new List<string>();
-            var cues = await SpeechRecognizer.RecognizeClip(FfmpegMedia.Tool, Whisper, Model, "ko", clip, project.Rate,
+            var vad = WhisperTool.ModelPath(Whisper.Folder, SpeechText.VadModel);
+            var options = new SpeechOptions { Model = Model, Vad = File.Exists(vad) ? vad : null, Language = "ko" };
+            var cues = await SpeechRecognizer.RecognizeClip(FfmpegMedia.Tool, Whisper, options, clip, project.Rate,
                 new SyncProgress(s => stages.Add(s.Stage + " " + s.Done)), CancellationToken.None);
             _out.WriteLine(string.Join(" / ", stages.Distinct()) + " · 큐 " + cues.Count + ": " + string.Join(" | ", cues.Select(c => c.Start + "~" + c.End + " " + c.Text)));
             Assert.Contains(stages, s => s.StartsWith("음성 인식 중", StringComparison.Ordinal));

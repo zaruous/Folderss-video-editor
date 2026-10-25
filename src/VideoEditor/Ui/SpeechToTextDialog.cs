@@ -18,15 +18,17 @@ namespace VideoEditor.Ui
     /// </summary>
     internal sealed class SpeechToTextDialog : Window
     {
-        /// <summary>whisper·모델 경로·언어로 인식해 타임라인 시각의 큐를 돌려준다.</summary>
-        public delegate Task<List<SubtitleCue>> Recognizer(WhisperTool whisper, string modelPath, string language, IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation);
+        /// <summary>whisper와 인식 설정(모델·말소리 구간 감지·말·낱말)으로 인식해 타임라인 시각의 큐를 돌려준다.</summary>
+        public delegate Task<List<SubtitleCue>> Recognizer(WhisperTool whisper, SpeechOptions options, IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation);
 
         public const string ModelKey = "speechModel";
         public const string LanguageKey = "speechLanguage";
+        public const string PromptKey = "speechPrompt";
 
         private readonly EditorServices _services;
         private readonly Recognizer _recognize;
         private readonly ComboBox _language = new ComboBox { Margin = new Thickness(0, 4, 0, 0) };
+        private readonly TextBox _prompt = new TextBox { Margin = new Thickness(0, 4, 0, 0), MaxLength = SpeechText.MaxPromptLength };
         private readonly List<RadioButton> _models = new List<RadioButton>();
         private readonly TextBlock _status = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) };
         private readonly ProgressBar _progress = new ProgressBar { Height = 14, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
@@ -72,6 +74,14 @@ namespace VideoEditor.Ui
             _language.SelectedItem = _language.Items.Cast<ComboBoxItem>().First(i => (string)i.Tag == savedLanguage);
             panel.Children.Add(_language);
 
+            var promptLabel = UiKit.Label("자주 나오는 낱말(선택) — 이름·용어를 쉼표로, 예: 맹자, 반구저기");
+            promptLabel.Margin = new Thickness(0, 12, 0, 0);
+            panel.Children.Add(promptLabel);
+            AutomationProperties.SetAutomationId(_prompt, "SpeechPrompt");
+            AutomationProperties.SetName(_prompt, "자주 나오는 낱말");
+            _prompt.Text = services.Setting(PromptKey) ?? "";
+            panel.Children.Add(_prompt);
+
             var modelLabel = UiKit.Label("모델");
             modelLabel.Margin = new Thickness(0, 12, 0, 0);
             panel.Children.Add(modelLabel);
@@ -91,8 +101,8 @@ namespace VideoEditor.Ui
             notice.Child = new TextBlock
             {
                 TextWrapping = TextWrapping.Wrap,
-                Text = "소리는 이 PC에서만 인식합니다(인터넷으로 보내지 않음). 처음 한 번 whisper.cpp(약 9MB, GitHub ggml-org/whisper.cpp)와 고른 모델"
-                       + "(Hugging Face ggerganov/whisper.cpp)을 내려받아 SHA-256을 확인한 뒤 플러그인 데이터 폴더에 둡니다. "
+                Text = "소리는 이 PC에서만 인식합니다(인터넷으로 보내지 않음). 처음 한 번 whisper.cpp(약 9MB, GitHub ggml-org/whisper.cpp)와 고른 모델, "
+                       + "말소리 구간 감지 모델(0.9MB, Hugging Face)을 내려받아 SHA-256을 확인한 뒤 플러그인 데이터 폴더에 둡니다. "
                        + "whisper.cpp를 실행하려면 Microsoft Visual C++ 재배포 패키지(x64)가 있어야 합니다.\n"
                        + "인식한 자막은 새 자막 트랙에 들어가고, 틀린 글은 큐를 골라 속성에서 고칩니다."
             };
@@ -154,8 +164,10 @@ namespace VideoEditor.Ui
         {
             var model = Chosen();
             var language = (string)((ComboBoxItem)_language.SelectedItem).Tag;
+            var prompt = SpeechText.CleanPrompt(_prompt.Text);
             _services.SaveSetting(ModelKey, model.Id);
             _services.SaveSetting(LanguageKey, language);
+            _services.SaveSetting(PromptKey, prompt);
             _cancel = new CancellationTokenSource();
             var cancellation = _cancel.Token;
             SetBusy(true);
@@ -169,10 +181,12 @@ namespace VideoEditor.Ui
                     whisper = await SpeechRecognizer.DownloadTool(_services.WhisperFolder, progress, cancellation);
                     _services.Whisper = whisper;
                 }
+                var vad = await SpeechRecognizer.DownloadModel(_services.WhisperFolder, SpeechText.VadModel, progress, cancellation);
                 var modelPath = await SpeechRecognizer.DownloadModel(_services.WhisperFolder, model, progress, cancellation);
                 ShowModels();
                 watch.Restart();
-                var cues = await _recognize(whisper, modelPath, language, progress, cancellation);
+                var options = new SpeechOptions { Model = modelPath, Vad = vad, Language = language, Prompt = prompt };
+                var cues = await _recognize(whisper, options, progress, cancellation);
                 Cues = cues;
                 Model = model;
                 Elapsed = watch.Elapsed;
@@ -199,6 +213,7 @@ namespace VideoEditor.Ui
         {
             _run.IsEnabled = !busy;
             _language.IsEnabled = !busy;
+            _prompt.IsEnabled = !busy;
             foreach (var radio in _models)
                 radio.IsEnabled = !busy;
             ((TextBlock)_close.Content).Text = busy ? "취소" : "닫기";

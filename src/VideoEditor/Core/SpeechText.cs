@@ -18,7 +18,9 @@ namespace VideoEditor.Core
         public string Note { get; set; }
         public long Size { get; set; }
         public string Sha256 { get; set; }
-        public string Url { get { return SpeechText.ModelBaseUrl + File; } }
+        /// <summary>내려받을 곳(없으면 whisper.cpp 모델 저장소).</summary>
+        public string BaseUrl { get; set; }
+        public string Url { get { return (BaseUrl ?? SpeechText.ModelBaseUrl) + File; } }
     }
 
     /// <summary>
@@ -54,6 +56,17 @@ namespace VideoEditor.Core
                 Id = "base", File = "ggml-base-q5_1.bin", Label = "빠름", Note = "60MB · 빠르지만 한국어는 자주 틀림",
                 Size = 59707625, Sha256 = "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"
             }
+        };
+
+        /// <summary>
+        /// 말소리 구간 감지(Silero VAD, 약 0.9MB) — 말이 있는 곳만 인식해 음악·잡음 속에서 시각이 밀리거나 말을 지어내는 일을 줄인다.
+        /// 배경 음악이 섞인 내레이션에서 첫 큐가 0초로 밀리던 것이 실제 말 시작(2초)에 맞는다.
+        /// </summary>
+        public static SpeechModel VadModel { get; } = new SpeechModel
+        {
+            Id = "vad", File = "ggml-silero-v6.2.0.bin", Label = "말소리 구간 감지", Note = "0.9MB",
+            Size = 885098, Sha256 = "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+            BaseUrl = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/"
         };
 
         /// <summary>인식할 말(whisper 언어 코드, 보일 이름). 첫째가 기본.</summary>
@@ -131,14 +144,32 @@ namespace VideoEditor.Core
                        && name.All(c => char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.'));
         }
 
-        /// <summary>whisper-cli 인수: 16kHz 모노 WAV를 읽어 outputBase.srt를 쓰고 진행률을 표준 오류로 알린다.</summary>
-        public static IReadOnlyList<string> Arguments(string model, string wav, string outputBase, string language, int threads)
+        /// <summary>
+        /// whisper-cli 인수: 16kHz 모노 WAV를 읽어 outputBase.srt에 단어(어절)마다 한 큐를 쓰고(-ml 1 -sow) 진행률을 표준 오류로 알린다.
+        /// vad가 있으면 말소리 구간만, prompt(자주 나오는 낱말)가 있으면 그 낱말을 앞 문맥으로 준다.
+        /// </summary>
+        public static IReadOnlyList<string> Arguments(string model, string wav, string outputBase, string language, int threads, string vad = null, string prompt = null)
         {
-            return new[]
+            var args = new List<string>
             {
                 "-m", model, "-f", wav, "-l", Language(language), "-t", Math.Max(1, threads).ToString(CultureInfo.InvariantCulture),
-                "-osrt", "-of", outputBase, "-pp"
+                "-ml", "1", "-sow", "-osrt", "-of", outputBase, "-pp"
             };
+            if (!string.IsNullOrEmpty(vad))
+                args.AddRange(new[] { "--vad", "-vm", vad });
+            var hint = CleanPrompt(prompt);
+            if (hint.Length > 0)
+                args.AddRange(new[] { "--prompt", hint });
+            return args;
+        }
+
+        public const int MaxPromptLength = 200;
+
+        /// <summary>자주 나오는 낱말(이름·용어): 줄바꿈 등 제어 문자를 공백으로, 200자까지.</summary>
+        public static string CleanPrompt(string prompt)
+        {
+            var text = new string((prompt ?? "").Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
+            return text.Length > MaxPromptLength ? text.Substring(0, MaxPromptLength) : text;
         }
 
         /// <summary>인식에 쓸 스레드 수(코어 하나는 남기고 8개까지 — 그보다 많으면 오히려 느려짐).</summary>
@@ -184,44 +215,108 @@ namespace VideoEditor.Core
             return NoisePattern.IsMatch((text ?? "").Trim());
         }
 
-        private static readonly Regex SentenceEnd = new Regex(@"(?<=[.?!,。？！，…])\s+", RegexOptions.CultureInvariant);
+        private static readonly char[] SentenceEnds = { '.', '?', '!', '。', '？', '！', '…' };
 
         /// <summary>
-        /// 한 번에 읽기 긴 큐(두 문장 이상을 한 큐로 묶은 것)를 문장·쉼표 끝에서 나눈다: 조각을 maxChars자까지 이어 붙이고 시간은 글자 수에 비례해 나눈다.
-        /// 나눌 곳이 없으면 그대로. 나눈 줄 끝의 쉼표는 지운다.
+        /// 단어(어절)를 자막 큐로 묶는다. 먼저 문장(문장 끝 . ? ! 또는 maxGap초 넘는 쉼까지)으로 모으고,
+        /// maxChars자(두 줄 남짓)를 넘는 문장은 비슷한 길이로 나눈다(쉼표 뒤, 다음으로 이음 어미 -고·-며·-서 뒤를 먼저 고름 — 한 단어만 남는 꼬리가 생기지 않게).
+        /// 큐는 첫 단어 시작부터 마지막 단어 끝까지이고, 다음 큐까지 짧게(linger초 미만) 비면 그 틈까지 늘여 깜빡이지 않게 한다.
+        /// 큐 끝 쉼표는 지우고, 말이 아닌 소리 표시는 뺀다.
         /// </summary>
-        public static List<SubtitleCue> SplitLong(IEnumerable<SubtitleCue> cues, int maxChars = 32)
+        public static List<SubtitleCue> Group(IReadOnlyList<SubtitleCue> words, int maxChars = 40, double maxGap = 0.6, double linger = 0.5)
         {
-            var result = new List<SubtitleCue>();
-            foreach (var cue in cues)
+            var cues = new List<SubtitleCue>();
+            var sentence = new List<SubtitleCue>();
+            foreach (var word in words.Where(w => !string.IsNullOrWhiteSpace(w.Text) && !IsNoise(w.Text)))
             {
-                var text = (cue.Text ?? "").Trim();
-                var lines = new List<string>();
-                if (text.Length > maxChars)
+                if (sentence.Count > 0 && word.Start - sentence[sentence.Count - 1].End > maxGap)
                 {
-                    foreach (var piece in SentenceEnd.Split(text).Where(p => p.Length > 0))
-                    {
-                        if (lines.Count > 0 && lines[lines.Count - 1].Length + 1 + piece.Length <= maxChars)
-                            lines[lines.Count - 1] += " " + piece;
-                        else
-                            lines.Add(piece);
-                    }
+                    AddSentence(sentence, maxChars, cues);
+                    sentence.Clear();
                 }
-                if (lines.Count < 2)
+                sentence.Add(word);
+                if (SentenceEnds.Contains(word.Text[word.Text.Length - 1]))
                 {
-                    result.Add(new SubtitleCue { Start = cue.Start, End = cue.End, Text = text });
-                    continue;
-                }
-                var total = (double)lines.Sum(l => l.Length);
-                var at = cue.Start;
-                for (var i = 0; i < lines.Count; i++)
-                {
-                    var end = i == lines.Count - 1 ? cue.End : at + (cue.End - cue.Start) * lines[i].Length / total;
-                    result.Add(new SubtitleCue { Start = at, End = end, Text = lines[i].TrimEnd(',', '，') });
-                    at = end;
+                    AddSentence(sentence, maxChars, cues);
+                    sentence.Clear();
                 }
             }
-            return result;
+            AddSentence(sentence, maxChars, cues);
+            for (var i = 0; i + 1 < cues.Count; i++)
+            {
+                if (cues[i + 1].Start - cues[i].End < linger)
+                    cues[i].End = Math.Max(cues[i].End, cues[i + 1].Start);
+            }
+            return cues;
+        }
+
+        /// <summary>문장 하나를 maxChars자 이하 조각(가능하면)으로 나눠 큐로 더한다 — 조각 수를 늘려 가며 비슷한 길이로.</summary>
+        private static void AddSentence(List<SubtitleCue> sentence, int maxChars, List<SubtitleCue> cues)
+        {
+            if (sentence.Count == 0)
+                return;
+            // ends[i] = 단어 0~i를 공백으로 이은 글자 수
+            var ends = new int[sentence.Count];
+            for (var i = 0; i < sentence.Count; i++)
+                ends[i] = (i == 0 ? 0 : ends[i - 1] + 1) + sentence[i].Text.Length;
+            List<int> breaks;
+            for (var parts = Math.Max(1, (ends[ends.Length - 1] + maxChars - 1) / maxChars); ; parts++)
+            {
+                breaks = Balanced(sentence, ends, parts);
+                if (parts >= sentence.Count || Parts(ends, breaks).All(length => length <= maxChars))
+                    break;
+            }
+            var from = 0;
+            foreach (var end in breaks.Concat(new[] { sentence.Count - 1 }))
+            {
+                var part = sentence.GetRange(from, end - from + 1);
+                var text = string.Join(" ", part.Select(w => w.Text)).TrimEnd(',', '，');
+                if (!IsNoise(text))
+                    cues.Add(new SubtitleCue { Start = part[0].Start, End = part[part.Count - 1].End, Text = text, Words = part });
+                from = end + 1;
+            }
+        }
+
+        /// <summary>parts조각이 되게 끊을 단어 위치(그 단어 뒤에서 끊음): 길이 비율 k/parts에 가장 가까운 곳, 쉼표·이음 어미로 끝난 단어면 더 낫게 본다.</summary>
+        private static List<int> Balanced(List<SubtitleCue> words, int[] ends, int parts)
+        {
+            var breaks = new List<int>();
+            var total = ends[ends.Length - 1];
+            var from = 0;
+            for (var k = 1; k < parts; k++)
+            {
+                var target = total * k / (double)parts;
+                var best = from;
+                var bestScore = double.MaxValue;
+                // 남은 조각마다 한 단어는 남긴다
+                for (var i = from; i < words.Count - (parts - k); i++)
+                {
+                    var last = words[i].Text[words[i].Text.Length - 1];
+                    var bonus = last == ',' || last == '，' ? total / (3.0 * parts) : ClauseEnds.IndexOf(last) >= 0 ? total / (4.0 * parts) : 0;
+                    var score = Math.Abs(ends[i] - target) - bonus;
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        best = i;
+                    }
+                }
+                breaks.Add(best);
+                from = best + 1;
+            }
+            return breaks;
+        }
+
+        // 한국어 이음 어미(잡고·내려놓으며·억울해서·보면·인데·지만) — 절이 끝나는 곳
+        private const string ClauseEnds = "고며서면데만";
+
+        private static IEnumerable<int> Parts(int[] ends, List<int> breaks)
+        {
+            var previous = -1;
+            foreach (var end in breaks.Concat(new[] { ends.Length - 1 }))
+            {
+                yield return ends[end] - (previous < 0 ? 0 : ends[previous] + 1);
+                previous = end;
+            }
         }
 
         private static string Text(JsonElement element, string name)

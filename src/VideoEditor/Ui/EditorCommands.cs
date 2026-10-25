@@ -593,9 +593,9 @@ namespace VideoEditor.Ui
             SpeechToTextDialog dialog;
             try
             {
-                dialog = new SpeechToTextDialog(_services, source, target == null, (whisper, model, language, progress, cancellation) => target != null
-                    ? SpeechRecognizer.RecognizeClip(tool, whisper, model, language, target, rate, progress, cancellation)
-                    : SpeechRecognizer.RecognizeTimeline(tool, whisper, model, language, copy, progress, cancellation));
+                dialog = new SpeechToTextDialog(_services, source, target == null, (whisper, options, progress, cancellation) => target != null
+                    ? SpeechRecognizer.RecognizeClip(tool, whisper, options, target, rate, progress, cancellation)
+                    : SpeechRecognizer.RecognizeTimeline(tool, whisper, options, copy, progress, cancellation));
                 var owner = UiKit.OwnerOf(_owner);
                 if (owner != null && owner.IsLoaded)
                     dialog.Owner = owner;
