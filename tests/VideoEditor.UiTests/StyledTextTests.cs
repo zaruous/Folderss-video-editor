@@ -20,7 +20,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 namespace VideoEditor.UiTests
 {
     /// <summary>
-    /// 꾸민 글자(이슈 #3·#13·#14·#15): WPF 그리개의 픽셀, 꾸미기 탭(글꼴·채우기·윤곽선), 미리 보기 = 내보내기.
+    /// 꾸민 글자(이슈 #3·#13·#14·#15·#16): WPF 그리개의 픽셀, 꾸미기 탭(글꼴·채우기·윤곽선·그림자), 미리 보기 = 내보내기.
     /// 그리개·요청은 플러그인 형식이라 리플렉션으로 만들고, 요청은 JSON을 플러그인의 TextImageRequest로 역직렬화해 만든다.
     /// </summary>
     public class StyledTextTests
@@ -73,6 +73,53 @@ namespace VideoEditor.UiTests
                         count++;
                 }
                 return count;
+            }
+
+            /// <summary>조금이라도 칠한(알파 &gt; 0) 픽셀 수.</summary>
+            public int InkCount()
+            {
+                var count = 0;
+                for (var i = 3; i < Bgra.Length; i += 4)
+                {
+                    if (Bgra[i] > 0)
+                        count++;
+                }
+                return count;
+            }
+
+            /// <summary>어두운(그림자) 또는 밝은(글자) 픽셀의 알파 가중 무게중심(x, y)과 알파 합.</summary>
+            public (double X, double Y, double Weight) Centroid(bool dark)
+            {
+                double sumX = 0, sumY = 0, weight = 0;
+                for (var y = 0; y < Height; y++)
+                {
+                    for (var x = 0; x < Width; x++)
+                    {
+                        var p = Pixel(x, y);
+                        if (p.A == 0 || ((p.R + p.G + p.B) / 3 < 128) != dark)
+                            continue;
+                        sumX += (double)x * p.A;
+                        sumY += (double)y * p.A;
+                        weight += p.A;
+                    }
+                }
+                return weight > 0 ? (sumX / weight, sumY / weight, weight) : (double.NaN, double.NaN, 0);
+            }
+
+            /// <summary>어두운(그림자) 또는 밝은(글자) 픽셀 가운데 가장 큰 알파.</summary>
+            public int MaxAlpha(bool dark)
+            {
+                var max = 0;
+                for (var y = 0; y < Height; y++)
+                {
+                    for (var x = 0; x < Width; x++)
+                    {
+                        var p = Pixel(x, y);
+                        if (p.A > 0 && ((p.R + p.G + p.B) / 3 < 128) == dark)
+                            max = Math.Max(max, p.A);
+                    }
+                }
+                return max;
             }
 
             /// <summary>[top, bottom) 줄들에서 칠한 픽셀의 가장 왼쪽·오른쪽 x(없으면 -1).</summary>
@@ -295,6 +342,116 @@ namespace VideoEditor.UiTests
                 Assert.True(thick.PaintedCount() > 1000);
                 Assert.Equal(0, thick.BorderInk());
             }
+        }
+
+        private static string Shadow(double distance, double angle, double blur, double opacity = 1, string color = "#000000")
+        {
+            string N(double value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return "\"Shadow\":{\"Enabled\":true,\"Color\":\"" + color + "\",\"Distance\":" + N(distance) + ",\"Angle\":" + N(angle)
+                + ",\"Blur\":" + N(blur) + ",\"Opacity\":" + N(opacity) + "}";
+        }
+
+        private static string WhiteOutline(double width, string join = "Round")
+        {
+            return Outline(width, join).Replace("\"#000000\"", "\"#FFFFFF\"");
+        }
+
+        // 가는 획("I") 사이를 띄워 둔 글 — 거리 20px 그림자가 옆 글자에 가려지지 않아 그림자 전체가 보인다
+        private const string Stems = "I I I";
+
+        /// <summary>y 줄에서 가장 오른쪽 흰(불투명한 밝은) 픽셀의 x — 그림자(검정)는 건너뛴다.</summary>
+        private static int WhiteEdge(Png png, int y)
+        {
+            for (var x = png.Width - 1; x >= 0; x--)
+            {
+                var p = png.Pixel(x, y);
+                if (p.A > 200 && p.R > 200)
+                    return x;
+            }
+            return -1;
+        }
+
+        [UiFact]
+        public async Task Rasterizer_Shadow_MovesByDistanceAndAngle()
+        {
+            // 흰 글자 + 검정 그림자(거리 20, 흐림 0): 그림자 픽셀의 무게중심이 글자 무게중심에서 0°면 오른쪽으로 20px, 225°면 왼쪽 위로 (-14.1, -14.1)
+            var rasterizer = NewRasterizer();
+            foreach (var (angle, dx, dy) in new[] { (0.0, 20.0, 0.0), (225.0, -14.14, -14.14) })
+            {
+                var png = await Render(rasterizer, Request(rasterizer, Stems, fontSize: 120, style: WhiteFill + "," + Shadow(20, angle, 0)), "shadow-angle-" + angle);
+                var text = png.Centroid(false);
+                var shadow = png.Centroid(true);
+                _out.WriteLine(angle + "°: 글자 (" + text.X.ToString("F2") + ", " + text.Y.ToString("F2") + ") · 그림자 (" + shadow.X.ToString("F2") + ", " + shadow.Y.ToString("F2") + ")");
+                Assert.True(shadow.Weight > 0, "그림자가 있어야 한다");
+                Assert.InRange(shadow.X - text.X, dx - 1.5, dx + 1.5);
+                Assert.InRange(shadow.Y - text.Y, dy - 1.5, dy + 1.5);
+                Assert.Equal(0, png.BorderInk());
+            }
+            // 끄면 그림자 픽셀이 없다
+            var off = await Render(rasterizer, Request(rasterizer, Stems, fontSize: 120, style: WhiteFill), "shadow-off");
+            Assert.Equal(0, off.Centroid(true).Weight);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_ShadowBlur_SpreadsMore_OpacityHalvesAlpha()
+        {
+            var rasterizer = NewRasterizer();
+            var sharp = await Render(rasterizer, Request(rasterizer, Stems, fontSize: 120, style: WhiteFill + "," + Shadow(20, 0, 0)), "shadow-blur-0");
+            var blurred = await Render(rasterizer, Request(rasterizer, Stems, fontSize: 120, style: WhiteFill + "," + Shadow(20, 0, 20)), "shadow-blur-20");
+            var half = await Render(rasterizer, Request(rasterizer, Stems, fontSize: 120, style: WhiteFill + "," + Shadow(20, 0, 0, 0.5)), "shadow-opacity-50");
+            _out.WriteLine("알파 > 0 픽셀 흐림 0 " + sharp.InkCount() + " · 흐림 20 " + blurred.InkCount()
+                + " · 그림자 최대 알파 100% " + sharp.MaxAlpha(true) + " · 50% " + half.MaxAlpha(true));
+            // 흐림을 키우면 그림자가 퍼져 칠한 픽셀이 늘고, 가장 진한 곳은 옅어진다
+            Assert.True(blurred.InkCount() > sharp.InkCount() * 3 / 2, "흐림 20이 더 퍼져야 한다");
+            Assert.True(blurred.MaxAlpha(true) < sharp.MaxAlpha(true));
+            Assert.Equal(0, blurred.BorderInk());
+            // 불투명도 50%면 그림자 최대 알파가 절반쯤, 글자는 그대로 불투명
+            Assert.Equal(255, sharp.MaxAlpha(true));
+            Assert.InRange(half.MaxAlpha(true), 120, 136);
+            Assert.Equal(255, half.MaxAlpha(false));
+            // 그림자 색의 알파(#80…)도 불투명도처럼 곱한다
+            var tinted = await Render(rasterizer, Request(rasterizer, Stems, fontSize: 120, style: WhiteFill + "," + Shadow(20, 0, 0, 1, "#80000000")), "shadow-color-alpha");
+            Assert.InRange(tinted.MaxAlpha(true), 120, 136);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_Shadow_IsWhatTheBodyPaints_MaxStaysInside()
+        {
+            // 흰 채우기 + 흰 윤곽선 8 + 검정 그림자(30, 0°, 흐림 0, 50%): 가운데 줄에서 윤곽선 바깥 가장자리 E의 오른쪽을 본다.
+            // 그림자 = 글자(E+22까지) + 윤곽선(E+14~E+30) — 글자만(E+8)·겹친 곳(E+18)·윤곽선만(E+26) 모두 같은 알파(겹친 곳이 더 진하지 않음)
+            var rasterizer = NewRasterizer();
+            var filled = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill + "," + WhiteOutline(8) + "," + Shadow(30, 0, 0, 0.5)), "shadow-filled");
+            var middle = filled.Height / 2;
+            var edge = WhiteEdge(filled, middle);
+            var alphas = new[] { 8, 18, 26 }.Select(d => filled.Pixel(edge + d, middle)).ToArray();
+            _out.WriteLine("채움: 가장자리 " + edge + " · E+8 " + alphas[0] + " · E+18 " + alphas[1] + " · E+26 " + alphas[2] + " · E+34 " + filled.Pixel(edge + 34, middle));
+            foreach (var p in alphas)
+                Assert.True(p.A >= 120 && p.A <= 136 && p.R < 40, "그림자 50% 검정 " + p);
+            Assert.Equal(0, filled.Alpha(edge + 34, middle));
+
+            // 채우기 없음 + 윤곽선: 그림자도 윤곽선 고리만 — 글자 속(E+8)과 글자 가운데는 비었고 고리 그림자(E+26)만 있다
+            var hollow = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200,
+                style: "\"Fill\":{\"Kind\":\"None\",\"Colors\":[\"#FFFFFF\"]}," + WhiteOutline(8) + "," + Shadow(30, 0, 0)), "shadow-hollow");
+            middle = hollow.Height / 2;
+            var left = hollow.Extent(middle, middle + 1).Left;
+            var ring = WhiteEdge(hollow, middle);
+            _out.WriteLine("속 빈 글자: 고리 " + ring + " · E+8 " + hollow.Pixel(ring + 8, middle) + " · E+26 " + hollow.Pixel(ring + 26, middle));
+            Assert.Equal(0, hollow.Alpha(ring + 8, middle));
+            Assert.Equal(0, hollow.Alpha((left + ring) / 2, middle));
+            var shadowRing = hollow.Pixel(ring + 26, middle);
+            Assert.True(shadowRing.A > 200 && shadowRing.R < 40, "고리 그림자 " + shadowRing);
+
+            // 가장 먼 그림자(200) + 가장 큰 흐림(100) + 가장 굵은 윤곽선(각지게 50)도 그림 가장자리 1px 줄에 닿지 않는다(캔버스가 충분히 클 때)
+            foreach (var angle in new[] { 0.0, 45, 135, 270 })
+            {
+                var max = await Render(rasterizer, Request(rasterizer, "WAV가", 3840, 2160, 120, WhiteFill + "," + WhiteOutline(50, "Miter") + "," + Shadow(200, angle, 100)), "shadow-max-" + angle);
+                _out.WriteLine(angle + "° 최대 " + max.Width + "×" + max.Height + " · 그림자 알파 합 " + max.Centroid(true).Weight);
+                Assert.True(max.Centroid(true).Weight > 0, "그림자가 있어야 한다");
+                Assert.Equal(0, max.BorderInk());
+            }
+            // 효과 배율 2: 거리는 두 배, 흐림 반지름은 상한 100
+            var scaled = await Render(rasterizer, Request(rasterizer, "WAV가", 3840, 2160, 240, WhiteFill + "," + Shadow(200, 30, 100), 2), "shadow-max-scale-2");
+            Assert.Equal(0, scaled.BorderInk());
         }
 
         [UiFact]
@@ -670,6 +827,125 @@ namespace VideoEditor.UiTests
                 Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
                 await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
                 Assert.False(ui.Run(() => Ui.ById<TextBox>(window, "StyleOutlineWidth").IsEnabled));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        [EditorFact]
+        public async Task StyleTab_Shadow_ChangesPreview_DistanceDragIsOneUndoStep()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                var id = await AddStyledText(ui, window, "그림자 ABC");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                await ui.WaitFor(() => Ui.ById<CheckBox>(window, "StyleShadowOn"), Wait, "그림자 칸");
+                var fields = new[] { "StyleShadowDistance", "StyleShadowAngle", "StyleShadowBlur", "StyleShadowOpacity" };
+                var before = ui.Run(() =>
+                {
+                    // 꺼져 있으면 색·거리·방향·흐림·불투명도는 고칠 수 없고, 기본값만 보인다(보이기만 해서는 스타일이 생기지 않음)
+                    Assert.False(Ui.ById<CheckBox>(window, "StyleShadowOn").IsChecked == true);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleShadowColor").IsEnabled);
+                    foreach (var field in fields)
+                        Assert.False(Ui.ById<TextBox>(window, field).IsEnabled, field);
+                    Assert.Equal(new[] { "6", "45", "6", "60" }, fields.Select(f => Ui.ById<TextBox>(window, f).Text).ToArray());
+                    return PreviewPixels(window);
+                });
+                Assert.Null(ui.Run(() => StyleOf(window, id)));
+
+                // 켜기 → 스타일이 생기고(검정 60%) 그리개로 그린다 — 미리 보기 바탕도 검정이라 그림자 자체는 아직 안 보인다
+                ui.Run(() => Ui.ClickToggle(Ui.ById<CheckBox>(window, "StyleShadowOn")));
+                await ui.WaitUntil(() => StyleOf(window, id) is object style && (bool)Get(Get(style, "Shadow"), "Enabled"), Wait, "그림자 켜기");
+                await ui.WaitUntil(() => Differs(before, PreviewPixels(window)), Wait, "그리개 미리 보기");
+                await Task.Delay(500);
+                var on = ui.Run(() =>
+                {
+                    Assert.True(Ui.ById<TextBox>(window, "StyleShadowColor").IsEnabled);
+                    foreach (var field in fields)
+                        Assert.True(Ui.ById<TextBox>(window, field).IsEnabled, field);
+                    Assert.Equal("#000000", Ui.ById<TextBox>(window, "StyleShadowColor").Text);
+                    return PreviewPixels(window);
+                });
+
+                // 색을 빨강으로 → 검정 바탕에서 그림자가 보인다
+                ui.Run(() =>
+                {
+                    var hex = Ui.ById<TextBox>(window, "StyleShadowColor");
+                    Ui.Focus(hex);
+                    hex.Text = "ef4444";
+                    Ui.Press(hex, System.Windows.Input.Key.Enter);
+                });
+                await ui.WaitUntil(() => (string)Get(Get(StyleOf(window, id), "Shadow"), "Color") == "#EF4444", Wait, "빨간 그림자");
+                ui.Run(() => Ui.Focus(Canvas(window)));
+                await ui.WaitUntil(() => Differs(on, PreviewPixels(window)), Wait, "빨간 그림자 미리 보기");
+                await Task.Delay(500);
+                var red = ui.Run(() => PreviewPixels(window));
+
+                // 거리 슬라이더를 끄는 동안(값 여러 번)은 실행 취소 한 단계 — 미리 보기는 그림자가 더 멀어진다
+                ui.Run(() =>
+                {
+                    var slider = Ui.ById<Slider>(window, "StyleShadowDistanceSlider");
+                    foreach (var value in new[] { 20.0, 40.0, 60.0 })
+                        slider.Value = value;
+                });
+                await ui.WaitUntil(() => Math.Abs((double)Get(Get(StyleOf(window, id), "Shadow"), "Distance") - 60) < 1e-6, Wait, "거리 60");
+                await ui.WaitUntil(() => Differs(red, PreviewPixels(window)), Wait, "거리 미리 보기");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-tab-shadow"));
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => Math.Abs((double)Get(Get(StyleOf(window, id), "Shadow"), "Distance") - 6) < 1e-6, Wait, "실행 취소 한 번에 거리 6");
+                Assert.True(ui.Run(() => (bool)Get(Get(StyleOf(window, id), "Shadow"), "Enabled")));
+                Assert.Equal("#EF4444", ui.Run(() => (string)Get(Get(StyleOf(window, id), "Shadow"), "Color")));
+                await ui.WaitUntil(() => !Differs(red, PreviewPixels(window)), Wait, "거리 6 미리 보기로 돌아옴");
+
+                // 불투명도 칸에 100(%) → 1.0, 방향 칸에 180(°) → 왼쪽, 흐림 슬라이더 끌기 → 미리 보기가 바뀐다
+                foreach (var (field, text) in new[] { ("StyleShadowOpacity", "100"), ("StyleShadowAngle", "180") })
+                {
+                    ui.Run(() =>
+                    {
+                        var box = Ui.ById<TextBox>(window, field);
+                        Ui.Focus(box);
+                        box.Text = text;
+                        Ui.Press(box, System.Windows.Input.Key.Enter);
+                    });
+                }
+                await ui.WaitUntil(() => Math.Abs((double)Get(Get(StyleOf(window, id), "Shadow"), "Opacity") - 1) < 1e-6, Wait, "불투명도 100%");
+                await ui.WaitUntil(() => Math.Abs((double)Get(Get(StyleOf(window, id), "Shadow"), "Angle") - 180) < 1e-6, Wait, "방향 180°");
+                ui.Run(() =>
+                {
+                    Ui.Focus(Canvas(window));
+                    var slider = Ui.ById<Slider>(window, "StyleShadowBlurSlider");
+                    foreach (var value in new[] { 10.0, 20.0 })
+                        slider.Value = value;
+                });
+                await ui.WaitUntil(() => Math.Abs((double)Get(Get(StyleOf(window, id), "Shadow"), "Blur") - 20) < 1e-6, Wait, "흐림 20");
+                await ui.WaitUntil(() => Differs(red, PreviewPixels(window)), Wait, "불투명도·방향·흐림 미리 보기");
+
+                // 실행 취소 네 번(흐림 끌기·방향·불투명도·색) → 검정 그림자, 한 번 더(켜기) → 스타일 없던 처음으로
+                foreach (var step in new[] { "흐림", "방향", "불투명도", "색" })
+                    ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => (string)Get(Get(StyleOf(window, id), "Shadow"), "Color") == "#000000", Wait, "색 실행 취소");
+                ui.Run(() =>
+                {
+                    var shadow = Get(StyleOf(window, id), "Shadow");
+                    Assert.Equal(6.0, (double)Get(shadow, "Blur"), 6);
+                    Assert.Equal(45.0, (double)Get(shadow, "Angle"), 6);
+                    Assert.Equal(0.6, (double)Get(shadow, "Opacity"), 6);
+                });
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
+                await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+                ui.Run(() =>
+                {
+                    Assert.False(Ui.ById<CheckBox>(window, "StyleShadowOn").IsChecked == true);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleShadowDistance").IsEnabled);
+                });
+                Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
                 Assert.Empty(ui.TakeErrors());
             }
             finally

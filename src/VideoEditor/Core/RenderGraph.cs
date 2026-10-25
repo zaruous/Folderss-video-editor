@@ -315,10 +315,11 @@ namespace VideoEditor.Core
                 var size = Math.Max(4, clip.FontSize * options.Width / project.Width);
                 var font = string.IsNullOrEmpty(options.FontFile) ? "" : "fontfile=" + FilterValue(options.FontFile) + ":";
                 return string.Format(CultureInfo.InvariantCulture,
-                    "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba,drawtext={4}textfile={5}:expansion=none:fontsize={6}:fontcolor={7}:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing={8}{9}",
+                    "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba,drawtext={4}textfile={5}:expansion=none:fontsize={6}:fontcolor={7}:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing={8}{9}{10}",
                     options.Width, options.Height, fps, N(rate.ToSeconds(segFrames)), font, FilterValue(textFile),
                     N(size), FilterValue(clip.Style?.Fill?.Kind == FillKind.None ? "black@0.0" : TextColor(clip.Style?.Fill?.Colors?.FirstOrDefault() ?? clip.TextColor)), N(size * 0.2),
-                    DrawtextBorder(clip.Style?.Outline, (double)options.Width / project.Width));
+                    DrawtextBorder(clip.Style?.Outline, (double)options.Width / project.Width),
+                    DrawtextShadow(clip.Style?.Shadow, (double)options.Width / project.Width));
             }
             if (clip.MediaKind == MediaKind.Image)
             {
@@ -513,6 +514,24 @@ namespace VideoEditor.Core
                 return "";
             var width = (int)Math.Max(1, Math.Round(Math.Min(outline.Width, 50) * scale));
             return string.Format(CultureInfo.InvariantCulture, ":borderw={0}:bordercolor={1}", width, FilterValue(TextColor(TextStyle.NormalizeColor(outline.Color, "#000000"))));
+        }
+
+        /// <summary>
+        /// 그리개 없이 drawtext로 그릴 때의 그림자(":shadowx=…:shadowy=…:shadowcolor=…"): 거리 × 출력 배율을 각도대로 옮긴 정수 픽셀,
+        /// 색은 그림자 색의 알파 × 불투명도(0xRRGGBB@알파). drawtext는 흐릴 수 없어 흐림은 무시하고, 채우기가 없어도 글자 모양 그림자가 생긴다.
+        /// 꺼졌거나 보이지 않으면(불투명도 0) 빈 문자열.
+        /// </summary>
+        internal static string DrawtextShadow(TextShadow shadow, double scale)
+        {
+            if (shadow == null || !shadow.Enabled || !double.IsFinite(shadow.Opacity) || !double.IsFinite(scale) || scale <= 0)
+                return "";
+            var color = TextStyle.NormalizeColor(shadow.Color, "#000000");
+            var alpha = Math.Min(1, shadow.Opacity) * (color.Length == 9 ? Convert.ToInt32(color.Substring(1, 2), 16) / 255.0 : 1);
+            if (!(alpha > 0))
+                return "";
+            var offset = TextEffects.ShadowOffset(Math.Min(shadow.Distance, 200) * scale, shadow.Angle);
+            return string.Format(CultureInfo.InvariantCulture, ":shadowx={0}:shadowy={1}:shadowcolor={2}",
+                (int)Math.Round(offset.X), (int)Math.Round(offset.Y), FilterValue("0x" + color.Substring(color.Length - 6) + "@" + N(alpha)));
         }
 
         /// <summary>"#RRGGBB" → FFmpeg 색(0xRRGGBB), "#AARRGGBB" → 0xRRGGBBAA. 잘못된 값은 흰색.</summary>
