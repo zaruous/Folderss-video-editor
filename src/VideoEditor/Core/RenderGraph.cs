@@ -278,6 +278,8 @@ namespace VideoEditor.Core
             {
                 if (track.Muted)
                     continue;
+                // 화면 클립 순서(전환은 같은 트랙의 바로 앞 화면 클립에서 바뀐다)
+                var visual = track.Kind == TrackKind.Video && !track.Subtitles ? track.Clips.Where(c => c.IsVisual).OrderBy(c => c.Start).ToList() : null;
                 foreach (var clip in track.Clips.OrderBy(c => c.Start))
                 {
                     var audible = track.Kind == TrackKind.Audio
@@ -285,8 +287,18 @@ namespace VideoEditor.Core
                         : clip.IsAudible && !clip.AudioOnly;
                     if (!audible)
                         continue;
+                    // 전환: 소리도 화면처럼 겹쳐 바뀐다 — 전환이 든 클립은 그동안 커지고, 뒤 클립이 전환으로 들어오면 이 클립 소리가 그 길이만큼 이어지며 준다
+                    long crossIn = 0, crossOut = 0;
+                    if (visual != null)
+                    {
+                        crossIn = Math.Min(clip.TransitionIn, clip.Duration);
+                        var index = visual.IndexOf(clip);
+                        var next = index >= 0 && index + 1 < visual.Count ? visual[index + 1] : null;
+                        if (next != null && next.Start == clip.End)
+                            crossOut = Math.Min(next.TransitionIn, next.Duration);
+                    }
                     var segStart = Math.Max(clip.Start, options.From);
-                    var segEnd = Math.Min(clip.End, options.To);
+                    var segEnd = Math.Min(clip.End + crossOut, options.To);
                     if (segEnd <= segStart)
                         continue;
                     var sourceStart = clip.SourceIn + (long)Math.Round((segStart - clip.Start) * clip.Speed);
@@ -296,7 +308,7 @@ namespace VideoEditor.Core
                     chain.AppendFormat(CultureInfo.InvariantCulture, "[{0}:a]asetpts=PTS-STARTPTS", input);
                     foreach (var tempo in Tempo(clip.Speed))
                         chain.Append(",atempo=").Append(N(tempo));
-                    chain.Append(",volume=").Append(VolumeExpression(rate, clip, segStart));
+                    chain.Append(",volume=").Append(VolumeExpression(rate, clip, segStart, crossIn, crossOut));
                     // 모노는 양쪽에 같은 크기로(자동 변환은 가운데 채널로 보고 -3dB로 나눈다)
                     if (clip.AudioChannels == 1)
                         chain.Append(",pan=stereo|c0=c0|c1=c0");
@@ -321,13 +333,14 @@ namespace VideoEditor.Core
         /// <summary>
         /// 음량 + 페이드 인/아웃을 시간식으로(eval=frame). t는 그리는 구간 시작부터의 초라서 클립 안 시간 = t + 앞에서 건너뛴 초.
         /// 구간이 페이드 도중에서 시작해도 맞는다.
+        /// 전환 교차 페이드(프레임): crossIn은 클립 처음부터 커지고(sin), crossOut은 클립 끝 뒤로 이어지며 준다(cos) — 둘을 겹치면 크기감이 일정하다.
         /// </summary>
-        internal static string VolumeExpression(FrameRate rate, Clip clip, long segStart)
+        internal static string VolumeExpression(FrameRate rate, Clip clip, long segStart, long crossIn = 0, long crossOut = 0)
         {
             var volume = N(Math.Max(0, Math.Min(2, clip.Volume)));
             var fadeIn = Math.Min(clip.FadeIn, clip.Duration);
             var fadeOut = Math.Min(clip.FadeOut, clip.Duration);
-            if (fadeIn <= 0 && fadeOut <= 0)
+            if (fadeIn <= 0 && fadeOut <= 0 && crossIn <= 0 && crossOut <= 0)
                 return volume;
             var offset = N(rate.ToSeconds(segStart - clip.Start));
             var expression = new StringBuilder("'").Append(volume);
@@ -335,6 +348,10 @@ namespace VideoEditor.Core
                 expression.AppendFormat(CultureInfo.InvariantCulture, "*min(1,max(0,(t+{0})/{1}))", offset, N(rate.ToSeconds(fadeIn)));
             if (fadeOut > 0)
                 expression.AppendFormat(CultureInfo.InvariantCulture, "*min(1,max(0,({0}-t-{1})/{2}))", N(rate.ToSeconds(clip.Duration)), offset, N(rate.ToSeconds(fadeOut)));
+            if (crossIn > 0)
+                expression.AppendFormat(CultureInfo.InvariantCulture, "*sin(PI/2*min(1,max(0,(t+{0})/{1})))", offset, N(rate.ToSeconds(crossIn)));
+            if (crossOut > 0)
+                expression.AppendFormat(CultureInfo.InvariantCulture, "*cos(PI/2*min(1,max(0,(t+{0}-{1})/{2})))", offset, N(rate.ToSeconds(clip.Duration)), N(rate.ToSeconds(crossOut)));
             expression.Append("':eval=frame");
             return expression.ToString();
         }

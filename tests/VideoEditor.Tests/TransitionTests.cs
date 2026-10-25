@@ -130,6 +130,52 @@ namespace VideoEditor.Tests
             Assert.DoesNotContain("xfade", plan.Filter);
         }
 
+        // ---------- 소리 ----------
+
+        private static RenderPlan BuildAudio(Project project, long from, long to)
+        {
+            return RenderGraph.Build(project, new RenderOptions { From = from, To = to, Width = 640, Height = 360, Video = false });
+        }
+
+        [Fact]
+        public void Transition_CrossfadesAudio_PreviousSoundContinuesUnder()
+        {
+            // 화면처럼 소리도 겹쳐 바뀐다: a 소리는 전환 길이만큼 더 읽어 cos로 줄고, b 소리는 sin으로 커진다(같은 크기감)
+            var (project, _, _) = TwoClips("WipeLeft");
+            var plan = BuildAudio(project, 0, 120);
+            Assert.Equal(new[] { "-ss", "0", "-t", "2.5", "-i", "a.mp4" }, plan.Inputs[0]);
+            Assert.Equal(new[] { "-ss", "0", "-t", "2", "-i", "b.mp4" }, plan.Inputs[1]);
+            Assert.Contains("[0:a]asetpts=PTS-STARTPTS,volume='1*cos(PI/2*min(1,max(0,(t+0-2)/0.5)))':eval=frame", plan.Filter);
+            Assert.Contains("[1:a]asetpts=PTS-STARTPTS,volume='1*sin(PI/2*min(1,max(0,(t+0)/0.5)))':eval=frame", plan.Filter);
+            Assert.Contains("adelay=2000:all=1[a1]", plan.Filter);
+        }
+
+        [Fact]
+        public void WindowInsideTransition_IncludesPreviousSound()
+        {
+            // 전환 도중(앞 클립이 끝난 뒤)부터 그려도 앞 클립 소리가 이어서 들린다
+            var (project, _, _) = TwoClips("Fade");
+            var plan = BuildAudio(project, 65, 66);
+            Assert.Equal(new[] { "-ss", "2.166667", "-t", "0.033333", "-i", "a.mp4" }, plan.Inputs[0]);
+            Assert.Contains("volume='1*cos(PI/2*min(1,max(0,(t+2.166667-2)/0.5)))':eval=frame", plan.Filter);
+            Assert.Contains("volume='1*sin(PI/2*min(1,max(0,(t+0.166667)/0.5)))':eval=frame", plan.Filter);
+        }
+
+        [Fact]
+        public void NoTransition_AudioUnchanged_AndAudioTracksAreNotCrossfaded()
+        {
+            var project = TestProjects.Empty(magnetic: false);
+            TestProjects.Add(project, project.MainTrack, 0, 60, "a.mp4");
+            TestProjects.Add(project, project.MainTrack, 60, 60, "b.mp4");
+            var music = TimelineEdits.CreateClip(TestProjects.Audio(), FrameRate.Default, 0, 0);
+            music.SourceOut = 120;
+            TimelineEdits.Place(project, project.AudioTracks[0], music, 0);
+            var plan = BuildAudio(project, 0, 120);
+            Assert.DoesNotContain("sin(", plan.Filter);
+            Assert.DoesNotContain("cos(", plan.Filter);
+            Assert.Equal(new[] { "-ss", "0", "-t", "2", "-i", "a.mp4" }, plan.Inputs[0]);
+        }
+
         [Fact]
         public void ExpressionTransition_UsesCustomXfade()
         {
@@ -532,6 +578,57 @@ namespace VideoEditor.Tests
             Assert.True(IsRed(Pixel(mid, 160, 120)));
             var corner = Pixel(mid, 2, 2);
             Assert.True(corner.R < 30 && corner.G < 30 && corner.B < 30, "모서리는 아직 검정 " + corner);
+        }
+
+        [FfmpegFact]
+        public async Task Transition_PreviousSoundFadesOutUnderTheNextClip()
+        {
+            // 소리 있는 동영상(앞 1초만 씀) [0, 30) → 사진 [30, 90), 사진 앞에 1초 전환: 1~2초에도 동영상 소리가 줄어들며 이어지고 그 뒤로는 조용하다
+            var project = TestProjects.Empty();
+            project.Width = 320;
+            project.Height = 240;
+            var video = TimelineEdits.CreateClip(FfmpegMedia.Probe(FfmpegMedia.TestVideo), project.Rate, 0, 0);
+            video.SourceOut = video.SourceIn + 30;
+            TimelineEdits.Place(project, project.MainTrack, video, 0);
+            var red = TimelineEdits.CreateClip(FfmpegMedia.Probe(FfmpegMedia.RedImage), project.Rate, 0, 60);
+            TimelineEdits.Place(project, project.MainTrack, red, 999);
+            TimelineEdits.SetTransition(project, red, "WipeLeft", 30);
+            Assert.Equal(30, red.Start);
+            string script;
+            byte[] pcm;
+            using (var process = PreviewRenderer.StartAudio(FfmpegMedia.Tool, project, 0, 90, out script))
+            {
+                var errors = process.StandardError.ReadToEndAsync();
+                using (var memory = new MemoryStream())
+                {
+                    await process.StandardOutput.BaseStream.CopyToAsync(memory);
+                    pcm = memory.ToArray();
+                }
+                await process.WaitForExitAsync();
+                Assert.True(process.ExitCode == 0, await errors);
+            }
+            RenderCommand.TryDelete(script);
+            // 48kHz 16비트 스테레오: 구간의 왼쪽 채널 크기(RMS)
+            double Rms(double from, double to)
+            {
+                double sum = 0;
+                var count = 0;
+                for (var i = (int)(from * 48000); i < (int)(to * 48000); i++, count++)
+                {
+                    var value = BitConverter.ToInt16(pcm, i * 4) / 32768.0;
+                    sum += value * value;
+                }
+                return Math.Sqrt(sum / count);
+            }
+            var full = Rms(0.25, 0.75);
+            var fading = Rms(1.25, 1.5);
+            var after = Rms(2.2, 2.8);
+            _out.WriteLine("앞 " + full.ToString("0.000") + " · 전환 중 " + fading.ToString("0.000") + " · 뒤 " + after.ToString("0.000"));
+            // 시험 소리(sine)는 크기 1/8 — RMS 약 0.088
+            Assert.True(full > 0.05, "앞 소리 " + full);
+            // cos(π/8~π/4) ≈ 0.92~0.71
+            Assert.InRange(fading / full, 0.6, 0.97);
+            Assert.True(after < full * 0.02, "전환 뒤 소리 " + after);
         }
 
         [FfmpegFact]

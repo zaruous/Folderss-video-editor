@@ -211,7 +211,7 @@ namespace VideoEditor.Ui
             panel.Children.Add(NumberRow("전환 길이", "PropTransition", 0, 10, "초", id,
                 c => _session.Project.Rate.ToSeconds(c.TransitionIn),
                 (c, v) => c.TransitionIn = Math.Min(c.Duration, _session.Project.Rate.ToFrames(Math.Max(0, v)))));
-            var hint = UiKit.Label("전환: 같은 트랙의 바로 앞 클립에서 이 길이만큼 겹쳐 바뀝니다(앞 클립이 밑에 더 그려지고 타임라인 위치는 그대로). 앞 클립이 없으면 바탕에서 바뀝니다.", true);
+            var hint = UiKit.Label("전환: 같은 트랙의 바로 앞 클립에서 이 길이만큼 겹쳐 바뀝니다(앞 클립이 밑에 더 그려지고 타임라인 위치는 그대로). 소리도 그동안 겹쳐 바뀝니다. 앞 클립이 없으면 바탕에서 바뀝니다.", true);
             hint.TextWrapping = TextWrapping.Wrap;
             hint.Margin = new Thickness(0, 4, 0, 8);
             panel.Children.Add(hint);
