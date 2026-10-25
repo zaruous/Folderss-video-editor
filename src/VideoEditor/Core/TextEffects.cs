@@ -49,6 +49,54 @@ namespace VideoEditor.Core
             return double.IsFinite(blur) && double.IsFinite(effectScale) && blur > 0 && effectScale > 0 ? Math.Min(MaxBlurRadius, radius) : 0;
         }
 
+        /// <summary>
+        /// 광선 펜 두께(픽셀) = (윤곽선 두께 + 크기) × 효과 배율 × 2. 그리개는 글자 윤곽을 이 펜으로 그리고 채운다 — 펜은 윤곽 양쪽으로 반씩이라
+        /// 광선이 본문 가장자리(윤곽선을 켰으면 그 바깥 가장자리)에서 크기만큼 더 나간다. 윤곽선이 꺼졌으면 outlineWidth 0.
+        /// 크기·효과 배율이 0이거나 잘못된 값이면 0(광선을 그리지 않음), 잘못된 윤곽선 두께는 0으로 본다.
+        /// </summary>
+        public static double GlowPenThickness(double outlineWidth, double size, double effectScale)
+        {
+            var scale = Length(effectScale);
+            var glow = Length(size) * scale;
+            if (!(glow > 0) || !double.IsFinite(glow))
+                return 0;
+            var thickness = (Length(outlineWidth) * scale + glow) * 2;
+            return double.IsFinite(thickness) ? thickness : 0;
+        }
+
+        /// <summary>광선 흐림 반지름(픽셀): 크기의 절반을 <see cref="BlurRadius"/>로(× 효과 배율, 상한 <see cref="MaxBlurRadius"/>).</summary>
+        public static double GlowBlurRadius(double size, double effectScale)
+        {
+            return BlurRadius(size / 2, effectScale);
+        }
+
+        /// <summary>
+        /// 광선이 본문 가장자리(윤곽선을 켰으면 그 바깥 가장자리, 각지게면 모서리 끝) 밖으로 번지는 거리(픽셀): 크기 × 효과 배율 + 흐림 반지름.
+        /// 여백 계산(<see cref="StyledTextLayout.Spread"/>)은 여기에 윤곽선 범위(<see cref="OutlineExtent"/>)를 더한다.
+        /// </summary>
+        public static double GlowExtent(double size, double effectScale)
+        {
+            return GlowPenThickness(0, size, effectScale) / 2 + GlowBlurRadius(size, effectScale);
+        }
+
+        /// <summary>
+        /// 각지게 윤곽선 위 광선 펜의 이음 한도(펜 두께 절반의 배수) = (윤곽선 두께 × <see cref="StyledTextLayout.MiterLimit"/> + 크기) / (윤곽선 두께 + 크기).
+        /// 광선 펜은 반 두께가 윤곽선 두께 + 크기라 같은 한도면 모서리 끝이 크기의 두 배만큼 더 나가므로, 윤곽선 모서리 끝 + 크기까지만 나가게 줄인다(1~한도).
+        /// </summary>
+        public static double GlowMiterLimit(double outlineWidth, double size)
+        {
+            var width = Length(outlineWidth);
+            var glow = Length(size);
+            var limit = (width * StyledTextLayout.MiterLimit + glow) / (width + glow);
+            return double.IsFinite(limit) ? Math.Max(1, Math.Min(StyledTextLayout.MiterLimit, limit)) : StyledTextLayout.MiterLimit;
+        }
+
+        /// <summary>길이로 쓸 수 없는 값(음수·NaN·무한대)은 0.</summary>
+        private static double Length(double value)
+        {
+            return double.IsFinite(value) && value > 0 ? value : 0;
+        }
+
         /// <summary>정지점 위치: 0~1을 고르게 나눈다(색이 1개면 [0]).</summary>
         public static double[] GradientStops(int count)
         {

@@ -20,7 +20,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 namespace VideoEditor.UiTests
 {
     /// <summary>
-    /// 꾸민 글자(이슈 #3·#13·#14·#15·#16·#17·#21): WPF 그리개의 픽셀, 꾸미기 탭(스타일 모음·글꼴·채우기·윤곽선·그림자·휘기), 미리 보기 = 내보내기.
+    /// 꾸민 글자(이슈 #3·#13·#14·#15·#16·#17·#18·#21): WPF 그리개의 픽셀, 꾸미기 탭(스타일 모음·글꼴·채우기·윤곽선·그림자·광선·휘기), 미리 보기 = 내보내기.
     /// 그리개·요청은 플러그인 형식이라 리플렉션으로 만들고, 요청은 JSON을 플러그인의 TextImageRequest로 역직렬화해 만든다.
     /// </summary>
     public class StyledTextTests
@@ -501,6 +501,194 @@ namespace VideoEditor.UiTests
             // 효과 배율 2: 거리는 두 배, 흐림 반지름은 상한 100
             var scaled = await Render(rasterizer, Request(rasterizer, "WAV가", 3840, 2160, 240, WhiteFill + "," + Shadow(200, 30, 100), 2), "shadow-max-scale-2");
             Assert.Equal(0, scaled.BorderInk());
+        }
+
+        private static string Glow(double size, double opacity = 1, string color = "#FFFF00", bool enabled = true)
+        {
+            string N(double value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return "\"Glow\":{\"Enabled\":" + (enabled ? "true" : "false") + ",\"Color\":\"" + color + "\",\"Size\":" + N(size) + ",\"Opacity\":" + N(opacity) + "}";
+        }
+
+        private const string NoFill = "\"Fill\":{\"Kind\":\"None\",\"Colors\":[\"#FFFFFF\"]}";
+
+        /// <summary>노랑 계열 광선 픽셀: 조금이라도 칠했고(알파 &gt; 0) 빨강·초록이 밝고 파랑이 어둡다(흰 글자와 구별).</summary>
+        private static bool Yellowish((int R, int G, int B, int A) p)
+        {
+            return p.A > 0 && p.R > 180 && p.G > 180 && p.B < 100;
+        }
+
+        /// <summary>노랑 계열 픽셀 수와 그 가운데 가장 큰 알파.</summary>
+        private static (int Count, int MaxAlpha) Yellow(Png png)
+        {
+            int count = 0, max = 0;
+            for (var y = 0; y < png.Height; y++)
+            {
+                for (var x = 0; x < png.Width; x++)
+                {
+                    var p = png.Pixel(x, y);
+                    if (!Yellowish(p))
+                        continue;
+                    count++;
+                    max = Math.Max(max, p.A);
+                }
+            }
+            return (count, max);
+        }
+
+        /// <summary>y 줄에서 가장 오른쪽 흰(불투명하고 파랑까지 밝은) 픽셀의 x — 노랑 광선은 건너뛴다.</summary>
+        private static int WhiteRight(Png png, int y)
+        {
+            for (var x = png.Width - 1; x >= 0; x--)
+            {
+                var p = png.Pixel(x, y);
+                if (p.A > 200 && p.R > 200 && p.G > 200 && p.B > 200)
+                    return x;
+            }
+            return -1;
+        }
+
+        /// <summary>y 줄에서 조금이라도 칠한(알파 &gt; 0) 가장 오른쪽 x.</summary>
+        private static int LastInk(Png png, int y)
+        {
+            for (var x = png.Width - 1; x >= 0; x--)
+            {
+                if (png.Alpha(x, y) > 0)
+                    return x;
+            }
+            return -1;
+        }
+
+        [UiFact]
+        public async Task Rasterizer_Glow_RingOutsideTheGlyph_WiderWithSize()
+        {
+            // 흰 글자 + 노랑 광선(100%): 가운데 줄에서 글자 가장자리 E 바깥 5~15px 고리가 노랑 계열(알파 > 0)
+            var rasterizer = NewRasterizer();
+            var small = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill + "," + Glow(20)), "glow-20");
+            var large = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill + "," + Glow(40)), "glow-40");
+            var edges = new System.Collections.Generic.List<int>();
+            foreach (var (png, size) in new[] { (small, 20), (large, 40) })
+            {
+                var middle = png.Height / 2;
+                var edge = WhiteRight(png, middle);
+                edges.Add(edge);
+                _out.WriteLine("광선 " + size + ": " + png.Width + "×" + png.Height + " · 가장자리 " + edge + " · E+5 " + png.Pixel(edge + 5, middle) + " · E+15 " + png.Pixel(edge + 15, middle)
+                    + " · 마지막 칠한 픽셀 E+" + (LastInk(png, middle) - edge) + " · 노랑 픽셀 " + Yellow(png).Count + " · 알파 > 0 " + png.InkCount());
+                for (var d = 5; d <= 15; d++)
+                    Assert.True(Yellowish(png.Pixel(edge + d, middle)), "광선 " + size + " E+" + d + " " + png.Pixel(edge + d, middle));
+                // 글자는 광선 위에 그대로(가운데는 흰색)
+                var center = png.Pixel(png.Width / 2, middle);
+                Assert.True(center.A == 255 && center.B > 230, "글자 가운데 " + center);
+                Assert.Equal(0, png.BorderInk());
+            }
+            // 광선은 크기 + 흐림 반지름(크기 / 2)까지 번진다: 20이면 E+35에 없고, 40이면 E+35도 반 넘게 진하다
+            Assert.Equal(0, small.Alpha(edges[0] + 35, small.Height / 2));
+            Assert.True(large.Alpha(edges[1] + 35, large.Height / 2) > 128);
+            // 크기 40이면 고리가 넓다 — 노랑 픽셀·알파 > 0 픽셀이 늘어난다
+            Assert.True(Yellow(large).Count > Yellow(small).Count * 3 / 2, "노랑 픽셀 20 " + Yellow(small).Count + " · 40 " + Yellow(large).Count);
+            Assert.True(large.InkCount() > small.InkCount() * 5 / 4);
+
+            // 끄면 노랑 픽셀이 없다
+            var off = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill), "glow-none");
+            Assert.Equal(0, Yellow(off).Count);
+        }
+
+        [UiFact]
+        public async Task Rasterizer_GlowOff_ByteIdenticalToNoGlow()
+        {
+            var rasterizer = NewRasterizer();
+            const string text = "가나다 ABC\n광선";
+            // 광선 값이 없는 요청(#17까지와 같은 결과)
+            await Render(rasterizer, Request(rasterizer, text, style: Outline(4)), "glow-base");
+            var expected = File.ReadAllBytes(Path.Combine(Folder(), "glow-base.png"));
+            // 꺼져 있으면 색·크기·불투명도가 달라도, 켜져 있어도 크기가 0이면 광선 없이 그린 것과 바이트까지 같다
+            foreach (var (name, glow) in new[] { ("glow-disabled", Glow(77, 0.3, "#FF0000", false)), ("glow-disabled-max", Glow(100, 1, "#00FF00", false)), ("glow-size-0", Glow(0)) })
+            {
+                await Render(rasterizer, Request(rasterizer, text, style: Outline(4) + "," + glow), name);
+                Assert.True(expected.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), name + ".png"))), name + "가 광선 없음과 다르다");
+            }
+            // 켜면 다르다(비교가 헛돌지 않는지)
+            await Render(rasterizer, Request(rasterizer, text, style: Outline(4) + "," + Glow(12)), "glow-on");
+            Assert.False(expected.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "glow-on.png"))));
+        }
+
+        [UiFact]
+        public async Task Rasterizer_Glow_SurroundsOutline_ScalesWithEffect_MaxStaysInside()
+        {
+            // 흰 채우기 + 빨간 윤곽선 8 + 노랑 광선 20: 광선은 윤곽선 바깥 가장자리부터 — E+2~E+6은 빨간 윤곽선 그대로, E+10~E+24는 노랑
+            var rasterizer = NewRasterizer();
+            var plain = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill + "," + Glow(20)), "glow-plain");
+            var outlined = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200,
+                style: WhiteFill + "," + Outline(8).Replace("\"#000000\"", "\"#FF0000\"") + "," + Glow(20)), "glow-outline");
+            var middle = outlined.Height / 2;
+            var edge = WhiteRight(outlined, middle);
+            _out.WriteLine("윤곽선 + 광선: 가장자리 " + edge + " · E+4 " + outlined.Pixel(edge + 4, middle) + " · E+12 " + outlined.Pixel(edge + 12, middle));
+            for (var d = 2; d <= 6; d++)
+            {
+                var p = outlined.Pixel(edge + d, middle);
+                Assert.True(p.A == 255 && p.R > 200 && p.G < 60 && p.B < 60, "윤곽선 E+" + d + " " + p);
+            }
+            for (var d = 10; d <= 24; d++)
+                Assert.True(Yellowish(outlined.Pixel(edge + d, middle)), "광선 E+" + d + " " + outlined.Pixel(edge + d, middle));
+            // 윤곽선이 있으면 광선이 윤곽선 두께(8px)만큼 더 바깥까지 번진다
+            var plainReach = LastInk(plain, plain.Height / 2) - WhiteRight(plain, plain.Height / 2);
+            var outlinedReach = LastInk(outlined, middle) - edge;
+            _out.WriteLine("번지는 거리: 광선만 " + plainReach + " · 윤곽선 8 + 광선 " + outlinedReach);
+            Assert.InRange(outlinedReach - plainReach, 8 - 2, 8 + 2);
+
+            // 효과 배율 2(예: 1080p 프로젝트를 4K로 내보낼 때)면 펜 두께·흐림이 모두 두 배 — 광선 20 × 배율 2 = 광선 40 × 배율 1(글자 크기는 그대로)
+            await Render(rasterizer, Request(rasterizer, "■ A", fontSize: 120, style: WhiteFill + "," + Glow(20), effectScale: 2), "glow-20-scale-2");
+            await Render(rasterizer, Request(rasterizer, "■ A", fontSize: 120, style: WhiteFill + "," + Glow(40)), "glow-40-scale-1");
+            await Render(rasterizer, Request(rasterizer, "■ A", fontSize: 120, style: WhiteFill + "," + Glow(20)), "glow-20-scale-1");
+            var doubled = File.ReadAllBytes(Path.Combine(Folder(), "glow-20-scale-2.png"));
+            Assert.True(doubled.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "glow-40-scale-1.png"))), "배율 2 = 크기 두 배");
+            Assert.False(doubled.AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(Folder(), "glow-20-scale-1.png"))));
+
+            // 가장 큰 광선(100) + 가장 굵은 윤곽선(각지게·둥글게 50), 속 빈 글자, 효과 배율 2도 그림 가장자리 1px 줄에 닿지 않는다(캔버스가 충분히 클 때)
+            foreach (var (name, style, scale) in new[]
+            {
+                ("glow-max-miter", WhiteFill + "," + Outline(50, "Miter") + "," + Glow(100), 1.0),
+                ("glow-max-round", WhiteFill + "," + Outline(50, "Round") + "," + Glow(100), 1.0),
+                ("glow-max-hollow", NoFill + "," + WhiteOutline(50, "Miter") + "," + Glow(100), 1.0),
+                ("glow-max-scale-2", WhiteFill + "," + Outline(50, "Miter") + "," + Glow(100), 2.0)
+            })
+            {
+                var max = await Render(rasterizer, Request(rasterizer, "WAV가", 3840, 2160, 120 * scale, style, scale), name);
+                _out.WriteLine(name + " " + max.Width + "×" + max.Height + " · 노랑 픽셀 " + Yellow(max).Count);
+                Assert.True(Yellow(max).Count > 1000, name + " 광선이 있어야 한다");
+                Assert.Equal(0, max.BorderInk());
+            }
+        }
+
+        [UiFact]
+        public async Task Rasterizer_GlowOpacity_HalvesAlpha_HollowGlowsAroundTheRing()
+        {
+            // 불투명도 50%면 광선 최대 알파가 절반쯤 — 펜과 채우기가 겹친 곳도 더 진하지 않다. 광선 색의 알파(#80…)도 불투명도처럼 곱한다
+            var rasterizer = NewRasterizer();
+            var full = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill + "," + Glow(20)), "glow-opacity-100");
+            var half = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill + "," + Glow(20, 0.5)), "glow-opacity-50");
+            var tinted = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: WhiteFill + "," + Glow(20, 1, "#80FFFF00")), "glow-color-alpha");
+            _out.WriteLine("광선 최대 알파 100% " + Yellow(full).MaxAlpha + " · 50% " + Yellow(half).MaxAlpha + " · 색 알파 #80 " + Yellow(tinted).MaxAlpha);
+            Assert.True(Yellow(full).MaxAlpha >= 250);
+            Assert.InRange(Yellow(half).MaxAlpha, 120, 136);
+            Assert.InRange(Yellow(tinted).MaxAlpha, 120, 136);
+            Assert.Equal(255, half.Pixel(half.Width / 2, half.Height / 2).A);
+
+            // 속 빈 글자(채우기 없음 + 흰 윤곽선 8) + 광선 20(50%): 광선은 고리 둘레만 — 고리 바깥(R+3)과 글자 속(고리 안쪽 가장자리에서 10px 안)은 노랑 50%
+            // (글자 밖은 두 펜이 겹쳐도 더 진하지 않음), 글자 가운데는 비었다
+            var hollow = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: NoFill + "," + WhiteOutline(8) + "," + Glow(20, 0.5)), "glow-hollow");
+            var middle = hollow.Height / 2;
+            var ring = WhiteRight(hollow, middle);
+            var outside = hollow.Pixel(ring + 3, middle);
+            var inside = hollow.Pixel(ring - 8 - 10, middle);
+            _out.WriteLine("속 빈 글자: 고리 바깥 가장자리 " + ring + " · R+3 " + outside + " · 글자 속 " + inside + " · 가운데 " + hollow.Pixel(hollow.Width / 2, middle));
+            Assert.True(Yellowish(outside) && outside.A >= 120 && outside.A <= 136, "고리 바깥 " + outside);
+            Assert.True(Yellowish(inside) && inside.A >= 120 && inside.A <= 136, "글자 속 " + inside);
+            Assert.Equal(0, hollow.Alpha(hollow.Width / 2, middle));
+            Assert.Equal(0, hollow.BorderInk());
+
+            // 채우기도 윤곽선도 없으면(칠하는 것이 없으면) 광선도 없다
+            var none = await Render(rasterizer, Request(rasterizer, "■", fontSize: 200, style: NoFill + "," + Glow(20)), "glow-nothing");
+            Assert.Equal(0, none.InkCount());
         }
 
         [UiFact]
@@ -1252,6 +1440,108 @@ namespace VideoEditor.UiTests
                 {
                     Assert.False(Ui.ById<CheckBox>(window, "StyleShadowOn").IsChecked == true);
                     Assert.False(Ui.ById<TextBox>(window, "StyleShadowDistance").IsEnabled);
+                });
+                Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        private static object GlowOf(Window window, object id)
+        {
+            return Get(StyleOf(window, id), "Glow");
+        }
+
+        [EditorFact]
+        public async Task StyleTab_Glow_ChangesPreview_SizeDragIsOneUndoStep()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                var id = await AddStyledText(ui, window, "광선 ABC");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                await ui.WaitFor(() => Ui.ById<CheckBox>(window, "StyleGlowOn"), Wait, "광선 칸");
+                var fields = new[] { "StyleGlowSize", "StyleGlowOpacity" };
+                var before = ui.Run(() =>
+                {
+                    // 꺼져 있으면 색·크기·불투명도는 고칠 수 없고, 기본값만 보인다(보이기만 해서는 스타일이 생기지 않음)
+                    Assert.False(Ui.ById<CheckBox>(window, "StyleGlowOn").IsChecked == true);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleGlowColor").IsEnabled);
+                    foreach (var field in fields)
+                        Assert.False(Ui.ById<TextBox>(window, field).IsEnabled, field);
+                    Assert.Equal("#FFD54F", Ui.ById<TextBox>(window, "StyleGlowColor").Text);
+                    Assert.Equal(new[] { "12", "80" }, fields.Select(f => Ui.ById<TextBox>(window, f).Text).ToArray());
+                    return PreviewPixels(window);
+                });
+                Assert.Null(ui.Run(() => StyleOf(window, id)));
+
+                // 켜기 → 스타일이 생기고(노랑 #FFD54F 12px 80%) 그리개로 그린다 — 기본 광선 색은 검정 미리 보기 바탕에서도 보인다
+                ui.Run(() => Ui.ClickToggle(Ui.ById<CheckBox>(window, "StyleGlowOn")));
+                await ui.WaitUntil(() => StyleOf(window, id) is object style && (bool)Get(Get(style, "Glow"), "Enabled"), Wait, "광선 켜기");
+                await ui.WaitUntil(() => Differs(before, PreviewPixels(window)), Wait, "광선 미리 보기");
+                await Task.Delay(500);
+                var on = ui.Run(() =>
+                {
+                    Assert.True(Ui.ById<TextBox>(window, "StyleGlowColor").IsEnabled);
+                    foreach (var field in fields)
+                        Assert.True(Ui.ById<TextBox>(window, field).IsEnabled, field);
+                    Assert.Equal("#FFD54F", (string)Get(GlowOf(window, id), "Color"));
+                    return PreviewPixels(window);
+                });
+
+                // 크기 슬라이더를 끄는 동안(값 여러 번)은 실행 취소 한 단계 — 미리 보기는 광선이 더 넓어진다
+                ui.Run(() =>
+                {
+                    var slider = Ui.ById<Slider>(window, "StyleGlowSizeSlider");
+                    foreach (var value in new[] { 20.0, 30.0, 40.0 })
+                        slider.Value = value;
+                });
+                await ui.WaitUntil(() => Math.Abs((double)Get(GlowOf(window, id), "Size") - 40) < 1e-6, Wait, "크기 40");
+                await ui.WaitUntil(() => Differs(on, PreviewPixels(window)), Wait, "크기 미리 보기");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "style-tab-glow"));
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => Math.Abs((double)Get(GlowOf(window, id), "Size") - 12) < 1e-6, Wait, "실행 취소 한 번에 크기 12");
+                Assert.True(ui.Run(() => (bool)Get(GlowOf(window, id), "Enabled")));
+                await ui.WaitUntil(() => !Differs(on, PreviewPixels(window)), Wait, "크기 12 미리 보기로 돌아옴");
+
+                // 불투명도 칸에 50(%) → 0.5, 색을 초록으로 → 미리 보기가 바뀐다
+                ui.Run(() =>
+                {
+                    var box = Ui.ById<TextBox>(window, "StyleGlowOpacity");
+                    Ui.Focus(box);
+                    box.Text = "50";
+                    Ui.Press(box, System.Windows.Input.Key.Enter);
+                });
+                await ui.WaitUntil(() => Math.Abs((double)Get(GlowOf(window, id), "Opacity") - 0.5) < 1e-6, Wait, "불투명도 50%");
+                ui.Run(() =>
+                {
+                    var hex = Ui.ById<TextBox>(window, "StyleGlowColor");
+                    Ui.Focus(hex);
+                    hex.Text = "22c55e";
+                    Ui.Press(hex, System.Windows.Input.Key.Enter);
+                });
+                await ui.WaitUntil(() => (string)Get(GlowOf(window, id), "Color") == "#22C55E", Wait, "초록 광선");
+                ui.Run(() => Ui.Focus(Canvas(window)));
+                await ui.WaitUntil(() => Differs(on, PreviewPixels(window)), Wait, "불투명도·색 미리 보기");
+
+                // 실행 취소 두 번(색·불투명도) → 처음 켠 값, 한 번 더(켜기) → 스타일 없던 처음으로
+                foreach (var step in new[] { "색", "불투명도" })
+                    ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => Math.Abs((double)Get(GlowOf(window, id), "Opacity") - 0.8) < 1e-6, Wait, "불투명도 실행 취소");
+                Assert.Equal("#FFD54F", ui.Run(() => (string)Get(GlowOf(window, id), "Color")));
+                await ui.WaitUntil(() => !Differs(on, PreviewPixels(window)), Wait, "켠 미리 보기로 돌아옴");
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => StyleOf(window, id) == null, Wait, "처음으로");
+                await ui.WaitUntil(() => !Differs(before, PreviewPixels(window)), Wait, "처음 미리 보기");
+                ui.Run(() =>
+                {
+                    Assert.False(Ui.ById<CheckBox>(window, "StyleGlowOn").IsChecked == true);
+                    Assert.False(Ui.ById<TextBox>(window, "StyleGlowSize").IsEnabled);
                 });
                 Assert.True(ui.Run(() => (bool)Get(Session(window), "CanRedo")), "다시 실행이 남아 있어야 한다");
                 Assert.Empty(ui.TakeErrors());
