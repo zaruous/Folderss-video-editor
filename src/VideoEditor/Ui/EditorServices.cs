@@ -60,6 +60,18 @@ namespace VideoEditor.Ui
         public string YtDlpFolder { get { return Path.Combine(Manager.DataDirectory, "yt-dlp"); } }
         public string DenoFolder { get { return Path.Combine(Manager.DataDirectory, "deno"); } }
 
+        /// <summary>음성 인식(whisper.cpp)과 모델을 두는 곳(데이터 폴더\whisper, 모델은 그 아래 models).</summary>
+        public string WhisperFolder { get { return Path.Combine(Manager.DataDirectory, "whisper"); } }
+
+        private WhisperTool _whisper;
+
+        /// <summary>받아 둔 whisper.cpp(없으면 null).</summary>
+        public WhisperTool Whisper
+        {
+            get { return _whisper != null && File.Exists(_whisper.CliPath) ? _whisper : (_whisper = WhisperTool.Locate(WhisperFolder)); }
+            set { _whisper = value; }
+        }
+
         /// <summary>유튜브 약관·권리 안내를 확인했는지(한 번 확인하면 설정에 기억).</summary>
         public bool YtDlpNoticeAccepted
         {

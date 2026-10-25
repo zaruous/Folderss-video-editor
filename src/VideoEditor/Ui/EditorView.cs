@@ -331,6 +331,7 @@ namespace VideoEditor.Ui
                 Item("미디어 가져오기…", "Ctrl+I", _commands.Import),
                 Item("URL에서 가져오기…", "", _commands.ImportFromUrl),
                 Item("자막 가져오기…", "", _commands.ImportSubtitles),
+                Item("음성 인식으로 자막 만들기…", "", () => _ = _commands.SpeechToText()),
                 Item("내보내기…", "Ctrl+E", _commands.Export),
                 null,
                 Item("프로젝트 설정…", "", _commands.ProjectSettings),
@@ -421,6 +422,8 @@ namespace VideoEditor.Ui
                 menu.Items.Add(Item("속도·길이…", "Ctrl+R", _commands.ChangeSpeed));
                 if (clip.Kind == ClipKind.Media && clip.HasVideo && clip.HasAudio && !clip.AudioDetached)
                     menu.Items.Add(Item("오디오 분리", "Ctrl+Alt+D", _commands.DetachAudio));
+                if (clip.Kind == ClipKind.Media && clip.HasAudio)
+                    menu.Items.Add(Item("이 클립 소리로 자막 만들기…", "", () => _ = _commands.SpeechToText(clip.Id)));
                 if (clip.Kind == ClipKind.Media)
                     menu.Items.Add(Item("탐색기에서 보기", "Ctrl+Shift+R", () => _commands.Reveal(clip.Path)));
             }

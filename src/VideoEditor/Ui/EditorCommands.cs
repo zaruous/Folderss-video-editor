@@ -565,6 +565,60 @@ namespace VideoEditor.Ui
                 "자막 " + cues.Count + "개를 가져왔습니다(" + Path.GetFileName(path) + ").") ? cues.Count : 0;
         }
 
+        /// <summary>
+        /// [음성 인식으로 자막 만들기]: 고른 클립 중 소리 있는 것이 있으면 그 클립만, 없으면 타임라인 전체 소리를 이 PC에서 인식해(whisper.cpp)
+        /// 새 자막 트랙에 큐로 놓는다. 시각은 타임라인 위치(클립이면 클립 시작·속도에 맞춤). clipId를 주면 그 클립(오른쪽 메뉴).
+        /// </summary>
+        public async Task SpeechToText(string clipId = null)
+        {
+            _player.Stop();
+            var clip = (clipId != null ? new[] { Project.FindClip(clipId) } : (IEnumerable<Clip>)_session.SelectedClips)
+                .FirstOrDefault(c => c != null && c.Kind == ClipKind.Media && c.HasAudio);
+            var project = Project;
+            if (clip == null && !project.AllClips.Any(c => c.Kind == ClipKind.Media && c.HasAudio))
+            {
+                Status("소리가 있는 클립이 없습니다. 내레이션(동영상·오디오)을 타임라인에 놓고 다시 하세요.");
+                return;
+            }
+            var tool = await NeedTool();
+            if (tool == null)
+                return;
+            // 창이 떠 있는 동안 인식하므로 지금 상태의 사본으로(편집과 섞이지 않게)
+            var copy = ProjectFile.FromSnapshot(ProjectFile.Snapshot(project));
+            var target = clip != null ? copy.FindClip(clip.Id) : null;
+            var rate = copy.Rate;
+            var source = target != null
+                ? "고른 클립 — " + target.Name + " (" + rate.Timecode(target.Start) + " ~ " + rate.Timecode(target.End) + ")"
+                : "타임라인 전체 소리 (00:00:00:00 ~ " + rate.Timecode(copy.Duration) + ", 모든 트랙을 섞은 것)";
+            SpeechToTextDialog dialog;
+            try
+            {
+                dialog = new SpeechToTextDialog(_services, source, target == null, (whisper, model, language, progress, cancellation) => target != null
+                    ? SpeechRecognizer.RecognizeClip(tool, whisper, model, language, target, rate, progress, cancellation)
+                    : SpeechRecognizer.RecognizeTimeline(tool, whisper, model, language, copy, progress, cancellation));
+                var owner = UiKit.OwnerOf(_owner);
+                if (owner != null && owner.IsLoaded)
+                    dialog.Owner = owner;
+            }
+            catch (Exception ex)
+            {
+                Status("음성 인식 창을 열지 못했습니다: " + ex.Message);
+                return;
+            }
+            if (dialog.ShowDialog() != true || dialog.Cues == null)
+                return;
+            var cues = dialog.Cues;
+            if (cues.Count == 0)
+            {
+                Status("말소리를 찾지 못했습니다(" + dialog.Model.Label + " 모델). 말이 있는 클립을 골랐는지, 인식할 말이 맞는지 확인하세요.");
+                return;
+            }
+            var seconds = (int)Math.Round(dialog.Elapsed.TotalSeconds);
+            Run(p => TimelineEdits.ImportSubtitles(p, cues),
+                "음성 인식으로 자막 " + cues.Count + "개를 만들었습니다(" + dialog.Model.Label + " 모델, " + (seconds >= 60 ? seconds / 60 + "분 " : "") + seconds % 60 + "초). "
+                + "틀린 글은 큐를 골라 속성에서 고치세요.");
+        }
+
         /// <summary>[URL에서 가져오기]: 직접 링크·유튜브 주소 또는 유튜브 검색으로 받아 미디어 목록에 더한다.</summary>
         public void ImportFromUrl()
         {
