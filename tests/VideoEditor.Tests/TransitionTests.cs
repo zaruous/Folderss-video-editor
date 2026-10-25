@@ -186,6 +186,26 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void Playback_MixesExpressionGroupsSmaller_AndScalesBack()
+        {
+            // 재생 중 수식 전환 묶음은 줄인 캔버스(640×360 → 2분의 1)에서 섞고 얹기 전에 늘인다 — 줄이기는 틀 계산에서 바로(크기 바꾸기 두 번 잇지 않음)
+            var (project, _, _) = TwoClips("Heart");
+            var playback = RenderGraph.Build(project, new RenderOptions { From = 0, To = 120, Width = 640, Height = 360, Audio = false, Playback = true }).Filter;
+            Assert.Contains("scale=w=320:h=180:force_original_aspect_ratio=decrease,format=rgba,setpts=PTS-STARTPTS[s0]", playback);
+            Assert.Contains("color=c=black@0.0:s=320x180:", playback);
+            Assert.Contains("[x1]unpremultiply=inplace=1,scale=640:360,format=rgba,", playback);
+            Assert.DoesNotContain("iw/2", playback);
+            // 멈춘 화면 한 장·내보내기, 내장 효과는 원래 크기
+            Assert.Contains("color=c=black@0.0:s=640x360:", Build(project, 0, 120).Filter);
+            var (wipe, _, _) = TwoClips("WipeLeft");
+            Assert.DoesNotContain("320x180", RenderGraph.Build(wipe, new RenderOptions { From = 0, To = 120, Width = 640, Height = 360, Audio = false, Playback = true }).Filter);
+            // 작은 화면(1/4 화질 수준)은 줄이지 않는다, 전체 화질 1080×1920은 4분의 1
+            Assert.Equal(1, RenderGraph.PlaybackShrink(new RenderOptions { Width = 270, Height = 480 }));
+            Assert.Equal(2, RenderGraph.PlaybackShrink(new RenderOptions { Width = 540, Height = 960 }));
+            Assert.Equal(4, RenderGraph.PlaybackShrink(new RenderOptions { Width = 1080, Height = 1920 }));
+        }
+
+        [Fact]
         public void OlderFfmpeg_FallsBackToDissolve()
         {
             // 덮기는 FFmpeg 7부터 — 6이면 디졸브로 그린다(모르면 그대로)
@@ -629,6 +649,38 @@ namespace VideoEditor.Tests
             // cos(π/8~π/4) ≈ 0.92~0.71
             Assert.InRange(fading / full, 0.6, 0.97);
             Assert.True(after < full * 0.02, "전환 뒤 소리 " + after);
+        }
+
+        [FfmpegFact]
+        public async Task Playback_ExpressionTransition_StreamsEveryFrame_WithoutHanging()
+        {
+            // 재생 그래프로 전환 끝을 지나 이어 그린다 — 크기 바꾸기를 두 번 이으면 FFmpeg가 전환 끝에서 멈추던 일(6/10)이 없어야 한다
+            var project = BlueToRed("Heart");
+            const int size = 320 * 240 * 4;
+            for (var run = 0; run < 4; run++)
+            {
+                List<string> files;
+                long read = 0;
+                using (var process = PreviewRenderer.StartVideo(FfmpegMedia.Tool, project, 40, 120, 320, 240, out files))
+                {
+                    var errors = process.StandardError.ReadToEndAsync();
+                    var buffer = new byte[size];
+                    var reading = Task.Run(async () =>
+                    {
+                        int n;
+                        while ((n = await process.StandardOutput.BaseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                            read += n;
+                    });
+                    var finished = await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(30))) == reading;
+                    if (!finished)
+                        FfmpegRunner.Kill(process);
+                    Assert.True(finished, "멈춤(" + (read / size) + "장에서)");
+                    await process.WaitForExitAsync();
+                }
+                foreach (var file in files)
+                    RenderCommand.TryDelete(file);
+                Assert.Equal(80 * (long)size, read);
+            }
         }
 
         [FfmpegFact]

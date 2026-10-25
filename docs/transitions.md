@@ -38,7 +38,12 @@ JSON 주석과 끝 쉼표는 받는다. 파일 하나는 1MB, 사용자 효과�
   `a0(x,y)`~`a3(x,y)`·`b0(x,y)`~`b3(x,y)`는 다른 위치의 값(평면 0~3)이다.
 - 쓸 수 있는 함수: `if ifnot lt lte gt gte eq between clip not abs min max hypot sin cos tan asin acos atan atan2 sinh cosh tanh sqrt pow exp log floor ceil round trunc mod sgn squish gauss isnan isinf`, 상수 `PI E PHI`.
 - 글자는 영문·숫자·공백과 `. , + - * / ^ ( )`만 쓴다. 1500자까지다.
-- 수식 효과는 픽셀마다 수식을 풀어서 내장 효과보다 5~10배 느리다. 미리 보기 재생이 버벅일 수 있다(내보내기는 시간이 더 걸릴 뿐 결과는 같다).
+- 수식 효과는 픽셀마다 수식을 풀어서 내장 효과보다 5~10배 느리다(540×960에서 12스레드로도 한 장에 약 84ms).
+  - 그래서 미리 보기 **재생** 중에는 수식 전환이 든 묶음을 줄인 캔버스에서 섞고 얹기 전에 늘인다(`RenderOptions.Playback`, `RenderGraph.PlaybackShrink`).
+    수식을 푸는 픽셀이 약 14만 개가 되게 줄여, 1/2 화질은 2분의 1, 전체 화질은 4분의 1이고 1/4 화질은 그대로다.
+  - 1080×1920 프로젝트의 1/2 화질 재생에서 페이지 넘김 수식 전환이 한 장에 약 136ms(초당 7장)에서 약 30ms로 줄었다.
+  - 멈춘 화면 한 장과 내보내기는 원래 크기로 그린다.
+  - 줄이기는 틀 계산의 scale에서 바로 한다. 크기 바꾸기(scale)를 두 번 이으면 FFmpeg가 전환 끝에서 멈추는 일이 있었다(10번 중 6번).
 - 예: `if(lt(mod(Y,H/8)/(H/8),1-P),B,A)`는 가로 블라인드다.
 
 ## 3. 그리기

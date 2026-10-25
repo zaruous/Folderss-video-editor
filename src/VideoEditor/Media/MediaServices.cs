@@ -263,6 +263,7 @@ namespace VideoEditor.Media
                 Height = height,
                 Audio = false,
                 Preview = true,
+                Playback = true,
                 FontFile = RenderEnvironment.DefaultFont(),
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion

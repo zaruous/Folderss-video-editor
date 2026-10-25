@@ -24,6 +24,11 @@ namespace VideoEditor.Core
         public string TempFolder { get; set; }
         /// <summary>쓰는 FFmpeg 주 버전(0이면 모름) — 이보다 새 버전이 필요한 전환 효과는 디졸브로 그린다.</summary>
         public int FfmpegMajor { get; set; }
+        /// <summary>
+        /// 재생(이어 그리기) — 수식 전환이 든 묶음은 줄인 크기로 섞어 늘인다(수식은 픽셀마다 풀어 실시간보다 느리다, <see cref="RenderGraph.PlaybackShrink"/>).
+        /// 멈춘 화면 한 장과 내보내기는 원래 크기.
+        /// </summary>
+        public bool Playback { get; set; }
     }
 
     /// <summary>FFmpeg에 줄 입력(파일마다 인수 묶음)과 filter_complex. 출력 라벨은 [vout]·[aout].</summary>
@@ -109,16 +114,42 @@ namespace VideoEditor.Core
                 // xfade로 잇는 클립 묶음(디졸브가 아닌 전환): 묶음 흐름의 라벨과 그 흐름이 시작하는 타임라인 프레임
                 string group = null;
                 long groupStart = 0;
+                // 재생 중 수식 전환이 든 묶음: 줄인 캔버스로 섞고 얹기 전에 늘인다(멈춘 화면·내보내기는 원래 크기)
+                var reduced = false;
                 void CloseGroup()
                 {
                     // 묶음은 캔버스 크기라 제자리(0, 0)에 얹는다. 알파를 곱한 색으로 섞었으니 얹기 전에 되돌린다
                     // 시작 시각은 프레임 단위로 반올림한다(초를 TB로 나눈 값이 0.99999처럼 되면 잘려 한 프레임 일찍 나온다)
-                    filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}]unpremultiply=inplace=1,format=rgba,setpts=PTS-STARTPTS+round({1}/TB)[c{2}]",
-                        group, N(rate.ToSeconds(groupStart - options.From)), n));
+                    filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}]unpremultiply=inplace=1,{3}format=rgba,setpts=PTS-STARTPTS+round({1}/TB)[c{2}]",
+                        group, N(rate.ToSeconds(groupStart - options.From)), n, reduced ? "scale=" + options.Width + ":" + options.Height + "," : ""));
                     filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}][c{1}]overlay=x=0:y=0:eof_action=pass[o{1}]", layer, n));
                     layer = "o" + n;
                     n++;
                     group = null;
+                    reduced = false;
+                }
+                // j번째 클립이 앞 클립과 xfade로 이어지는지(들어옴), 뒤 클립이 xfade로 이어지는지(나감) — 전환 구간이 그리는 구간에 걸칠 때만
+                bool XfadeIn(int j)
+                {
+                    return !Transitions.Resolve(clips[j], options.FfmpegMajor).IsDissolve && Overlaps(clips[j].Start, Math.Min(clips[j].TransitionIn, clips[j].Duration), options);
+                }
+                bool XfadeOut(int j)
+                {
+                    var after = j + 1 < clips.Count ? clips[j + 1] : null;
+                    var length = after != null && after.Start == clips[j].End ? Math.Min(after.TransitionIn, after.Duration) : 0;
+                    return length > 0 && !Transitions.Resolve(after, options.FfmpegMajor).IsDissolve && Overlaps(after.Start, length, options);
+                }
+                // i부터 시작하는 묶음에 수식 전환이 있는지
+                bool HasExpression(int i)
+                {
+                    for (var j = i; j < clips.Count; j++)
+                    {
+                        if (XfadeIn(j) && Transitions.Resolve(clips[j], options.FfmpegMajor).IsExpression)
+                            return true;
+                        if (!XfadeOut(j))
+                            break;
+                    }
+                    return false;
                 }
                 for (var i = 0; i < clips.Count; i++)
                 {
@@ -129,8 +160,12 @@ namespace VideoEditor.Core
                     var transition = Math.Min(clip.TransitionIn, clip.Duration);
                     var effect = Transitions.Resolve(clip, options.FfmpegMajor);
                     // 디졸브가 아닌 전환은 앞 클립과 xfade로 잇는다 — 전환 구간이 그리는 구간에 걸칠 때만
-                    var xfadeIn = !effect.IsDissolve && Overlaps(clip.Start, transition, options);
-                    var xfadeOut = tail > 0 && !Transitions.Resolve(next, options.FfmpegMajor).IsDissolve && Overlaps(next.Start, tail, options);
+                    var xfadeIn = XfadeIn(i);
+                    var xfadeOut = XfadeOut(i);
+                    // 묶음을 시작할 때 절반 크기로 섞을지 정한다 — 줄이기는 틀 계산에서 바로(크기 바꾸기를 두 번 이으면 FFmpeg가 전환 끝에서 멈춘다)
+                    if (group == null && (xfadeIn || xfadeOut))
+                        reduced = options.Playback && PlaybackShrink(options) > 1 && HasExpression(i);
+                    var shrink = reduced && (xfadeIn || xfadeOut) ? PlaybackShrink(options) : 1;
                     var segStart = Math.Max(clip.Start, options.From);
                     var segEnd = Math.Min(clip.End + tail, options.To);
                     // 전환 도중부터 그리면 전환 시간이 맞도록 클립 처음부터 디코드한다(앞부분은 바탕 시작 전이라 버려짐)
@@ -152,8 +187,8 @@ namespace VideoEditor.Core
                     var chain = new StringBuilder(source);
                     // 틀 = 화면 × 크기 배율. 맞춤(비율 유지, 다 보이게)·채우기(비율 유지, 넘치는 곳 가운데 기준으로 자름)·늘이기(비율 무시)
                     var scale = Math.Max(0.01, clip.Scale);
-                    var boxWidth = Math.Max(2, (int)Math.Round(options.Width * scale));
-                    var boxHeight = Math.Max(2, (int)Math.Round(options.Height * scale));
+                    var boxWidth = Math.Max(2, (int)Math.Round(options.Width * scale / shrink));
+                    var boxHeight = Math.Max(2, (int)Math.Round(options.Height * scale / shrink));
                     var fit = clip.Kind == ClipKind.Media ? clip.Fit : ClipFit.Fit;
                     chain.AppendFormat(CultureInfo.InvariantCulture,
                         fit == ClipFit.Fill ? ",scale=w={0}:h={1}:force_original_aspect_ratio=increase,crop={0}:{1},format=rgba"
@@ -183,13 +218,15 @@ namespace VideoEditor.Core
                     }
                     // 전환으로 이어지는 클립: 캔버스 크기 투명 바탕에 제자리로 얹어 두고(xfade는 같은 크기·형식의 흐름끼리 잇는다) 묶음에 붙인다
                     // xfade는 알파를 곱한 색으로 섞는다 — 그대로 섞으면 투명한 쪽과 섞이는 자리가 어둡게 된다
+                    var canvasWidth = Math.Max(2, options.Width / shrink / 2 * 2);
+                    var canvasHeight = Math.Max(2, options.Height / shrink / 2 * 2);
                     chain.AppendFormat(CultureInfo.InvariantCulture, ",setpts=PTS-STARTPTS[s{0}]", n);
                     filters.Add(chain.ToString());
                     filters.Add(string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba[g{4}]",
-                        options.Width, options.Height, fps, N(rate.ToSeconds(segEnd - segStart)), n));
+                        canvasWidth, canvasHeight, fps, N(rate.ToSeconds(segEnd - segStart)), n));
                     filters.Add(string.Format(CultureInfo.InvariantCulture,
                         "[g{0}][s{0}]overlay=x='(main_w-overlay_w)/2+{1}':y='(main_h-overlay_h)/2+{2}':eof_action=pass,format=gbrap,premultiply=inplace=1[k{0}]",
-                        n, N(clip.X * k), N(clip.Y * k)));
+                        n, N(clip.X * k / shrink), N(clip.Y * k / shrink)));
                     var piece = "k" + n;
                     if (xfadeIn)
                     {
@@ -197,7 +234,7 @@ namespace VideoEditor.Core
                         {
                             // 앞에 붙은 클립이 없으면 투명 화면에서 바뀐다(아래 트랙·바탕이 비친다)
                             filters.Add(string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=gbrap[t{4}]",
-                                options.Width, options.Height, fps, N(rate.ToSeconds(transition)), n));
+                                canvasWidth, canvasHeight, fps, N(rate.ToSeconds(transition)), n));
                             group = "t" + n;
                             groupStart = clip.Start;
                         }
@@ -220,6 +257,14 @@ namespace VideoEditor.Core
             }
             filters.Add("[" + layer + "]format=" + (options.Preview ? "bgra" : "yuv420p") + "[vout]");
             plan.HasVideo = true;
+        }
+
+        /// <summary>
+        /// 재생 중 수식 전환 묶음을 몇 분의 1 크기로 섞을지: 수식을 푸는 픽셀이 약 14만 개(270×480 남짓)가 되게 — 1/4 화질은 그대로, 1/2은 2, 전체는 4.
+        /// </summary>
+        internal static int PlaybackShrink(RenderOptions options)
+        {
+            return Math.Max(1, (int)Math.Ceiling(Math.Sqrt((double)options.Width * options.Height / 140000)));
         }
 
         /// <summary>[start, start + length) 프레임이 그리는 구간에 걸치는지.</summary>
