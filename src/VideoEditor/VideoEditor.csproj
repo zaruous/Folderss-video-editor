@@ -8,6 +8,8 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- NuGet 패키지 DLL(NAudio)을 빌드 출력에 복사해 zip에 함께 넣는다 -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <!-- 인물 분리 엔진 버전(시험 프로젝트도 같은 버전) -->
+    <OnnxRuntimeVersion>1.22.1</OnnxRuntimeVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,6 +18,8 @@
     <!-- 미리 보기 소리 재생(PCM → waveOut). 순수 관리 코드 DLL 두 개 -->
     <PackageReference Include="NAudio.Core" Version="2.2.1" />
     <PackageReference Include="NAudio.WinMM" Version="2.2.1" />
+    <!-- 인물 마스크(사람 따내기)를 이 PC에서 돌리는 ONNX Runtime(MIT). zip에는 관리 DLL과 Windows x64 네이티브 DLL만 넣는다(아래 PackPlugin) -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="$(OnnxRuntimeVersion)" />
   </ItemGroup>
 
   <ItemGroup>
@@ -27,16 +31,24 @@
     빌드할 때마다 bin\<구성>\net8.0-windows\<AssemblyName>.zip 을 만든다:
     plugin.json + 플러그인 DLL + .deps.json + NuGet 패키지 DLL(ReferenceCopyLocalPaths, 계약 DLL은 Private=false라 빠짐).
     Folderss는 .deps.json으로 플러그인 폴더의 DLL을 찾는다.
+    네이티브 DLL은 Windows x64 것만 .deps.json이 가리키는 runtimes\win-x64\native\ 그대로 넣는다(ONNX Runtime 약 12MB, zip에서 약 4.7MB —
+    다른 플랫폼 것은 넣지 않는다). ONNX Runtime의 MIT 라이선스·제3자 고지는 licenses\에.
   -->
   <Target Name="PackPlugin" AfterTargets="Build">
     <PropertyGroup>
       <PluginStage>$(IntermediateOutputPath)plugin-stage\</PluginStage>
+      <OnnxRuntimePackage>$(NuGetPackageRoot)microsoft.ml.onnxruntime\$(OnnxRuntimeVersion)\</OnnxRuntimePackage>
     </PropertyGroup>
     <ItemGroup>
-      <PluginDependency Include="@(ReferenceCopyLocalPaths)" Condition="'%(Extension)' == '.dll'" />
+      <PluginDependency Include="@(ReferenceCopyLocalPaths)" Condition="'%(Extension)' == '.dll' AND '%(ReferenceCopyLocalPaths.DestinationSubDirectory)' == ''" />
+      <PluginNative Include="@(ReferenceCopyLocalPaths)" Condition="'%(Extension)' == '.dll' AND '%(ReferenceCopyLocalPaths.AssetType)' == 'native' AND '%(ReferenceCopyLocalPaths.RuntimeIdentifier)' == 'win-x64'" />
+      <PluginLicense Include="$(OnnxRuntimePackage)LICENSE;$(OnnxRuntimePackage)ThirdPartyNotices.txt" />
     </ItemGroup>
+    <Error Condition="'@(PluginNative)' == ''" Text="zip에 넣을 ONNX Runtime 네이티브 DLL(runtimes\win-x64\native)을 찾지 못했습니다." />
     <RemoveDir Directories="$(PluginStage)" />
     <Copy SourceFiles="plugin.json;$(TargetPath);$(ProjectDepsFilePath);@(PluginDependency)" DestinationFolder="$(PluginStage)" />
+    <Copy SourceFiles="@(PluginNative)" DestinationFolder="$(PluginStage)runtimes\win-x64\native\" />
+    <Copy SourceFiles="@(PluginLicense)" DestinationFiles="@(PluginLicense->'$(PluginStage)licenses\onnxruntime-%(Filename)%(Extension)')" Condition="Exists('$(OnnxRuntimePackage)LICENSE')" />
     <ZipDirectory SourceDirectory="$(PluginStage)" DestinationFile="$(OutDir)$(AssemblyName).zip" Overwrite="true" />
     <Message Importance="high" Text="Folderss 플러그인: $(OutDir)$(AssemblyName).zip" />
   </Target>

@@ -51,12 +51,16 @@ namespace VideoEditor.Ui
         {
             Manager = manager;
             LoadTransitions();
-            // 앞서 끝난 실행이 남긴 꾸민 글자 PNG 캐시를 치운다(살아 있는 실행의 폴더는 건드리지 않음).
+            // 미리 보기·재생·내보내기가 "사람에게만" 효과의 마스크를 여기서 찾는다
+            PersonMasks = new PersonMaskService(PersonMaskFolder);
+            RenderEnvironment.PersonMasks = PersonMasks;
+            // 앞서 끝난 실행이 남긴 꾸민 글자 PNG 캐시와 끊긴 인물 마스크(.part)를 치운다(살아 있는 실행의 폴더는 건드리지 않음).
             // 시스템 글꼴 목록도 미리 읽어 둔다 — 처음 글자 클립을 고를 때 UI 스레드가 멈추지 않게
             Task.Run(() =>
             {
                 TextImageCache.Cleanup(RenderEnvironment.TempRoot());
                 _ = StyledTextRasterizer.Fonts;
+                PersonMasks.Cleanup(TimeSpan.FromHours(1));
             });
         }
 
@@ -91,6 +95,12 @@ namespace VideoEditor.Ui
             get { return _whisper != null && File.Exists(_whisper.CliPath) ? _whisper : (_whisper = WhisperTool.Locate(WhisperFolder)); }
             set { _whisper = value; }
         }
+
+        /// <summary>인물 분리 모델과 만든 인물 마스크를 두는 곳(데이터 폴더\person-mask — 모델은 models, 마스크는 masks).</summary>
+        public string PersonMaskFolder { get { return Path.Combine(Manager.DataDirectory, "person-mask"); } }
+
+        /// <summary>인물 마스크 만들기·찾기(<see cref="RenderEnvironment.PersonMasks"/>로도 쓰인다).</summary>
+        public PersonMaskService PersonMasks { get; }
 
         /// <summary>유튜브 약관·권리 안내를 확인했는지(한 번 확인하면 설정에 기억).</summary>
         public bool YtDlpNoticeAccepted

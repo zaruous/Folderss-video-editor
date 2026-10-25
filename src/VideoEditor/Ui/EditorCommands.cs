@@ -764,12 +764,92 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// 클립 원본의 인물 마스크(사람만 따낸 흑백 동영상)를 만든다 — "사람에게만" 효과가 쓴다. 만들고 나면 미리 보기를 다시 그린다.
-        /// (인물 분리 작업에서 채운다 — 지금은 안내만)
+        /// 동영상·사진 클립만. 마스크는 원본 파일마다 하나라 같은 원본의 다른 클립도 함께 쓴다.
         /// </summary>
         public Task BuildPersonMask(string clipId)
         {
-            Status("인물 마스크 만들기는 아직 준비 중입니다.");
-            return Task.CompletedTask;
+            var clip = clipId == null ? null : Project.FindClip(clipId);
+            if (clip == null || clip.Kind != ClipKind.Media || !clip.IsVisual || clip.MediaKind == MediaKind.Audio)
+            {
+                Status("인물 마스크는 동영상·사진 클립에만 만들 수 있습니다.");
+                return Task.CompletedTask;
+            }
+            return BuildPersonMaskFor(clip.Path);
+        }
+
+        /// <summary>[미디어 > 인물 마스크 만들기]: 미디어(동영상·사진)의 인물 마스크.</summary>
+        public Task BuildPersonMaskFor(MediaInfo media)
+        {
+            if (media == null || (media.Kind != MediaKind.Video && media.Kind != MediaKind.Image))
+            {
+                Status("인물 마스크는 동영상·사진에만 만들 수 있습니다.");
+                return Task.CompletedTask;
+            }
+            return BuildPersonMaskFor(media.Path);
+        }
+
+        /// <summary>
+        /// 원본 파일의 인물 마스크: 이미 있으면 그대로 쓰고(다시 만들지 않음), 없으면 모델을 확인해(처음이면 내려받기 창) 진행 창에서 만든다.
+        /// 원본 정보는 미디어 목록 것을 쓰되 파일을 바꿔 넣었으면 다시 읽는다.
+        /// </summary>
+        private async Task BuildPersonMaskFor(string path)
+        {
+            _player.Stop();
+            var tool = await NeedTool();
+            if (tool == null)
+                return;
+            var masks = _services.PersonMasks;
+            var name = Path.GetFileName(path);
+            if (masks.Find(path) != null)
+            {
+                RefreshPreview();
+                Status("인물 마스크를 이미 만들어 두었습니다(" + name + ") — 사람에게만 효과가 사람 위에만 그려집니다.");
+                return;
+            }
+            MediaInfo media = Project.FindMedia(path);
+            if (media == null || MediaProbe.IsStale(media))
+            {
+                try
+                {
+                    media = await MediaProbe.Probe(tool, path, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    Status("원본을 읽지 못했습니다: " + ex.Message);
+                    return;
+                }
+            }
+            if (media.Kind != MediaKind.Video && media.Kind != MediaKind.Image)
+            {
+                Status("인물 마스크는 동영상·사진에만 만들 수 있습니다: " + name);
+                return;
+            }
+            PersonMaskDialog dialog;
+            try
+            {
+                if (PersonMaskSetupDialog.Ensure(_services, _owner) == null)
+                {
+                    Status("인물 마스크를 만들지 않았습니다 — 처음 한 번 인물 분리 모델을 내려받아야 합니다.");
+                    return;
+                }
+                dialog = new PersonMaskDialog(media, (progress, cancellation) => masks.Build(tool, media, progress, cancellation));
+                var owner = UiKit.OwnerOf(_owner);
+                if (owner != null && owner.IsLoaded)
+                    dialog.Owner = owner;
+            }
+            catch (Exception ex)
+            {
+                Status("인물 마스크 창을 열지 못했습니다: " + ex.Message);
+                return;
+            }
+            if (dialog.ShowDialog() != true || dialog.Result == null)
+            {
+                Status(dialog.Error ?? "인물 마스크 만들기를 취소했습니다.");
+                return;
+            }
+            RefreshPreview();
+            var seconds = (int)Math.Round(dialog.Elapsed.TotalSeconds);
+            Status("인물 마스크를 만들었습니다 — 사람에게만 효과가 사람 위에만 그려집니다(" + name + ", " + (seconds >= 60 ? seconds / 60 + "분 " : "") + seconds % 60 + "초).");
         }
 
         /// <summary>
