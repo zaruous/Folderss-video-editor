@@ -148,6 +148,41 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void Graph_SeveralShakeZoomInARow_BecomeOnePerspective_OthersBreakTheRun()
+        {
+            // 흔들림·줌을 여럿 넣으면 효과마다 다시 보간해 그림이 무르고 느렸다 — 이어진 것은 perspective 하나로 합친다(#29)
+            var (project, clip) = OneClip(ShakeZoom.CameraShake);
+            clip.Effects.Add(VideoEffects.Create(ShakeZoom.PunchZoom));
+            clip.Effects.Add(VideoEffects.Create(ShakeZoom.Earthquake));
+            var chain = ClipChain(RenderGraph.Build(project, Options(project, 0, 60)).Filter);
+            Assert.Equal(1, CountOf(chain, "perspective="));
+            Assert.Equal(1, CountOf(chain, "scale="));
+            // 지진의 흐림은 합친 움직임 뒤에
+            Assert.Matches(":eval=frame,convolution=[^,]+,trim=end_frame=\\d+", chain);
+            var start = chain.IndexOf("perspective=", StringComparison.Ordinal);
+            Assert.Equal(16, CountOf(chain.Substring(start, chain.IndexOf(":eval=frame", StringComparison.Ordinal) - start), "'"));
+            foreach (var forbidden in new[] { "st(", "ld(", "random(", "time(" })
+                Assert.DoesNotContain(forbidden, chain);
+
+            // 사이에 다른 효과가 끼면 그 앞뒤는 따로(그리는 순서를 지킨다)
+            clip.Effects.Insert(1, VideoEffects.Create(RgbSplit.Def));
+            chain = RenderGraph.Build(project, Options(project, 0, 60)).Filter;
+            Assert.Equal(2, CountOf(chain, "perspective="));
+        }
+
+        [Fact]
+        public void CombinedMotion_OfOneEffect_IsTheSameText_AsTheEffectAlone()
+        {
+            foreach (var def in Family)
+            {
+                var render = new EffectRender { Effect = VideoEffects.Create(def), Def = def, Width = 640, Height = 360, PixelScale = 1, Rate = "30/1", Fps = 30, Seconds = 2, TimeOffset = 0, Label = "fx0" };
+                Assert.Equal(def.Recipe(render), ShakeZoom.CombinedRender(new[] { render }));
+                Assert.True(ShakeZoom.CanCombine(def));
+            }
+            Assert.False(ShakeZoom.CanCombine(ScanLine.Def));
+        }
+
+        [Fact]
         public void Graph_TimeIsClipLocal_ForSeekAndPlayback()
         {
             var (project, clip) = OneClip(ShakeZoom.Heartbeat);

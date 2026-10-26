@@ -242,6 +242,33 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
+        public void TwoEffectsCombined_MarkerIsWhereBothMotionsPutIt()
+        {
+            // 빠른 줌(중심 25%·25%)을 먼저, 카메라 흔들림을 그 위에 — 표지는 두 움직임을 차례로 건 자리, 크기는 두 배율의 곱
+            var project = NewProject();
+            var clip = Add(project, project.MainTrack, Marker, 0);
+            var punch = AddEffect(clip, ShakeZoom.PunchZoom, ("zoom", 60), ("start", 0.3), ("duration", 0.5), ("centerx", 25), ("centery", 25));
+            var shake = AddEffect(clip, ShakeZoom.CameraShake);
+            var frames = Render(project, 0, 40);
+            var plain = PlainMass(Marker);
+            for (var f = 0; f < 40; f++)
+            {
+                var time = f / 30.0;
+                var zoom = ShakeZoom.PunchZoomAt(punch, time);
+                var (cx, cy) = ShakeZoom.ZoomCenter(punch, ShakeZoom.PunchZoom, Width, Height);
+                var first = Seen(new ShakeZoom.Pose(zoom, 0, 0, 0), cx, cy, 160, 120);
+                var pose = ShakeZoom.CameraShakePose(shake, time, Width, Height, 1);
+                var expected = Seen(pose, 160, 120, first.X, first.Y);
+                var spot = Spot(frames, f);
+                if (f % 5 == 0)
+                    _out.WriteLine("프레임 " + f + ": 표지 (" + spot.X.ToString("0.00") + ", " + spot.Y.ToString("0.00") + ") 예상 (" + expected.X.ToString("0.00") + ", " + expected.Y.ToString("0.00") + ") 배율 " + (zoom * pose.Zoom).ToString("0.000"));
+                Assert.InRange(spot.X, expected.X - 0.8, expected.X + 0.8);
+                Assert.InRange(spot.Y, expected.Y - 0.8, expected.Y + 0.8);
+                Assert.InRange(Math.Sqrt(spot.Mass / plain), zoom * pose.Zoom * 0.97, zoom * pose.Zoom * 1.03);
+            }
+        }
+
+        [FfmpegFact]
         public void HeartbeatAndZoomBounce_ZoomAroundTheirCenter()
         {
             // 중심 = 표지(왼쪽 위 네모의 가운데 (80, 60) = 25%, 25%) — 표지는 제자리에서 배율만큼 커진다

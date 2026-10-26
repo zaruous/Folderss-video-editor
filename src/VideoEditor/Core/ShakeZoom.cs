@@ -319,13 +319,67 @@ namespace VideoEditor.Core
 
         // ---------- 필터 조각 ----------
 
+        /// <summary>한 프레임 움직임의 수식: 출력 점 p는 원본 (Cx, Cy) + R(Angle)·(p − c) ÷ Zoom + (X, Y)를 읽는다(Angle이 null이면 돌리지 않음), After는 움직인 뒤 이을 필터 글.</summary>
+        private readonly struct Motion
+        {
+            public Motion(string zoom, string angle, string x, string y, double cx, double cy, string after = "")
+            {
+                Zoom = zoom;
+                Angle = angle;
+                X = x;
+                Y = y;
+                Cx = cx;
+                Cy = cy;
+                After = after;
+            }
+
+            public string Zoom { get; }
+            public string Angle { get; }
+            public string X { get; }
+            public string Y { get; }
+            public double Cx { get; }
+            public double Cy { get; }
+            public string After { get; }
+        }
+
+        private static readonly Dictionary<string, Func<EffectRender, (int Width, int Height, int X, int Y), Motion>> Motions =
+            new Dictionary<string, Func<EffectRender, (int Width, int Height, int X, int Y), Motion>>
+            {
+                [CameraShakeId] = CameraShakeMotion,
+                [EarthquakeId] = EarthquakeMotion,
+                [HeartbeatId] = HeartbeatMotion,
+                [PunchZoomId] = PunchZoomMotion,
+                [ZoomBounceId] = ZoomBounceMotion
+            };
+
+        /// <summary>그림을 움직이는 효과(흔들림·줌)인지 — 이어진 것끼리 perspective 하나로 합칠 수 있다(<see cref="CombinedRender"/>).</summary>
+        public static bool CanCombine(VideoEffectDef def)
+        {
+            return def != null && Motions.ContainsKey(def.Id);
+        }
+
+        /// <summary>
+        /// 이어 넣은 흔들림·줌 효과들(그리는 순서)을 perspective 하나로: 앞 효과가 먼저 걸린 그림을 뒤 효과가 움직이므로, 출력 점은 뒤 효과부터 차례로 원본 자리로 옮긴다.
+        /// 효과마다 다시 보간하지 않아 그림이 무르지 않고 빠르다. 지진의 흐림은 합친 움직임 뒤에 잇는다. 하나면 그 효과의 글 그대로.
+        /// </summary>
+        public static string CombinedRender(IReadOnlyList<EffectRender> renders)
+        {
+            var picture = Picture(renders[0]);
+            return Warp(renders[0], picture, renders.Select(r => Motions[r.Def.Id](r, picture)).ToList());
+        }
+
         private static string CameraShakeRender(EffectRender r)
         {
             var picture = Picture(r);
+            return Warp(r, picture, new[] { CameraShakeMotion(r, picture) });
+        }
+
+        private static Motion CameraShakeMotion(EffectRender r, (int Width, int Height, int X, int Y) picture)
+        {
             var (x, y, angle) = CameraShakeReach(r.Effect, picture.Width, picture.Height, r.PixelScale);
             var speed = r.Number("speed");
             var time = Clock(r);
-            return Warp(r, picture, N(CoverZoom(picture.Width, picture.Height, x, y, angle)),
+            return new Motion(N(CoverZoom(picture.Width, picture.Height, x, y, angle)),
                 angle > 0 ? N(angle) + "*" + WavesText(HandTurn, time, speed) : null,
                 N(x) + "*" + WavesText(HandX, time, speed), N(y) + "*" + WavesText(HandY, time, speed),
                 picture.Width / 2.0, picture.Height / 2.0);
@@ -334,6 +388,11 @@ namespace VideoEditor.Core
         private static string EarthquakeRender(EffectRender r)
         {
             var picture = Picture(r);
+            return Warp(r, picture, new[] { EarthquakeMotion(r, picture) });
+        }
+
+        private static Motion EarthquakeMotion(EffectRender r, (int Width, int Height, int X, int Y) picture)
+        {
             var (x, y, angle) = EarthquakeReach(r.Effect, picture.Width, picture.Height, r.PixelScale);
             var speed = r.Number("speed");
             var rate = JoltRate * speed;
@@ -347,7 +406,7 @@ namespace VideoEditor.Core
                 var matrix = string.Join(" ", new double[] { a * b, 8 * b, a * b, 8 * a, 64, 8 * a, a * b, 8 * b, a * b }.Select(N));
                 blur = string.Format(CultureInfo.InvariantCulture, ",convolution=0m='{0}':1m='{0}':2m='{0}'", matrix);
             }
-            return Warp(r, picture, N(CoverZoom(picture.Width, picture.Height, x, y, angle)),
+            return new Motion(N(CoverZoom(picture.Width, picture.Height, x, y, angle)),
                 angle > 0 ? N(angle) + "*" + JoltText(time, rate, JoltSeed[2]) : null,
                 N(x) + "*" + Mix(0, QuakeX), N(y) + "*" + Mix(1, QuakeY),
                 picture.Width / 2.0, picture.Height / 2.0, blur);
@@ -356,28 +415,43 @@ namespace VideoEditor.Core
         private static string HeartbeatRender(EffectRender r)
         {
             var picture = Picture(r);
+            return Warp(r, picture, new[] { HeartbeatMotion(r, picture) });
+        }
+
+        private static Motion HeartbeatMotion(EffectRender r, (int Width, int Height, int X, int Y) picture)
+        {
             var (period, attack, decay, gap) = BeatTiming(r.Number("bpm"));
             var s = "mod(" + Clock(r) + "," + N(period) + ")";
             string Beat(string x) => string.Format(CultureInfo.InvariantCulture, "if(lt({0},0),0,if(lt({0},{1}),0.5-0.5*cos({2}*{0}),exp(({1}-{0})/{3})))",
                 x, N(attack), N(Math.PI / attack), N(decay));
             var zoom = "1+" + N(r.Number("amount") / 100) + "*(" + Beat(s) + "+" + N(r.Number("second") / 100) + "*" + Beat("(" + s + "-" + N(gap) + ")") + ")";
             var (cx, cy) = ZoomCenter(r.Effect, Heartbeat, picture.Width, picture.Height);
-            return Warp(r, picture, zoom, null, "0", "0", cx, cy);
+            return new Motion(zoom, null, "0", "0", cx, cy);
         }
 
         private static string PunchZoomRender(EffectRender r)
         {
             var picture = Picture(r);
+            return Warp(r, picture, new[] { PunchZoomMotion(r, picture) });
+        }
+
+        private static Motion PunchZoomMotion(EffectRender r, (int Width, int Height, int X, int Y) picture)
+        {
             var amount = r.Number("zoom") / 100;
             var rest = "pow(1-clip((" + Clock(r) + "-" + N(r.Number("start")) + ")/" + N(r.Number("duration")) + ",0,1),4)";
             var zoom = "1+" + N(Math.Abs(amount)) + "*" + (amount >= 0 ? "(1-" + rest + ")" : rest);
             var (cx, cy) = PunchZoomCenter(r.Effect, picture.Width, picture.Height);
-            return Warp(r, picture, zoom, null, "0", "0", cx, cy);
+            return new Motion(zoom, null, "0", "0", cx, cy);
         }
 
         private static string ZoomBounceRender(EffectRender r)
         {
             var picture = Picture(r);
+            return Warp(r, picture, new[] { ZoomBounceMotion(r, picture) });
+        }
+
+        private static Motion ZoomBounceMotion(EffectRender r, (int Width, int Height, int X, int Y) picture)
+        {
             var amount = N(r.Number("zoom") / 100);
             var period = r.Number("period");
             var half = period / 2;
@@ -394,7 +468,7 @@ namespace VideoEditor.Core
                 loop = string.Format(CultureInfo.InvariantCulture, "if(gte({0},{1}),{2},{3})", time, last, Curve("min(1,(" + time + "-" + last + ")/" + N(half) + ")"), loop);
             }
             var (cx, cy) = ZoomCenter(r.Effect, ZoomBounce, picture.Width, picture.Height);
-            return Warp(r, picture, "1+" + amount + "*" + loop, null, "0", "0", cx, cy);
+            return new Motion("1+" + amount + "*" + loop, null, "0", "0", cx, cy);
         }
 
         /// <summary>
@@ -444,6 +518,53 @@ namespace VideoEditor.Core
         /// perspective(sense=source)는 출력 모서리 (0,0)·(W,0)·(0,H)·(W,H)에 원본의 네 점을 보낸다 — 픽셀 가운데 기준으로
         /// 출력 점 q(= 모서리 + 0.5)가 읽는 원본 = c + R·(q − c) ÷ zoom + (x, y)에서 0.5를 뺀 자리(배율 1·돌림 0·옮김 0이면 원래 그림 그대로).
         /// </summary>
+        /// <remarks>
+        /// 움직임이 여럿이면(이어 넣은 흔들림·줌) 출력 모서리 q를 뒤 움직임부터 차례로 옮긴 자리 = 원본에서 읽을 자리다:
+        /// 앞 효과가 먼저 걸린 그림을 뒤 효과가 움직이므로 원본 자리 = f₀(f₁(…fₙ₋₁(q))). after는 모두 움직인 뒤에 차례로 잇는다.
+        /// </remarks>
+        private static string Warp(EffectRender r, (int Width, int Height, int X, int Y) picture, IReadOnlyList<Motion> motions)
+        {
+            if (motions.Count == 1)
+            {
+                var m = motions[0];
+                return Warp(r, picture, m.Zoom, m.Angle, m.X, m.Y, m.Cx, m.Cy, m.After);
+            }
+            var text = new StringBuilder();
+            var cropped = picture.Width != r.Width || picture.Height != r.Height;
+            if (cropped)
+                text.AppendFormat(CultureInfo.InvariantCulture, ",crop={0}:{1}:{2}:{3}", picture.Width, picture.Height, picture.X, picture.Y);
+            text.Append(",perspective=");
+            var corners = new[] { (0.5, 0.5), (picture.Width + 0.5, 0.5), (0.5, picture.Height + 0.5), (picture.Width + 0.5, picture.Height + 0.5) };
+            for (var i = 0; i < corners.Length; i++)
+            {
+                // 픽셀 가운데 기준 자리(수식 글)
+                string px = N(corners[i].Item1), py = N(corners[i].Item2);
+                for (var k = motions.Count - 1; k >= 0; k--)
+                {
+                    var m = motions[k];
+                    var ax = "(" + px + "-" + N(m.Cx) + ")";
+                    var ay = "(" + py + "-" + N(m.Cy) + ")";
+                    string across = ax, down = ay;
+                    if (m.Angle != null)
+                    {
+                        var cos = "cos(" + m.Angle + ")";
+                        var sin = "sin(" + m.Angle + ")";
+                        across = "(" + ax + "*" + cos + "-" + ay + "*" + sin + ")";
+                        down = "(" + ax + "*" + sin + "+" + ay + "*" + cos + ")";
+                    }
+                    px = "(" + N(m.Cx) + "+" + across + "/(" + m.Zoom + ")+(" + m.X + "))";
+                    py = "(" + N(m.Cy) + "+" + down + "/(" + m.Zoom + ")+(" + m.Y + "))";
+                }
+                text.AppendFormat(CultureInfo.InvariantCulture, "x{0}='{1}-0.5':y{0}='{2}-0.5':", i, px, py);
+            }
+            text.Append("eval=frame");
+            foreach (var m in motions)
+                text.Append(m.After);
+            if (cropped)
+                text.AppendFormat(CultureInfo.InvariantCulture, ",pad={0}:{1}:{2}:{3}:color=black@0", r.Width, r.Height, picture.X, picture.Y);
+            return text.ToString();
+        }
+
         private static string Warp(EffectRender r, (int Width, int Height, int X, int Y) picture, string zoom, string angle, string x, string y, double cx, double cy, string after = "")
         {
             var text = new StringBuilder();
