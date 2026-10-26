@@ -337,5 +337,65 @@ namespace VideoEditor.Tests
             Assert.Equal(1, BadSignal.Roll(tv, 50, 30).Progress, 6);
             Assert.True(BadSignal.Roll(tv, 50, 30).Rolling);
         }
+
+        // ---------- displace 한도 넘기(#29) ----------
+
+        [Fact]
+        public void Push_OnePassIsTheOldText_TwoPassesAddUpToTheClampedOffset()
+        {
+            Assert.Equal(127, Glitch.Limit(1));
+            Assert.Equal(127, Glitch.Limit(0.5));
+            Assert.Equal(254, Glitch.Limit(2));
+            Assert.Equal(254, Glitch.Limit(4));
+            Assert.Equal("clip(128+E,0,255)", Glitch.Push("E", 0, 127));
+            // 두 번에 나눈 앞·뒤의 합 = round(E)를 ±한도로 자른 값, 각각 128 ± 127 안
+            foreach (var e in new[] { -300, -254, -201, -127, -1, 0, 1, 77, 127, 200, 253, 254, 400 })
+            {
+                var total = Math.Max(-254, Math.Min(254, e));
+                var first = total - (int)Math.Truncate(total / 2.0);
+                var second = (int)Math.Truncate(total / 2.0);
+                Assert.Equal(total, first + second);
+                Assert.InRange(128 + first, 1, 255);
+                Assert.InRange(128 + second, 1, 255);
+            }
+            Assert.Equal("(128+clip(round(E),-254,254)-trunc(clip(round(E),-254,254)/2))", Glitch.Push("E", 1, 254));
+            Assert.Equal("(128+trunc(clip(round(E),-254,254)/2))", Glitch.Push("E", 2, 254));
+        }
+
+        [Fact]
+        public void LineSlip_OnePassAtProjectSize_TwoPassesWhenExportedLarger()
+        {
+            var effect = VideoEffects.Create(LineSlip.Def);
+            VideoEffects.SetNumber(effect, "amount", 100);
+            string Recipe(double scale) => LineSlip.Def.Recipe(new EffectRender { Effect = effect, Def = LineSlip.Def, Width = (int)(640 * scale), Height = (int)(360 * scale), PixelScale = scale, Rate = "30/1", Fps = 30, Seconds = 2, TimeOffset = 0, Label = "fx0" });
+            var one = Recipe(1);
+            Assert.Single(Regex.Matches(one, "displace="));
+            Assert.DoesNotContain("trunc(", one);
+            var two = Recipe(2);
+            Assert.Equal(2, Regex.Matches(two, "displace=").Count);
+            Assert.Contains("trunc(", two);
+            // 작은 세기는 2배에서도 한도 안이라 한 번
+            VideoEffects.SetNumber(effect, "amount", 30);
+            Assert.Single(Regex.Matches(Recipe(2), "displace="));
+        }
+
+        [Fact]
+        public void BadSignalAndGlitchScan_TwoPassesOnlyWhenExportedLargerPastTheLimit()
+        {
+            foreach (var def in new[] { BadSignal.Def, GlitchScan.Def })
+            {
+                var effect = VideoEffects.Create(def);
+                foreach (var param in def.Params)
+                    VideoEffects.SetNumber(effect, param.Key, param.Max);
+                string Recipe(double scale) => def.Recipe(new EffectRender { Effect = effect, Def = def, Width = (int)(640 * scale), Height = (int)(360 * scale), PixelScale = scale, Rate = "30/1", Fps = 30, Seconds = 2, TimeOffset = 0, Label = "fx0" });
+                // 프로젝트 크기는 예전처럼 한 번(한도 127px에서 잘림 그대로)
+                Assert.Single(Regex.Matches(Recipe(1), "displace="));
+                Assert.DoesNotContain("trunc(", Recipe(1));
+                // 2배로 내보내면 두 번에 나눠 254px까지
+                var two = Recipe(2);
+                Assert.Equal(2, Regex.Matches(two, "displace=").Count);
+                Assert.Contains(",-254,254)", two);
+            }
+        }
     }
 }

@@ -259,7 +259,9 @@ namespace VideoEditor.Tests
             }
             VideoEffects.SetNumber(glitch, "amount", 100);
             VideoEffects.SetNumber(glitch, "split", 60);
-            Assert.Equal(127, GlitchScan.Measure(glitch, 3840, 2160, 2).Shift);
+            // 2배로 내보내면 한도도 두 배(두 번에 나눠 민다 — #29): 1080p의 120px이 240px
+            Assert.Equal(240, GlitchScan.Measure(glitch, 3840, 2160, 2).Shift);
+            Assert.Equal(120, GlitchScan.Measure(glitch, 1920, 1080, 1).Shift);
             Assert.Equal(120, GlitchScan.Measure(glitch, 3840, 2160, 2).Split);
 
             // 레이: 방향마다 나아가는 쪽으로

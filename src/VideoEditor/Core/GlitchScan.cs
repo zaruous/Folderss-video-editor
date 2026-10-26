@@ -56,7 +56,8 @@ namespace VideoEditor.Core
         public static Shape Measure(ClipEffect effect, int width, int height, double pixelScale)
         {
             var band = Math.Max(2, Math.Min(height, (int)Math.Round(VideoEffects.Number(effect, Def, "band") / 100 * height)));
-            var shift = (int)Math.Min(127, Math.Round(VideoEffects.Number(effect, Def, "amount") / 100 * ShiftMax * pixelScale));
+            // 크게 내보낼 때는 한도도 배율만큼(두 번에 나눠 민다 — Glitch.Limit)
+            var shift = (int)Math.Min(Glitch.Limit(pixelScale), Math.Round(VideoEffects.Number(effect, Def, "amount") / 100 * ShiftMax * pixelScale));
             var split = (int)Math.Min(255, Math.Round(VideoEffects.Number(effect, Def, "split") * pixelScale));
             var slice = Math.Max(2, (int)Math.Round(SliceHeight * pixelScale));
             return new Shape(band, shift, split, slice);
@@ -90,18 +91,34 @@ namespace VideoEditor.Core
             var block = "floor(Y/" + (3 * shape.Slice) + ")";
             var slice = ScanKit.Hash(cell, 1.3);
             var chunk = ScanKit.Hash(block, 7.1);
-            var push = string.Format(CultureInfo.InvariantCulture, "clip(128+if(gt({0},0.55),(2*mod({0}*7.13,1)-1)*{2},0)+if(gt({1},0.7),(2*mod({1}*5.37,1)-1)*{3},0),0,255)",
+            var offset = string.Format(CultureInfo.InvariantCulture, "if(gt({0},0.55),(2*mod({0}*7.13,1)-1)*{2},0)+if(gt({1},0.7),(2*mod({1}*5.37,1)-1)*{3},0)",
                 slice, chunk, shape.Shift, N(0.7 * shape.Shift));
+            // 조각 + 덩어리는 1.7배까지 — 크게 내보낼 때 한도(127px)를 넘으면 두 번에 나눠 민다(줄마다 가로로만 밀어 한 번에 민 것과 같다)
+            var limit = Glitch.Limit(r.PixelScale);
+            var twice = limit > Glitch.MaxShift && 1.7 * shape.Shift > Glitch.MaxShift;
+            var push = Glitch.Push(offset, twice ? 1 : 0, limit);
             var shake = N(18 + 22 * amount);
             var brightness = string.Format(CultureInfo.InvariantCulture, "if(gt({0},0.97),235,128+(2*{1}-1)*{2})", ScanKit.Hash("Y", 9.1), ScanKit.Hash(cell, 3.7), shake);
             var length = 4 * hb;
-            text.Append(ScanKit.Rows(r, w, length, p + "r", (push, push, push, push, p + "x0"), (brightness, brightness, brightness, "255", p + "f0")));
             var pick = ScanKit.Shuffle(r, Rate, length - hb + 1);
-            text.AppendFormat(CultureInfo.InvariantCulture, "[{0}x0]crop={1}:{2}:0:'{3}'[{0}x];[{0}f0]crop={1}:{2}:0:'{3}'[{0}f];", p, w, hb, pick);
-            text.AppendFormat(CultureInfo.InvariantCulture, "color=c=0x808080:s={0}x{1}:r={2}:d={3},format=gbrap{4}[{5}y];", w, hb, r.Rate, once, hold, p);
+            if (!twice)
+            {
+                text.Append(ScanKit.Rows(r, w, length, p + "r", (push, push, push, push, p + "x0"), (brightness, brightness, brightness, "255", p + "f0")));
+                text.AppendFormat(CultureInfo.InvariantCulture, "[{0}x0]crop={1}:{2}:0:'{3}'[{0}x];[{0}f0]crop={1}:{2}:0:'{3}'[{0}f];", p, w, hb, pick);
+                text.AppendFormat(CultureInfo.InvariantCulture, "color=c=0x808080:s={0}x{1}:r={2}:d={3},format=gbrap{4}[{5}y];", w, hb, r.Rate, once, hold, p);
+            }
+            else
+            {
+                var second = Glitch.Push(offset, 2, limit);
+                text.Append(ScanKit.Rows(r, w, length, p + "r", (push, push, push, push, p + "x0"), (second, second, second, second, p + "h0"), (brightness, brightness, brightness, "255", p + "f0")));
+                text.AppendFormat(CultureInfo.InvariantCulture, "[{0}x0]crop={1}:{2}:0:'{3}'[{0}x];[{0}h0]crop={1}:{2}:0:'{3}'[{0}h];[{0}f0]crop={1}:{2}:0:'{3}'[{0}f];", p, w, hb, pick);
+                text.AppendFormat(CultureInfo.InvariantCulture, "color=c=0x808080:s={0}x{1}:r={2}:d={3},format=gbrap{4},split[{5}y][{5}i];", w, hb, r.Rate, once, hold, p);
+            }
 
             // 밀기 → 색 어긋남 → 덩어리(띠 안 네모 하나를 옆 자리와 바꿈, 1초에 12번 자리가 바뀌고 그중 2/3쯤에만) → 밝기 무늬
             text.AppendFormat(CultureInfo.InvariantCulture, "[{0}g][{0}x][{0}y]displace=edge=smear", p);
+            if (twice)
+                text.AppendFormat(CultureInfo.InvariantCulture, "[{0}j];[{0}j][{0}h][{0}i]displace=edge=smear", p);
             if (shape.Split > 0)
                 text.AppendFormat(CultureInfo.InvariantCulture, ",rgbashift=rh={0}:bh={1}", shape.Split, -shape.Split);
             var frame = string.Format(CultureInfo.InvariantCulture, "floor((t+{0})*{1}+0.001)", N(r.TimeOffset), Rate);
