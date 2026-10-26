@@ -182,9 +182,10 @@ namespace VideoEditor.UiTests
                 await ui.WaitUntil(() => Ui.Window("인물 마스크 만들기") == null, TimeSpan.FromMinutes(3), "다 만들어 진행 창 닫힘");
                 await ui.WaitUntil(() => Status(window).StartsWith("인물 마스크를 만들었습니다 — 사람에게만 효과가 사람 위에만 그려집니다(testsrc.mp4, ", StringComparison.Ordinal),
                     Wait, "만듦 알림");
-                var masks = Directory.GetFiles(Path.Combine(MaskRoot(plugin), "masks"));
+                // 마스크 하나와 그 원본 기록(.source) 하나 — 기록은 원본을 지웠거나 바꾼 마스크 정리에 쓴다(#30)
+                var masks = Directory.GetFiles(Path.Combine(MaskRoot(plugin), "masks"), "*.mkv");
                 Assert.Single(masks);
-                Assert.EndsWith(".mkv", masks[0], StringComparison.Ordinal);
+                Assert.Single(Directory.GetFiles(Path.Combine(MaskRoot(plugin), "masks"), "*.source"));
                 var written = File.GetLastWriteTimeUtc(masks[0]);
                 Assert.False(Directory.Exists(Path.Combine(MaskRoot(plugin), "models")), "FOLDERSS_VE_PERSONMASK의 모델을 두고 또 받았습니다.");
                 // ONNX Runtime은 zip에 든 것(runtimes\win-x64\native)을 불렀다 — Windows 폴더의 다른 onnxruntime.dll이 아니라
@@ -201,7 +202,8 @@ namespace VideoEditor.UiTests
                 await ui.WaitUntil(() => Status(window).StartsWith("인물 마스크를 이미 만들어 두었습니다(testsrc.mp4)", StringComparison.Ordinal), Wait, "만들어 둔 마스크 알림");
                 Assert.Null(ui.Run(() => Ui.Window("인물 마스크 만들기")));
                 Assert.Equal(written, File.GetLastWriteTimeUtc(masks[0]));
-                Assert.Single(Directory.GetFiles(Path.Combine(MaskRoot(plugin), "masks")));
+                Assert.Single(Directory.GetFiles(Path.Combine(MaskRoot(plugin), "masks"), "*.mkv"));
+                Assert.Single(Directory.GetFiles(Path.Combine(MaskRoot(plugin), "masks"), "*.source"));
                 Assert.Empty(ui.TakeErrors());
             }
             finally
