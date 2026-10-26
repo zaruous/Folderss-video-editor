@@ -224,6 +224,79 @@ namespace VideoEditor.Tests
             Assert.False(effect.Values.ContainsKey("nothing"));
         }
 
+        // ---------- 고르기 매개변수·순서 바꾸기(#28) ----------
+
+        [Fact]
+        public void Choice_RayDirection_IsAChoiceOfFour()
+        {
+            var dir = RayScan.Def.Param("dir");
+            Assert.Equal(EffectParamKind.Choice, dir.Kind);
+            Assert.Equal(new[] { "왼쪽 → 오른쪽", "오른쪽 → 왼쪽", "위 → 아래", "아래 → 위" }, dir.Options);
+            Assert.Equal(0, dir.Min);
+            Assert.Equal(3, dir.Max);
+            Assert.Equal(0, dir.Default);
+            Assert.Equal(0, VideoEffects.Create(RayScan.Def).Values["dir"]);
+        }
+
+        [Fact]
+        public void Choice_OldNumberValuesOpenAsTheNearestOption()
+        {
+            // 예전 판은 방향을 0~3 숫자(슬라이더)로 저장했다 — 그리기는 가까운 정수였으므로 열 때 같은 선택지로
+            var project = TestProjects.Empty();
+            var clip = TimelineEdits.CreateClip(TestProjects.Video(), project.Rate, 0, 0);
+            TimelineEdits.Place(project, project.MainTrack, clip, 0);
+            WithScanLine(clip);
+            var json = ProjectFile.Snapshot(project);
+            // 클립 하나에 8개까지
+            var olds = new[] { "0", "1", "2", "3", "2.4", "2.5", "-1", "9" };
+            var effects = "[" + string.Join(",", olds.Select(v => "{\"Id\":\"ray-scan\",\"Values\":{\"dir\":" + v + "}}")) + "]";
+            var loaded = ProjectFile.FromSnapshot(ReplaceEffects(json, effects)).FindClip(clip.Id).Effects;
+            Assert.Equal(new double[] { 0, 1, 2, 3, 2, 3, 0, 3 }, loaded.Select(e => e.Values["dir"]));
+            // 저장하면 다시 숫자로 — 예전 판에서 열어도 같은 방향
+            var again = ProjectFile.Snapshot(ProjectFile.FromSnapshot(ReplaceEffects(json, effects)));
+            Assert.Contains("\"dir\":2,", again.Replace(" ", ""));
+        }
+
+        [Fact]
+        public void Choice_SetAndRead_RoundToAnOption()
+        {
+            var effect = VideoEffects.Create(RayScan.Def);
+            VideoEffects.SetNumber(effect, "dir", 2.6);
+            Assert.Equal(3, effect.Values["dir"]);
+            VideoEffects.SetNumber(effect, "dir", -4);
+            Assert.Equal(0, effect.Values["dir"]);
+            // 값 사전에 직접 들어간 소수(남이 만든 파일을 고치기 전)도 읽을 때는 선택지로
+            effect.Values["dir"] = 1.2;
+            Assert.Equal(1, VideoEffects.Number(effect, RayScan.Def, "dir"));
+        }
+
+        [Fact]
+        public void Move_ChangesTheDrawingOrder_RefusesLockedTracks_IgnoresBadIndexes()
+        {
+            var project = TestProjects.Empty();
+            var clip = TimelineEdits.CreateClip(TestProjects.Video(), project.Rate, 0, 0);
+            TimelineEdits.Place(project, project.MainTrack, clip, 0);
+            foreach (var def in new[] { ScanLine.Def, RgbSplit.Def, ShakeZoom.Heartbeat })
+                VideoEffects.Add(project, clip, def);
+            string Order() => string.Join(",", VideoEffects.Renderable(clip).Select(r => r.Def.Id));
+
+            Assert.True(VideoEffects.Move(project, clip, 2, 0));
+            Assert.Equal(string.Join(",", ShakeZoom.Heartbeat.Id, ScanLine.Id, RgbSplit.Def.Id), Order());
+            Assert.True(VideoEffects.Move(project, clip, 0, 1));
+            Assert.Equal(string.Join(",", ScanLine.Id, ShakeZoom.Heartbeat.Id, RgbSplit.Def.Id), Order());
+
+            var before = Order();
+            Assert.False(VideoEffects.Move(project, clip, 1, 1));
+            Assert.False(VideoEffects.Move(project, clip, -1, 0));
+            Assert.False(VideoEffects.Move(project, clip, 0, 3));
+            Assert.False(VideoEffects.Move(project, new Clip { Kind = ClipKind.Media, HasVideo = true }, 0, 1));
+            Assert.Equal(before, Order());
+
+            project.MainTrack.Locked = true;
+            Assert.Throws<EditException>(() => VideoEffects.Move(project, clip, 0, 1));
+            Assert.Equal(before, Order());
+        }
+
         [Fact]
         public void Split_And_Clone_DeepCopyEffects()
         {
@@ -386,6 +459,49 @@ namespace VideoEditor.Tests
             Assert.DoesNotContain("VideoStart", ProjectFile.Snapshot(project));
             project.Media[0].VideoStart = 0.4;
             Assert.Equal(0.4, ProjectFile.FromSnapshot(ProjectFile.Snapshot(project)).Media[0].VideoStart, 6);
+        }
+
+        [Fact]
+        public void Probe_RecordsItsVersion_OldVideoMediaIsReadAgainOnOpen()
+        {
+            // 화면 시작 0은 "읽었더니 0"과 "예전 프로젝트라 읽지 않음"이 같아 보인다 — 읽은 판으로 가른다(#30)
+            const string plain = "{\"format\":{\"format_name\":\"mov,mp4\",\"duration\":\"3.0\",\"start_time\":\"0.000000\"},"
+                + "\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":1920,\"height\":1080,\"avg_frame_rate\":\"30/1\",\"start_time\":\"0.000000\"}]}";
+            var probed = FfmpegText.ParseProbe("plain.mp4", plain);
+            Assert.Equal(MediaInfo.CurrentProbe, probed.ProbeVersion);
+            var copy = new MediaInfo { Path = "x.mp4" };
+            copy.CopyFrom(probed);
+            Assert.Equal(MediaInfo.CurrentProbe, copy.ProbeVersion);
+            // 저장·다시 열기에 남고, 예전 파일(값 없음)은 0
+            var project = TestProjects.Empty();
+            project.Media.Add(probed);
+            Assert.Equal(MediaInfo.CurrentProbe, ProjectFile.FromSnapshot(ProjectFile.Snapshot(project)).Media[0].ProbeVersion);
+            project.Media[0].ProbeVersion = 0;
+            Assert.DoesNotContain("ProbeVersion", ProjectFile.Snapshot(project));
+
+            var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "fv-probe-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            try
+            {
+                MediaInfo Unchanged(string name, MediaKind kind, int version)
+                {
+                    var path = System.IO.Path.Combine(folder, name);
+                    System.IO.File.WriteAllText(path, "원본");
+                    var file = new System.IO.FileInfo(path);
+                    return new MediaInfo { Path = path, Kind = kind, HasVideo = kind != MediaKind.Audio, FileSize = file.Length, FileTime = file.LastWriteTimeUtc.Ticks, ProbeVersion = version };
+                }
+                // 파일은 그대로여도 예전 판으로 읽은 동영상은 다시 읽는다 — 사진·오디오는 화면 시작과 상관없어 그대로
+                Assert.True(VideoEditor.Media.MediaProbe.IsStale(Unchanged("old.mp4", MediaKind.Video, 0)));
+                Assert.False(VideoEditor.Media.MediaProbe.IsStale(Unchanged("new.mp4", MediaKind.Video, MediaInfo.CurrentProbe)));
+                Assert.False(VideoEditor.Media.MediaProbe.IsStale(Unchanged("old.png", MediaKind.Image, 0)));
+                Assert.False(VideoEditor.Media.MediaProbe.IsStale(Unchanged("old.mp3", MediaKind.Audio, 0)));
+                // 파일이 없으면 다시 읽지 않는다(예전과 같음)
+                Assert.False(VideoEditor.Media.MediaProbe.IsStale(new MediaInfo { Path = System.IO.Path.Combine(folder, "없음.mp4"), Kind = MediaKind.Video, HasVideo = true }));
+            }
+            finally
+            {
+                System.IO.Directory.Delete(folder, true);
+            }
         }
 
         [Fact]

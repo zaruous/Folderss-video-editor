@@ -413,6 +413,101 @@ namespace VideoEditor.Tests
             Assert.Equal(2, styles.Count);
         }
 
+        // ---------- 이름 바꾸기·순서·파일로 옮기기(#27) ----------
+
+        private static List<(string Name, TextStyle Style)> Three()
+        {
+            return new List<(string Name, TextStyle Style)> { ("노랑", new TextStyle { Bold = true }), ("Neon", new TextStyle()), ("한", new TextStyle { Italic = true }) };
+        }
+
+        [Fact]
+        public void Rename_KeepsTheStyleAndPlace_RefusesBadOrTakenNames()
+        {
+            var styles = Three();
+            var bold = styles[0].Style;
+            Assert.Null(TextStyleLibrary.Rename(styles, "노랑", "  제목  "));
+            Assert.Equal(new[] { "제목", "Neon", "한" }, styles.Select(s => s.Name));
+            Assert.Same(bold, styles[0].Style);
+            // 대소문자만 바꾸기는 된다(같은 스타일)
+            Assert.Null(TextStyleLibrary.Rename(styles, "neon", "NEON"));
+            Assert.Equal("NEON", styles[1].Name);
+            // 다른 스타일의 이름(대소문자 무시)·규칙에 맞지 않는 이름·없는 스타일은 거절하고 그대로
+            Assert.NotNull(TextStyleLibrary.Rename(styles, "한", "제목"));
+            Assert.Equal(TextStyleLibrary.NameRule, TextStyleLibrary.Rename(styles, "한", "줄\n바꿈"));
+            Assert.Equal(TextStyleLibrary.NameRule, TextStyleLibrary.Rename(styles, "한", new string('가', 41)));
+            Assert.NotNull(TextStyleLibrary.Rename(styles, "없음", "새 이름"));
+            Assert.Equal(new[] { "제목", "NEON", "한" }, styles.Select(s => s.Name));
+        }
+
+        [Fact]
+        public void Move_ChangesTheOrder_IgnoresBadIndexes()
+        {
+            var styles = Three();
+            Assert.True(TextStyleLibrary.Move(styles, 2, 0));
+            Assert.Equal(new[] { "한", "노랑", "Neon" }, styles.Select(s => s.Name));
+            Assert.True(TextStyleLibrary.Move(styles, 0, 1));
+            Assert.Equal(new[] { "노랑", "한", "Neon" }, styles.Select(s => s.Name));
+            Assert.False(TextStyleLibrary.Move(styles, 1, 1));
+            Assert.False(TextStyleLibrary.Move(styles, -1, 0));
+            Assert.False(TextStyleLibrary.Move(styles, 0, 3));
+            Assert.False(TextStyleLibrary.Move(null, 0, 1));
+            Assert.Equal(new[] { "노랑", "한", "Neon" }, styles.Select(s => s.Name));
+            // 바뀐 순서가 설정에 그대로 남는다
+            Assert.Equal(new[] { "노랑", "한", "Neon" }, TextStyleLibrary.Read(TextStyleLibrary.Write(styles)).Select(s => s.Name));
+        }
+
+        [Fact]
+        public void Import_AddsNewNames_SkipsTakenNames_StopsAtTheLimit()
+        {
+            // 내보낸 파일 = 설정과 같은 글(다른 PC에서 가져옴)
+            var file = TextStyleLibrary.Write(new List<(string Name, TextStyle Style)>
+            {
+                ("NEON", new TextStyle { Bold = true }), ("파랑", new TextStyle { Italic = true }), ("초록", new TextStyle())
+            });
+            var styles = Three();
+            var neon = styles[1].Style;
+            var result = TextStyleLibrary.Import(styles, file);
+            Assert.Equal((2, 1, 0), (result.Added, result.Skipped, result.Full));
+            Assert.Equal(new[] { "노랑", "Neon", "한", "파랑", "초록" }, styles.Select(s => s.Name));
+            // 같은 이름은 내 것을 그대로 둔다
+            Assert.Same(neon, styles[1].Style);
+            Assert.True(styles[3].Style.Italic);
+            Assert.Contains("2개", result.Message);
+            Assert.Contains("1개", result.Message);
+
+            // 같은 파일을 또 가져오면 모두 건너뛴다(쌓이지 않음)
+            var again = TextStyleLibrary.Import(styles, file);
+            Assert.Equal((0, 3, 0), (again.Added, again.Skipped, again.Full));
+            Assert.Equal(5, styles.Count);
+
+            // 50개가 차면 남은 것은 넣지 못한다
+            var many = Enumerable.Range(1, 48).Select(i => ("가득 " + i, new TextStyle())).ToList();
+            var full = Three();
+            var outcome = TextStyleLibrary.Import(full, TextStyleLibrary.Write(many));
+            Assert.Equal((47, 0, 1), (outcome.Added, outcome.Skipped, outcome.Full));
+            Assert.Equal(TextStyleLibrary.MaxCount, full.Count);
+            Assert.Contains("50", outcome.Message);
+        }
+
+        [Fact]
+        public void Import_BadFile_AddsNothing_WithTheReadRules()
+        {
+            foreach (var bad in new[] { "", "not json", "{\"Name\":\"x\"}", "[]", new string('[', 100), "[" + new string(' ', TextStyleLibrary.MaxJsonLength) + "]" })
+            {
+                var styles = Three();
+                var result = TextStyleLibrary.Import(styles, bad);
+                Assert.Equal((0, 0, 0), (result.Added, result.Skipped, result.Full));
+                Assert.Equal(3, styles.Count);
+                Assert.Contains("가져올 스타일이 없습니다", result.Message);
+            }
+            // 규칙에 맞지 않는 항목(보이지 않는 글자 이름)은 읽기와 같이 버리고, 스타일 값은 정규화한다
+            var mixed = "[{\"Name\":\"a\u200Bb\",\"Style\":{}},{\"Name\":\"크게\",\"Style\":{\"LetterSpacing\":1e9}}]";
+            var list = Three();
+            Assert.Equal(1, TextStyleLibrary.Import(list, mixed).Added);
+            Assert.Equal("크게", list.Last().Name);
+            Assert.True(list.Last().Style.LetterSpacing < 1e9);
+        }
+
         [Fact]
         public void NewName_IsTheNextFreeNumber()
         {

@@ -314,6 +314,96 @@ namespace VideoEditor.Tests
             Assert.True(File.Exists(ready));
         }
 
+        // ---------- 캐시 정리(#30) ----------
+
+        /// <summary>원본의 마스크(만들기가 쓰는 것처럼 원본 기록과 함께)를 bytes 크기로 만든다.</summary>
+        private static string Mask(PersonMaskService service, string source, int bytes = 10, bool record = true)
+        {
+            Directory.CreateDirectory(service.MaskFolder);
+            var mask = Expected(service, source, false);
+            File.WriteAllBytes(mask, new byte[bytes]);
+            if (record)
+                PersonMaskService.RecordSource(mask, source);
+            return mask;
+        }
+
+        [Fact]
+        public void Cleanup_RemovesMasksWhoseSourceIsGoneOrChanged_KeepsTheRest()
+        {
+            var service = new PersonMaskService(Path.Combine(_folder, "person-mask"));
+            var kept = Mask(service, Source("있음.mp4"));
+            var deletedSource = Source("지움.mp4");
+            var orphan = Mask(service, deletedSource);
+            File.Delete(deletedSource);
+            var changedSource = Source("바꿈.mp4");
+            var stale = Mask(service, changedSource);
+            File.WriteAllText(changedSource, "바꿔 넣은 원본 — 길이가 다르다");
+            // 원본 폴더째 없으면(빠진 USB·네트워크 드라이브일 수 있다) 남긴다
+            Directory.CreateDirectory(Path.Combine(_folder, "usb"));
+            var unplugged = Path.Combine(_folder, "usb", "드라이브.mp4");
+            File.WriteAllText(unplugged, "원본");
+            var away = Mask(service, unplugged);
+            Directory.Delete(Path.Combine(_folder, "usb"), true);
+            // 기록이 없는 예전 마스크는 원본을 모른다 — 남긴다(크기 상한으로만 정리)
+            var legacy = Mask(service, Source("예전.mp4"), record: false);
+            File.Delete(Path.Combine(_folder, "예전.mp4"));
+            // 마스크 없이 남은 기록은 지운다
+            var lonely = Path.Combine(service.MaskFolder, "0123456789abcdef-0123456789abcdef.source");
+            File.WriteAllText(lonely, Path.Combine(_folder, "있음.mp4"));
+
+            service.Cleanup(TimeSpan.FromHours(1));
+
+            Assert.True(File.Exists(kept));
+            Assert.Equal(kept, service.Find(Path.Combine(_folder, "있음.mp4")));
+            Assert.False(File.Exists(orphan));
+            Assert.False(File.Exists(stale));
+            Assert.True(File.Exists(away));
+            Assert.True(File.Exists(legacy));
+            Assert.False(File.Exists(lonely));
+            // 지운 마스크의 기록도 함께 — 남은 기록은 있음·빠진 드라이브 둘(예전 마스크는 기록이 없다)
+            Assert.Equal(2, Directory.EnumerateFiles(service.MaskFolder, "*.source").Count());
+        }
+
+        [Fact]
+        public void Cleanup_OverTheCap_RemovesLeastRecentlyUsedFirst_KeepsADayOfUse()
+        {
+            var service = new PersonMaskService(Path.Combine(_folder, "person-mask"));
+            var oldest = Mask(service, Source("a.mp4"), 100);
+            var older = Mask(service, Source("b.mp4"), 100);
+            var recent = Mask(service, Source("c.mp4"), 100);
+            var now = DateTime.UtcNow;
+            foreach (var (file, age) in new[] { (oldest, TimeSpan.FromDays(3)), (older, TimeSpan.FromDays(2)), (recent, TimeSpan.FromHours(1)) })
+            {
+                File.SetLastWriteTimeUtc(file, now - age);
+                File.SetLastAccessTimeUtc(file, now - age);
+            }
+            // 250바이트 상한: 가장 오래 안 쓴 것 하나만 지우면 들어온다
+            service.Cleanup(TimeSpan.FromHours(1), 250);
+            Assert.False(File.Exists(oldest));
+            Assert.False(File.Exists(oldest.Substring(0, oldest.Length - 4) + ".source"));
+            Assert.True(File.Exists(older) && File.Exists(recent));
+            // 50바이트 상한: 오래된 것은 지우지만 하루 안에 쓴 것은 남긴다
+            service.Cleanup(TimeSpan.FromHours(1), 50);
+            Assert.False(File.Exists(older));
+            Assert.True(File.Exists(recent));
+        }
+
+        [Fact]
+        public void Find_MarksTheMaskAsUsed()
+        {
+            var service = new PersonMaskService(Path.Combine(_folder, "person-mask"));
+            var source = Source("v.mp4");
+            var mask = Mask(service, source);
+            var old = DateTime.UtcNow.AddDays(-10);
+            File.SetLastWriteTimeUtc(mask, old);
+            File.SetLastAccessTimeUtc(mask, old);
+            Assert.Equal(mask, service.Find(source));
+            Assert.True(DateTime.UtcNow - File.GetLastAccessTimeUtc(mask) < TimeSpan.FromMinutes(1));
+            // 쓴 마스크는 상한을 넘어도 남는다
+            service.Cleanup(TimeSpan.FromHours(1), 1);
+            Assert.True(File.Exists(mask));
+        }
+
         [Fact]
         public async Task Build_RefusesAudio()
         {
@@ -494,7 +584,9 @@ namespace VideoEditor.Tests
             var rebuilt = await service.Build(FfmpegMedia.Tool, media, null, CancellationToken.None);
             Assert.NotEqual(mask, rebuilt);
             Assert.False(File.Exists(mask));
-            Assert.Single(Directory.GetFiles(service.MaskFolder));
+            // 마스크 하나와 그 원본 기록 하나(옛 마스크의 기록도 지움)
+            Assert.Single(Directory.GetFiles(service.MaskFolder, "*.png"));
+            Assert.Single(Directory.GetFiles(service.MaskFolder, "*.source"));
         }
 
         [PersonMaskFact]
@@ -559,7 +651,8 @@ namespace VideoEditor.Tests
             Assert.Equal(mask, await service.Build(FfmpegMedia.Tool, media, null, CancellationToken.None));
             Assert.True(watch.ElapsedMilliseconds < 1000, "캐시를 쓰지 않았습니다: " + watch.ElapsedMilliseconds + "ms");
             Assert.Equal(written, File.GetLastWriteTimeUtc(mask));
-            Assert.Single(Directory.GetFiles(service.MaskFolder));
+            Assert.Single(Directory.GetFiles(service.MaskFolder, "*.mkv"));
+            Assert.Single(Directory.GetFiles(service.MaskFolder, "*.source"));
         }
     }
 }

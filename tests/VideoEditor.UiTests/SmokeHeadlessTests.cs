@@ -81,12 +81,9 @@ namespace VideoEditor.UiTests
                 });
                 await ui.WaitUntil(() => Ui.Window("FFmpeg 설치") == null, Wait, "설치 창 닫힘");
                 await ui.WaitUntil(() => FfmpegStatus(window).StartsWith("FFmpeg 없음", StringComparison.Ordinal), Wait, "상태 줄: FFmpeg 없음");
-                ui.Run(() =>
-                {
-                    var placeholder = Ui.ById<TextBlock>(window, "PreviewPlaceholder");
-                    Assert.Contains("FFmpeg", placeholder.Text);
-                    Ui.Snap(window, plugin.ShotFolder, "no-ffmpeg");
-                });
+                // 미리 보기 안내 글도 FFmpeg 변경 알림을 디스패처에 맡겨 고치므로, 상태 줄과 같은 순간에 바뀐다고 볼 수 없다 — 바뀔 때까지 기다린다
+                await ui.WaitUntil(() => Ui.ById<TextBlock>(window, "PreviewPlaceholder").Text.Contains("FFmpeg"), Wait, "미리 보기 안내: FFmpeg 없음");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "no-ffmpeg"));
                 Assert.Empty(ui.TakeErrors());
             }
             finally

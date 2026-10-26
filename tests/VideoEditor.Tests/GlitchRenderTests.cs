@@ -243,6 +243,126 @@ namespace VideoEditor.Tests
             Assert.Equal(glitch, Render(project, burst, burst + 1));
         }
 
+        /// <summary>프로젝트(320×240)를 scale배 크기로 그린 한 장(BGRA).</summary>
+        private static byte[] RenderAt(Project project, long frame, int scale)
+        {
+            var tool = FfmpegMedia.Tool;
+            var plan = RenderGraph.Build(project, new RenderOptions
+            {
+                From = frame, To = frame + 1, Width = Width * scale, Height = Height * scale, Audio = false, Preview = true,
+                TempFolder = RenderEnvironment.TempFolder(), FfmpegMajor = tool.MajorVersion
+            });
+            var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out var script);
+            try
+            {
+                return FfmpegRunner.RunBytes(tool.FfmpegPath, args, TimeSpan.FromSeconds(60), CancellationToken.None).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                RenderCommand.TryDelete(script);
+            }
+        }
+
+        [FfmpegFact]
+        public void LineSlip_At2x_RowsMoveTwiceAsFar_PastTheDisplaceLimit()
+        {
+            // displace 지도 한 장은 ±127px까지라 1080p를 4K로 내보내면 큰 밀림이 잘렸다(#29) — 두 번에 나눠 밀어 1배의 두 배로
+            var project = NewProject();
+            var clip = Add(project, project.MainTrack, Across, 0);
+            var effect = With(clip, LineSlip.Def, ("rate", 100), ("amount", 100), ("thick", 12), ("fringe", 0));
+            // 가로 밝기 기울기(X·255/319) 그림: 가운데 열이 가져온 원본 자리 = 밝기 → 그 줄이 밀린 거리
+            double Offset(byte[] bgra, int scale, int y)
+            {
+                var x = Width * scale / 2;
+                var value = bgra[(y * Width * scale + x) * 4 + 1];
+                return value * 319.0 / 255 * scale - x;
+            }
+            // 글리치 때 가운데 열에서 75px 넘게 민 줄이 있는 장(2배면 150px — 한도 127px을 넘는다)
+            var frame = -1;
+            byte[] one = null;
+            foreach (var f in Enumerable.Range(0, 90).Where(f => LineSlip.IsBurst(effect, f, 30, 0.05)))
+            {
+                one = RenderAt(project, f, 1);
+                if (Enumerable.Range(2, Height - 4).Select(y => Math.Abs(Offset(one, 1, y))).Where(d => d <= 150).DefaultIfEmpty(0).Max() > 75)
+                {
+                    frame = f;
+                    break;
+                }
+            }
+            Assert.True(frame >= 0, "75px 넘게 민 장이 없다");
+            var two = RenderAt(project, frame, 2);
+            double farthest = 0;
+            var compared = 0;
+            for (var y = 2; y < Height - 2; y++)
+            {
+                var d1 = Offset(one, 1, y);
+                // 가장자리를 넘어 번진(smear) 줄은 뺀다
+                if (Math.Abs(d1) > 150)
+                    continue;
+                var d2 = Offset(two, 2, 2 * y + 1);
+                farthest = Math.Max(farthest, Math.Abs(d2));
+                // 밝기 한 단계가 1배에서 1.25px, 2배에서 2.5px이라 읽은 거리는 ±(2 × 1.25 + 2.5)px까지 어긋날 수 있다
+                Assert.InRange(d2, 2 * d1 - 6, 2 * d1 + 6);
+                compared++;
+            }
+            _out.WriteLine("견준 줄 " + compared + " · 2배에서 가장 멀리 민 거리 " + farthest.ToString("0") + "px");
+            Assert.True(compared > 100);
+            Assert.True(farthest > 140, "2배에서 127px을 넘게 밀어야 한다: " + farthest);
+        }
+
+        [FfmpegFact]
+        public void GlitchScan_At2x_TwoPassGraphRuns_AndMovesTheBand()
+        {
+            // 글리치 스캔(세기 100)을 2배로: 두 번 미는 그래프를 FFmpeg가 받고, 띠 안 그림이 실제로 밀린다
+            var project = NewProject();
+            var clip = Add(project, project.MainTrack, Across, 0);
+            With(clip, GlitchScan.Def, ("amount", 100), ("band", 60), ("opacity", 100));
+            var plain = NewProject();
+            Add(plain, plain.MainTrack, Across, 0);
+            var moved = RenderAt(project, 20, 2);
+            var still = RenderAt(plain, 20, 2);
+            Assert.Equal(Width * 2 * Height * 2 * 4, moved.Length);
+            var changed = Enumerable.Range(0, moved.Length / 4).Count(i => Math.Abs(moved[i * 4 + 1] - still[i * 4 + 1]) > 8);
+            _out.WriteLine("바뀐 픽셀 " + changed);
+            Assert.True(changed > 1000);
+        }
+
+        [FfmpegFact]
+        public void BadSignal_At2x_RowsMoveTwiceAsFar_PastTheDisplaceLimit()
+        {
+            // 줄 떨림·찢김만(잡음·롤링·주사선·색 번짐 0): 2배로 그리면 줄마다 1배의 두 배쯤 밀린다(한도 127px을 넘어)
+            var project = NewProject();
+            var clip = Add(project, project.MainTrack, Across, 0);
+            With(clip, BadSignal.Def, ("noise", 0), ("roll", 0), ("scan", 0), ("bleed", 0), ("jitter", 100), ("rate", 100));
+            double Offset(byte[] bgra, int scale, int y)
+            {
+                var x = Width * scale / 2;
+                return bgra[(y * Width * scale + x) * 4 + 1] * 319.0 / 255 * scale - x;
+            }
+            double farthest = 0;
+            var compared = 0;
+            foreach (var frame in Enumerable.Range(0, 30))
+            {
+                var one = RenderAt(project, frame, 1);
+                var two = RenderAt(project, frame, 2);
+                for (var y = 2; y < Height - 2; y++)
+                {
+                    var d1 = Offset(one, 1, y);
+                    if (Math.Abs(d1) > 150)
+                        continue;
+                    var d2 = Offset(two, 2, 2 * y + 1);
+                    farthest = Math.Max(farthest, Math.Abs(d2));
+                    // 줄마다 잘게 떠는 몫(±3px × 배율)은 줄 번호로 정해져 2배에서는 다른 값이다 — 그만큼(1배 3 + 2배 6)과 밝기 단계(±5)를 더 둔다
+                    Assert.InRange(d2, 2 * d1 - 15, 2 * d1 + 15);
+                    compared++;
+                }
+                if (farthest > 140)
+                    break;
+            }
+            _out.WriteLine("견준 줄 " + compared + " · 2배에서 가장 멀리 민 거리 " + farthest.ToString("0") + "px");
+            Assert.True(farthest > 140, "2배에서 127px을 넘게 밀어야 한다: " + farthest);
+        }
+
         [FfmpegFact]
         public void LineSlip_ShiftsWholeRowsSideways_OnlyDuringBursts()
         {

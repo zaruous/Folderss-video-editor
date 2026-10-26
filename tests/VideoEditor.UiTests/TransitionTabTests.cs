@@ -17,6 +17,13 @@ namespace VideoEditor.UiTests
     /// <summary>[전환] 탭: 전환 효과를 클립 사이에 넣고(모두·고른 클립·끌어 놓기) 빼며, 타임라인 위치는 그대로다.</summary>
     public class TransitionTabTests
     {
+        private readonly Xunit.Abstractions.ITestOutputHelper _out;
+
+        public TransitionTabTests(Xunit.Abstractions.ITestOutputHelper output)
+        {
+            _out = output;
+        }
+
         private static async Task Import(UiThread ui, Window window, string name)
         {
             ui.Post(() => Key(window, System.Windows.Input.Key.I, ModifierKeys.Control));
@@ -62,6 +69,119 @@ namespace VideoEditor.UiTests
         {
             var tile = Tile(window, id);
             return tile == null ? null : ((Image)((Border)((StackPanel)tile.Content).Children[0]).Child).Source;
+        }
+
+        /// <summary>미리 보기가 마지막으로 그린 프레임(PreviewPlayer.ShownFrame).</summary>
+        private static long ShownFrame(Window window)
+        {
+            var view = Ui.ById<FrameworkElement>(window, "VideoEditorView");
+            var player = view.GetType().GetField("_player", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view);
+            return (long)Get(player, "ShownFrame");
+        }
+
+        /// <summary>
+        /// 미리 보기 가운데 줄의 오른쪽 끝에서 이어진 빨간 픽셀 수(UI 스레드) — 닦아내기의 새 화면(빨간 사진) 넓이.
+        /// 오른쪽 끝부터 세므로 원본 영상(testsrc)의 빨간 막대는 섞이지 않는다.
+        /// </summary>
+        private static int RedColumns(Window window)
+        {
+            var bitmap = (System.Windows.Media.Imaging.BitmapSource)Ui.ById<Image>(window, "PreviewImage").Source;
+            var stride = bitmap.PixelWidth * 4;
+            var row = new byte[stride];
+            bitmap.CopyPixels(new Int32Rect(0, bitmap.PixelHeight / 2, bitmap.PixelWidth, 1), row, stride, 0);
+            var count = 0;
+            for (var x = bitmap.PixelWidth - 1; x >= 0 && row[x * 4 + 2] > 180 && row[x * 4 + 1] < 80 && row[x * 4] < 80; x--)
+                count++;
+            return count;
+        }
+
+        /// <summary>
+        /// 전환 이징(#32, Windows 실측): 효과 파일에 "ease": "inout"을 적은 사용자 수식 전환은 [전환] 탭에 썸네일이 붙고,
+        /// 미리 보기에서 전환 1/4 지점의 새 화면(빨강) 넓이가 이징 없는 같은 수식보다 좁다(천천히 시작). 가운데 지점은 거의 같다.
+        /// </summary>
+        [EditorFact]
+        public async Task UserTransition_Ease_ThumbnailAndPreviewFollowTheCurve()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            var folder = Path.Combine(plugin.Manager.DataDirectory, "transitions");
+            var file = Path.Combine(folder, "ease-test.json");
+            try
+            {
+                await Import(ui, window, "testsrc.mp4");
+                await Import(ui, window, "red.png");
+                Directory.CreateDirectory(folder);
+                // X > W·P면 새 화면(B) — xfade의 P는 1에서 0으로 가므로 새 화면이 오른쪽부터 넓어진다
+                File.WriteAllText(file, "{ \"transitions\": ["
+                    + " { \"id\": \"UiWipeLinear\", \"name\": \"시험 닦기\", \"expr\": \"if(gt(X,W*P),B,A)\" },"
+                    + " { \"id\": \"UiWipeEase\", \"name\": \"시험 닦기 이징\", \"expr\": \"if(gt(X,W*P),B,A)\", \"ease\": \"inout\" } ] }");
+                ui.Run(() =>
+                {
+                    Ui.ById<TabControl>(window, "MediaTabs").SelectedItem = Ui.ById<TabItem>(window, "TransitionsTab");
+                });
+                await ui.WaitFor(() => Ui.ById<Button>(window, "TransitionReloadButton"), Wait, "전환 탭");
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "TransitionReloadButton")));
+                await ui.WaitUntil(() => Tiles(window).Contains("Transition_UiWipeLinear") && Tiles(window).Contains("Transition_UiWipeEase"), Wait, "사용자 효과 둘");
+                // 이징이 썸네일 캐시 키에 들어가 두 효과의 썸네일이 따로 그려진다. 사용자 효과는 목록 맨 끝이라
+                // 앞의 내장 효과 썸네일(셋씩)을 다 그린 뒤에 오므로 칸을 보이게 하고 넉넉히 기다린다
+                ui.Run(() =>
+                {
+                    Choose(window, "UiWipeEase");
+                    Tile(window, "UiWipeEase").BringIntoView();
+                });
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                await ui.WaitUntil(() => Thumbnail(window, "UiWipeLinear") != null && Thumbnail(window, "UiWipeEase") != null, TimeSpan.FromMinutes(4), "사용자 효과 썸네일");
+                _out.WriteLine("사용자 효과 썸네일까지 " + watch.Elapsed.TotalSeconds.ToString("0.0") + "초(내장 효과 " + (ui.Run(() => Tiles(window).Count) - 2) + "개 뒤)");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "transition-ease-thumbnails"));
+
+                async Task<int> RedAt(string kind, string timecode)
+                {
+                    ui.Run(() =>
+                    {
+                        SelectClip(window, n => n.Contains("red.png"));
+                        Choose(window, kind);
+                        Ui.ById<TextBox>(window, "TransitionSeconds").Text = "1";
+                        Ui.Click(Ui.ById<Button>(window, "TransitionApplyButton"));
+                    });
+                    await ui.WaitUntil(() => Kind(window) == kind && Length(window) == 30, Wait, kind + " 넣기");
+                    ui.Run(() =>
+                    {
+                        var box = Ui.ById<TextBox>(window, "TimecodeBox");
+                        Ui.Focus(box);
+                        box.Text = timecode;
+                        Ui.Press(box, System.Windows.Input.Key.Enter);
+                    });
+                    // 미리 보기가 그 프레임을 실제로 그릴 때까지(이 PC는 FFmpeg 시작에 1초 넘게 걸린다)
+                    var frame = ((long.Parse(timecode.Substring(0, 2)) * 60 + long.Parse(timecode.Substring(3, 2))) * 60 + long.Parse(timecode.Substring(6, 2))) * 30 + long.Parse(timecode.Substring(9, 2));
+                    await ui.WaitUntil(() => ShownFrame(window) == frame && PreviewHasPicture(window), Wait, "전환 미리 보기 " + timecode);
+                    return ui.Run(() => RedColumns(window));
+                }
+
+                // 전환은 사진 시작(3초)부터 1초 — 7프레임 지점(1/4 남짓)과 가운데(15프레임)
+                var linearQuarter = await RedAt("UiWipeLinear", "00:00:03:07");
+                var linearMiddle = await RedAt("UiWipeLinear", "00:00:03:15");
+                var easeQuarter = await RedAt("UiWipeEase", "00:00:03:07");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "transition-ease-quarter"));
+                var easeMiddle = await RedAt("UiWipeEase", "00:00:03:15");
+                var width = ui.Run(() => ((System.Windows.Media.Imaging.BitmapSource)Ui.ById<Image>(window, "PreviewImage").Source).PixelWidth);
+                // 계산값(새 화면 비율, 진행 1/4 → P = 0.75): 일정 25%, inout 1 − 0.75²·(3 − 1.5) = 15.6% · 가운데(P = 0.5): 둘 다 50%
+                var message = string.Format("미리 보기 폭 {0}px · 1/4 지점 새 화면 일정 {1}px({2:0.0}%) / inout {3}px({4:0.0}%) · 가운데 일정 {5}px({6:0.0}%) / inout {7}px({8:0.0}%)",
+                    width, linearQuarter, 100.0 * linearQuarter / width, easeQuarter, 100.0 * easeQuarter / width,
+                    linearMiddle, 100.0 * linearMiddle / width, easeMiddle, 100.0 * easeMiddle / width);
+                _out.WriteLine(message);
+                Assert.InRange(100.0 * linearQuarter / width, 21, 29);
+                Assert.InRange(100.0 * easeQuarter / width, 12, 19.5);
+                Assert.InRange(100.0 * linearMiddle / width, 46, 54);
+                Assert.InRange(Math.Abs(linearMiddle - easeMiddle), 0, width * 0.02);
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                if (File.Exists(file))
+                    File.Delete(file);
+                await CloseEditor(ui, window);
+            }
         }
 
         [EditorFact]

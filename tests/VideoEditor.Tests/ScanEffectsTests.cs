@@ -113,7 +113,7 @@ namespace VideoEditor.Tests
                         var effect = VideoEffects.Create(def);
                         if (setting != "기본")
                         {
-                            foreach (var p in def.Params.Where(p => p.Kind == EffectParamKind.Number))
+                            foreach (var p in def.Params.Where(p => p.Kind != EffectParamKind.Color))
                                 VideoEffects.SetNumber(effect, p.Key, setting == "최소" ? p.Min : p.Max);
                         }
                         yield return (def.Id + " " + w + "x" + h + " " + setting + (mask != null ? " 사람에게만" : ""), Render(def, effect, w, h, k, mask, 1.25));
@@ -128,6 +128,26 @@ namespace VideoEditor.Tests
             }
         }
 
+        [Fact]
+        public void Shockwave_DirectionMap_IsDrawnCoarse_AndStretchedSmoothly()
+        {
+            // 큰 틀에서 방향 지도를 q×q칸마다 그려 가장 가까운 칸으로 늘이면(remap) 고리 안쪽에 계단이 졌다(#29) —
+            // 양선형으로 늘이면 같은 비용에 방향 오차(평균)가 1/6 남짓(실측·계산은 이슈 #29)
+            var effect = VideoEffects.Create(ShockwaveScan.Def);
+            VideoEffects.SetNumber(effect, "refract", 100);
+            string Recipe(int w, int h) => ShockwaveScan.Def.Recipe(new EffectRender { Effect = effect, Def = ShockwaveScan.Def, Width = w, Height = h, PixelScale = 1, Rate = "30/1", Fps = 30, Seconds = 2, TimeOffset = 0, Label = "fx0" });
+            var hd = Recipe(1920, 1080);
+            Assert.Contains("s=480x270:", hd);
+            Assert.Contains("[fx0t]scale=1920:1080:flags=bilinear,crop=1920:1080:0:0,tpad=", hd);
+            // 빛 모양 표의 remap 하나뿐(방향 지도는 remap으로 늘이지 않음)
+            Assert.Single(Regex.Matches(hd, "remap"));
+            // 나누어떨어지지 않는 크기: 칸을 올림해 늘인 뒤 틀 크기로 자른다
+            Assert.Contains("[fx0t]scale=1284:724:flags=bilinear,crop=1281:721:0:0,", Recipe(1281, 721));
+            // 중간 크기는 2×2칸, 작은 틀은 픽셀마다(늘이지 않음)
+            Assert.Contains("[fx0t]scale=640:360:flags=bilinear", Recipe(640, 360));
+            Assert.DoesNotContain("scale=", Recipe(320, 180));
+        }
+
         [Theory]
         [MemberData(nameof(Ids))]
         public void Recipe_FollowsTheRules_NoForbiddenFunctions_NoScale_LabelsOwnedAndUsedOnce(string id)
@@ -140,9 +160,12 @@ namespace VideoEditor.Tests
                 Assert.True(text.StartsWith("[" + render.Label, StringComparison.Ordinal) || text.StartsWith(",", StringComparison.Ordinal), name + ": " + text.Substring(0, Math.Min(80, text.Length)));
                 Assert.False(text.EndsWith("]", StringComparison.Ordinal), name);
                 Assert.DoesNotContain(";;", text);
-                // 조각마다 값이 섞이거나 그릴 때마다 달라지는 함수, 크기 바꾸기, 숫자가 아닌 숫자
-                foreach (var bad in new[] { "st(", "ld(", "random", "time(", "scale", "NaN", "Infinity", "∞", "E+", "E-" })
+                // 조각마다 값이 섞이거나 그릴 때마다 달라지는 함수, 숫자가 아닌 숫자
+                foreach (var bad in new[] { "st(", "ld(", "random", "time(", "NaN", "Infinity", "∞", "E+", "E-" })
                     Assert.False(text.Contains(bad, StringComparison.Ordinal), name + ": '" + bad + "'");
+                // 크기 바꾸기는 클립 흐름에 잇지 않는다 — 따로 그린 방향 지도(쇼크웨이브, 한 장)를 매끄럽게 늘이는 것만
+                foreach (Match scale in Regex.Matches(text, "scale="))
+                    Assert.Equal("[" + render.Label + "t]scale=", text.Substring(scale.Index - render.Label.Length - 3, render.Label.Length + 9));
                 // 라벨은 이 효과의 것(앞머리)이고 한 번 내고 한 번 쓴다. 마스크 라벨은 받은 것을 한 번만 쓴다
                 var labels = Labels(text);
                 foreach (var group in labels.GroupBy(l => l))
@@ -175,8 +198,9 @@ namespace VideoEditor.Tests
             // 클립 안 2초(프레임 90)부터 한 장
             var filter = RenderGraph.Build(project, new RenderOptions { From = 90, To = 91, Width = project.Width, Height = project.Height, Audio = false, Preview = true, TempFolder = "T:/tmp" }).Filter;
             var clipChain = filter.Split(";\n").Single(c => c.Contains("[fx0e0a]"));
-            // 체인 앞(원본 → 틀 맞춤)의 크기 바꾸기 하나뿐 — 효과는 크기 바꾸기를 쓰지 않는다
-            Assert.Single(Regex.Matches(clipChain, "scale="));
+            // 클립 흐름의 크기 바꾸기는 체인 앞(원본 → 틀 맞춤) 하나뿐 — 효과는 클립 흐름에 크기 바꾸기를 잇지 않는다(따로 그린 방향 지도 "[…t]scale"은 빼고 센다)
+            Assert.Single(Regex.Matches(clipChain, @"(?<!t\])scale="));
+            Assert.Single(Regex.Matches(clipChain, @"t\]scale="));
             Assert.Contains("mod(t+2,", clipChain);
             for (var i = 0; i < Family.Length; i++)
                 Assert.Contains("[fx0e" + i, clipChain);
@@ -235,7 +259,9 @@ namespace VideoEditor.Tests
             }
             VideoEffects.SetNumber(glitch, "amount", 100);
             VideoEffects.SetNumber(glitch, "split", 60);
-            Assert.Equal(127, GlitchScan.Measure(glitch, 3840, 2160, 2).Shift);
+            // 2배로 내보내면 한도도 두 배(두 번에 나눠 민다 — #29): 1080p의 120px이 240px
+            Assert.Equal(240, GlitchScan.Measure(glitch, 3840, 2160, 2).Shift);
+            Assert.Equal(120, GlitchScan.Measure(glitch, 1920, 1080, 1).Shift);
             Assert.Equal(120, GlitchScan.Measure(glitch, 3840, 2160, 2).Split);
 
             // 레이: 방향마다 나아가는 쪽으로

@@ -26,6 +26,12 @@ namespace VideoEditor.Core
         public string Expr { get; set; }
         /// <summary>필요한 FFmpeg 주 버전(0이면 최소 지원 버전).</summary>
         public int Ffmpeg { get; set; }
+        /// <summary>
+        /// 수식 효과의 움직임(이징): in = 천천히 시작, out = 천천히 끝, inout = 둘 다. 없으면 일정(linear — 검사가 linear를 없음으로 바꾼다).
+        /// 그릴 때 수식의 P를 이징을 건 P로 바꿔 넣는다(<see cref="Transitions.XfadeOption"/>).
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string Ease { get; set; }
 
         /// <summary>플러그인에 든 기본 효과인지(아니면 사용자 효과 — 클립에 정의를 함께 저장한다).</summary>
         [JsonIgnore]
@@ -134,10 +140,42 @@ namespace VideoEditor.Core
             clip.TransitionDef = def.BuiltIn ? null : def;
         }
 
-        /// <summary>xfade의 효과 옵션: transition=wipeleft 또는 transition=custom:expr='…'.</summary>
+        /// <summary>xfade의 효과 옵션: transition=wipeleft 또는 transition=custom:expr='…'(이징이 있으면 P를 바꿔 넣은 수식).</summary>
         public static string XfadeOption(TransitionDef def)
         {
-            return def.Expr != null ? "transition=custom:expr=" + RenderGraph.FilterValue(def.Expr) : "transition=" + def.Xfade;
+            return def.Expr != null ? "transition=custom:expr=" + RenderGraph.FilterValue(EasedExpr(def)) : "transition=" + def.Xfade;
+        }
+
+        // 이징: P(1 → 0)를 대신할 수식 — 진행 u = 1 − P에 in = u², out = 1 − (1 − u)², inout = u²(3 − 2u)(smoothstep)를 건 것을 P로 되돌린 꼴
+        private static readonly Dictionary<string, string> EaseTexts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["in"] = "(1-(1-P)*(1-P))",
+            ["out"] = "(P*P)",
+            ["inout"] = "(P*P*(3-2*P))"
+        };
+
+        /// <summary>그릴 수식: 이징이 없으면 그대로, 있으면 낱말 P만(PLANE·PI·PHI는 그대로) 이징을 건 P로 바꾼다.</summary>
+        private static string EasedExpr(TransitionDef def)
+        {
+            if (def.Ease == null || !EaseTexts.TryGetValue(def.Ease, out var eased))
+                return def.Expr;
+            return Word.Replace(def.Expr, m => m.Value == "P" ? eased : m.Value);
+        }
+
+        /// <summary>이징을 건 P(수식과 같은 계산 — 시험·설명용). p는 1(시작) → 0(끝).</summary>
+        public static double EasedProgress(string ease, double p)
+        {
+            switch (ease)
+            {
+                case "in":
+                    return 1 - (1 - p) * (1 - p);
+                case "out":
+                    return p * p;
+                case "inout":
+                    return p * p * (3 - 2 * p);
+                default:
+                    return p;
+            }
         }
 
         /// <summary>효과 미리 보기 띠(PNG) 한 장의 칸 수·크기·전환이 시작하는 칸. 칸마다 0.1초.</summary>
@@ -167,7 +205,7 @@ namespace VideoEditor.Core
         /// <summary>미리 보기 띠 캐시 이름(그리는 방법이 같으면 같은 이름).</summary>
         public static string PreviewKey(TransitionDef def)
         {
-            var recipe = "v1|" + PreviewWidth + "x" + PreviewHeight + "|" + (def.Expr != null ? "expr:" + def.Expr : "xfade:" + def.Xfade);
+            var recipe = "v1|" + PreviewWidth + "x" + PreviewHeight + "|" + (def.Expr != null ? "expr:" + EasedExpr(def) : "xfade:" + def.Xfade);
             using (var sha = System.Security.Cryptography.SHA256.Create())
                 return BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(recipe))).Replace("-", "").Substring(0, 24).ToLowerInvariant();
         }
@@ -222,6 +260,19 @@ namespace VideoEditor.Core
                 error = def.Id + ": " + why;
                 return null;
             }
+            var ease = def.Ease?.Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(ease) || ease == "linear")
+                ease = null;
+            else if (!EaseTexts.ContainsKey(ease))
+            {
+                error = def.Id + ": 모르는 ease '" + Shorten(def.Ease) + "'(linear·in·out·inout)";
+                return null;
+            }
+            else if (def.Xfade != null)
+            {
+                error = def.Id + ": ease는 expr 효과에만 쓸 수 있습니다";
+                return null;
+            }
             return new TransitionDef
             {
                 Id = def.Id,
@@ -230,6 +281,7 @@ namespace VideoEditor.Core
                 Xfade = def.Xfade,
                 Expr = def.Expr?.Trim(),
                 Ffmpeg = ffmpeg,
+                Ease = ease,
                 BuiltIn = false
             };
         }

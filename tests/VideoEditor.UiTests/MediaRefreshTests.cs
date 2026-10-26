@@ -13,6 +13,90 @@ namespace VideoEditor.UiTests
     /// <summary>같은 이름으로 사진을 바꿔 넣고 프로젝트를 다시 열면 미디어 크기를 다시 읽는다(낡은 크기를 보이지 않게).</summary>
     public class MediaRefreshTests
     {
+        private readonly Xunit.Abstractions.ITestOutputHelper _out;
+
+        public MediaRefreshTests(Xunit.Abstractions.ITestOutputHelper output)
+        {
+            _out = output;
+        }
+
+        /// <summary>
+        /// 예전 프로젝트의 화면 시작 다시 읽기(#30, Windows 실측): 읽은 판(ProbeVersion)이 없는 동영상 8개짜리 프로젝트를 열면
+        /// 목록은 바로 보이고, 동영상마다 배경에서 다시 읽어 판 1이 된다. 그동안 편집 창(UI 스레드)은 막히지 않는다.
+        /// </summary>
+        [EditorFact]
+        public async Task OldProject_VideosReadAgainInBackground_EditorStaysResponsive()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var folder = Path.Combine(plugin.Root, "old-probe-" + Guid.NewGuid().ToString("N").Substring(0, 6));
+            Directory.CreateDirectory(folder);
+            var names = Enumerable.Range(1, 8).Select(i => "v" + i + ".mp4").ToArray();
+            foreach (var name in names)
+                File.Copy(Path.Combine(MediaFolder, "testsrc.mp4"), Path.Combine(folder, name));
+            var project = Path.Combine(folder, "old.fvproj");
+            var window = await Open(ui, plugin);
+            try
+            {
+                plugin.Manager.SetSetting("lastFolder", folder);
+                ui.Post(() => Key(window, System.Windows.Input.Key.I, ModifierKeys.Control));
+                await NativeDialogs.Open(ui, string.Join(" ", names.Select(n => "\"" + n + "\"")), Wait);
+                await ui.WaitUntil(() => Ui.ById<ListBox>(window, "MediaList").Items.Count == names.Length, Wait, "동영상 8개 가져오기");
+                ui.Post(() => Ui.Menu(window, "파일", "다른 이름으로 저장"));
+                await NativeDialogs.SaveAs(ui, project, Wait);
+                await ui.WaitUntil(() => File.Exists(project), Wait, "저장");
+
+                // 예전 프로젝트로: 미디어의 읽은 판(ProbeVersion)을 지운다
+                var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(project));
+                var removed = 0;
+                foreach (var media in node["Media"].AsArray())
+                {
+                    if (media.AsObject().Remove("ProbeVersion"))
+                        removed++;
+                }
+                Assert.Equal(names.Length, removed);
+                File.WriteAllText(project, node.ToJsonString());
+
+                int ProbeVersion(object media) => (int)Get(media, "ProbeVersion");
+                System.Collections.Generic.List<object> Media() => ((System.Collections.IEnumerable)Get(Project(window), "Media")).Cast<object>().ToList();
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                ui.Post(() => Ui.Menu(window, "파일", "프로젝트 열기"));
+                await NativeDialogs.Open(ui, project, Wait);
+                var dialogDone = watch.ElapsedMilliseconds;
+                await ui.WaitUntil(() => Ui.ById<ListBox>(window, "MediaList").Items.Count == names.Length && (string)Get(Session(window), "FilePath") == project, Wait, "목록");
+                var listed = watch.ElapsedMilliseconds;
+                // 다시 읽는 동안 UI 스레드가 응답하는지(왕복 시간의 최대)
+                var worst = 0L;
+                var readAgain = -1L;
+                while (watch.Elapsed < TimeSpan.FromMinutes(2))
+                {
+                    var ping = System.Diagnostics.Stopwatch.StartNew();
+                    var done = ui.Run(() => Media().All(m => ProbeVersion(m) == 1));
+                    worst = Math.Max(worst, ping.ElapsedMilliseconds);
+                    if (done)
+                    {
+                        readAgain = watch.ElapsedMilliseconds;
+                        break;
+                    }
+                    await Task.Delay(50);
+                }
+                Assert.True(readAgain >= 0, "2분 안에 모두 다시 읽지 못했습니다");
+                ui.Run(() =>
+                {
+                    Assert.False((bool)Get(Session(window), "Dirty"));
+                    Ui.Snap(window, plugin.ShotFolder, "old-project-reread");
+                });
+                _out.WriteLine(string.Format("예전 프로젝트(동영상 {0}개) 열기: 대화상자 뒤 목록까지 {1}ms · 모두 다시 읽기까지 {2}ms(동영상당 약 {3}ms) · 그동안 UI 스레드 왕복 최대 {4}ms",
+                    names.Length, listed - dialogDone, readAgain - dialogDone, (readAgain - dialogDone) / names.Length, worst));
+                Assert.True(worst < 500, "UI 스레드 응답 " + worst + "ms");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                plugin.Manager.SetSetting("lastFolder", MediaFolder);
+                await CloseEditor(ui, window);
+            }
+        }
         [EditorFact]
         public async Task ReopenedProject_RereadsReplacedPhotoSize()
         {

@@ -26,7 +26,7 @@ namespace VideoEditor.Core
             using (var document = JsonDocument.Parse(json))
             {
                 var root = document.RootElement;
-                var info = new MediaInfo { Path = path };
+                var info = new MediaInfo { Path = path, ProbeVersion = MediaInfo.CurrentProbe };
                 double formatDuration = 0;
                 double formatStart = 0;
                 var formatName = "";

@@ -67,7 +67,10 @@ namespace VideoEditor.Core
             return rho / 2 + (y - rho / 2) * s;
         }
 
-        /// <summary>기준선 길이 1을 원호 |a|·2π에 감는다. a &gt; 0이면 원 위쪽 바깥, a &lt; 0이면 위아래를 뒤집어 아래쪽.</summary>
+        /// <summary>
+        /// 기준선 길이 1을 원호 |a|·2π에 감는다. a &gt; 0이면 원 위쪽 바깥, a &lt; 0이면 위아래를 뒤집어 아래쪽.
+        /// 반지름은 글 덩어리 높이(ρ) 이상 — 짧은 글·여러 줄 글의 아래 끝이 원 가운데를 넘어 접히지 않게, 그만큼 덜 감는다.
+        /// </summary>
         private static (double X, double Y) Circle(double a, double x, double y, double rho)
         {
             if (Math.Abs(a) < 1e-6)
@@ -75,8 +78,8 @@ namespace VideoEditor.Core
             var flip = a < 0;
             if (flip)
                 y = rho - y;
-            var span = Math.Abs(a) * 2 * Math.PI;
-            var radius = 1 / span;
+            var radius = Math.Max(1 / (Math.Abs(a) * 2 * Math.PI), rho);
+            var span = 1 / radius;
             var centerY = rho / 2 + radius;
             var phi = (x - 0.5) * span;
             var r = radius + (rho / 2 - y);

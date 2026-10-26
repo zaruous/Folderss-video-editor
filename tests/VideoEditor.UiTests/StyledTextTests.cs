@@ -498,7 +498,7 @@ namespace VideoEditor.UiTests
                 Assert.True(max.Centroid(true).Weight > 0, "그림자가 있어야 한다");
                 Assert.Equal(0, max.BorderInk());
             }
-            // 효과 배율 2: 거리는 두 배, 흐림 반지름은 상한 100
+            // 효과 배율 2: 거리·흐림 반지름 모두 두 배(흐림 상한 100은 곱하기 전 — #26)
             var scaled = await Render(rasterizer, Request(rasterizer, "WAV가", 3840, 2160, 240, WhiteFill + "," + Shadow(200, 30, 100), 2), "shadow-max-scale-2");
             Assert.Equal(0, scaled.BorderInk());
         }
@@ -990,6 +990,36 @@ namespace VideoEditor.UiTests
             var huge = await Render(rasterizer, Request(rasterizer, "가나다라마바사", 640, 360, 300), "huge");
             Assert.Equal(640, huge.Width);
             Assert.Equal(360, huge.Height);
+        }
+
+        /// <summary>
+        /// 흐림 상한(#26, Windows 실측): 1080p 프로젝트를 4K로 내보낼 때(효과 배율 2) 흐림 100인 그림자·광선은 반지름 200으로 그린다.
+        /// 그리는 시간을 재고(PNG는 한 번 그려 캐시), 흐림이 PNG 가장자리에 닿지 않는지 본다. 같은 스타일의 1080p(배율 1) 시간도 함께 잰다.
+        /// </summary>
+        [UiFact]
+        public async Task Rasterizer_4KExport_MaxBlurShadowAndGlow_TimeAndStaysInside()
+        {
+            var rasterizer = NewRasterizer();
+            await Render(rasterizer, Request(rasterizer, "준비"), "warm-up-blur");
+            const string style = "\"Shadow\":{\"Enabled\":true,\"Distance\":40,\"Blur\":100,\"Opacity\":1},\"Glow\":{\"Enabled\":true,\"Color\":\"#38BDF8\",\"Size\":100,\"Opacity\":0.8}";
+            var watch = Stopwatch.StartNew();
+            var hd = await Render(rasterizer, Request(rasterizer, "흐림 200 시험", 1920, 1080, 100, style, 1.0), "blur-1080p");
+            var hdTime = watch.ElapsedMilliseconds;
+            watch.Restart();
+            var uhd = await Render(rasterizer, Request(rasterizer, "흐림 200 시험", 3840, 2160, 200, style, 2.0), "blur-4k-scale2");
+            var uhdTime = watch.ElapsedMilliseconds;
+            _out.WriteLine("흐림 100 그림자+광선: 1080p(배율 1, 반지름 100) " + hdTime + "ms · " + hd.Width + "×" + hd.Height
+                           + " / 4K(배율 2, 반지름 200) " + uhdTime + "ms · " + uhd.Width + "×" + uhd.Height);
+            Assert.True(uhd.Width <= 3840 && uhd.Height <= 2160);
+            // PNG 가장자리 1px 줄에 알파가 없다(흐림이 잘리지 않음)
+            foreach (var png in new[] { hd, uhd })
+            {
+                for (var x = 0; x < png.Width; x++)
+                    Assert.True(png.Alpha(x, 0) == 0 && png.Alpha(x, png.Height - 1) == 0, "위·아래 가장자리 x=" + x);
+                for (var y = 0; y < png.Height; y++)
+                    Assert.True(png.Alpha(0, y) == 0 && png.Alpha(png.Width - 1, y) == 0, "왼·오른 가장자리 y=" + y);
+            }
+            Assert.True(uhdTime < 15000, "4K 흐림 200 그리기 " + uhdTime + "ms");
         }
 
         private static string Warp(string kind, double amount)
@@ -2626,6 +2656,115 @@ namespace VideoEditor.UiTests
                 await ui.WaitUntil(() => Ui.ById<Button>(window, "StyleMine0") == null, Wait, "모두 지움");
                 Assert.Null(plugin.Manager.GetSetting(MyStylesKey));
                 Assert.Equal(Visibility.Visible, ui.Run(() => Ui.ById<TextBlock>(window, "StyleMineHint").Visibility));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+                plugin.Manager.SetSetting(MyStylesKey, null);
+            }
+        }
+
+        /// <summary>내 스타일 단추의 오른쪽 메뉴 항목(UI 스레드).</summary>
+        private static MenuItem MineMenuItem(Window window, int index, string header)
+        {
+            return Ui.ById<Button>(window, "StyleMine" + index).ContextMenu.Items.OfType<MenuItem>().First(m => Ui.HeaderText(m) == header);
+        }
+
+        /// <summary>
+        /// 내 스타일 관리(#27, Windows 실측): 오른쪽 메뉴 [이름 바꾸기…]·[앞으로]·[뒤로](맨 앞·맨 뒤에서는 꺼짐), 이미 있는 이름으로 바꾸기는 알리고 거절.
+        /// [내보내기…](Win32 저장 대화상자) → 둘을 지우고 [가져오기…](Win32 열기 대화상자) → 없던 둘만 더하고 같은 이름 하나는 건너뛰었다고 알린다.
+        /// 좁은 속성 패널에서 [내 스타일로 저장]·[가져오기…]·[내보내기…]가 패널 안에 보인다.
+        /// </summary>
+        [EditorFact]
+        public async Task MyStyles_RenameMoveExportImport_FromMenusAndFileDialogs()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            plugin.Manager.SetSetting(MyStylesKey, null);
+            Window window = null;
+            try
+            {
+                window = await Open(ui, plugin);
+                await AddStyledText(ui, window, "내 스타일 관리");
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleSaveMine"), Wait, "[내 스타일로 저장]");
+                foreach (var name in new[] { "가", "나", "다" })
+                    await SaveMine(ui, window, name);
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine2"), Wait, "내 스타일 셋");
+                Assert.Equal(new[] { "가", "나", "다" }, SavedNames(plugin));
+                ui.Run(() =>
+                {
+                    // 맨 앞은 [앞으로], 맨 뒤는 [뒤로]가 꺼짐
+                    Assert.False(MineMenuItem(window, 0, "앞으로").IsEnabled);
+                    Assert.True(MineMenuItem(window, 0, "뒤로").IsEnabled);
+                    Assert.True(MineMenuItem(window, 1, "앞으로").IsEnabled);
+                    Assert.False(MineMenuItem(window, 2, "뒤로").IsEnabled);
+                    Assert.Equal(new[] { "이름 바꾸기…", "앞으로", "뒤로", "지우기" }, Ui.ById<Button>(window, "StyleMine0").ContextMenu.Items.OfType<MenuItem>().Select(Ui.HeaderText));
+                    // 좁은 패널에서도 단추 셋이 패널 안에(넘치면 줄바꿈)
+                    var save = Ui.ById<Button>(window, "StyleSaveMine");
+                    var panel = (FrameworkElement)VisualTreeHelper.GetParent(save);
+                    foreach (var id in new[] { "StyleSaveMine", "StyleImportMine", "StyleExportMine" })
+                    {
+                        var button = Ui.ById<Button>(window, id);
+                        var right = button.TranslatePoint(new Point(button.ActualWidth, 0), panel).X;
+                        Assert.True(button.ActualWidth > 0 && right <= panel.ActualWidth + 0.5, id + " 오른쪽 " + right + " > 패널 " + panel.ActualWidth);
+                    }
+                    Ui.Snap(window, plugin.ShotFolder, "my-styles-manage");
+                    Ui.Invoke(MineMenuItem(window, 0, "뒤로"));
+                });
+                await ui.WaitUntil(() => SavedNames(plugin).SequenceEqual(new[] { "나", "가", "다" }), Wait, "[뒤로]");
+                await ui.WaitUntil(() => System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine0")) == "나", Wait, "단추 순서");
+                ui.Run(() => Ui.Invoke(MineMenuItem(window, 2, "앞으로")));
+                await ui.WaitUntil(() => SavedNames(plugin).SequenceEqual(new[] { "나", "다", "가" }), Wait, "[앞으로]");
+
+                // [이름 바꾸기…] — 이름 창에 지금 이름이 적혀 있다
+                ui.Post(() => Ui.Invoke(MineMenuItem(window, 0, "이름 바꾸기…")));
+                var input = await ui.WaitFor(() => DialogTitled("내 스타일 이름 바꾸기"), Wait, "이름 바꾸기 창");
+                ui.Run(() =>
+                {
+                    var box = Ui.ById<TextBox>(input, "DialogInputBox");
+                    Assert.Equal("나", box.Text);
+                    box.Text = "  나 새 이름 ";
+                    Ui.Click(Ui.ById<Button>(input, "DialogOkButton"));
+                });
+                await ui.WaitUntil(() => SavedNames(plugin).SequenceEqual(new[] { "나 새 이름", "다", "가" }), Wait, "이름 바꿈");
+                // 다른 스타일이 쓰는 이름은 알리고 거절
+                ui.Post(() => Ui.Invoke(MineMenuItem(window, 0, "이름 바꾸기…")));
+                input = await ui.WaitFor(() => DialogTitled("내 스타일 이름 바꾸기"), Wait, "이름 바꾸기 창 둘째");
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(input, "DialogInputBox").Text = "가";
+                    Ui.Click(Ui.ById<Button>(input, "DialogOkButton"));
+                });
+                var refused = await Answer(ui, "내 스타일", 0);
+                Assert.Contains("가", refused);
+                Assert.Equal(new[] { "나 새 이름", "다", "가" }, SavedNames(plugin));
+
+                // [내보내기…] → 파일
+                var file = Path.Combine(plugin.Root, "my-styles-" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".json");
+                ui.Post(() => Ui.Click(Ui.ById<Button>(window, "StyleExportMine")));
+                await NativeDialogs.SaveAs(ui, file, Wait);
+                await ui.WaitUntil(() => File.Exists(file) && Status(window).StartsWith("내 스타일 3개를 내보냈습니다", StringComparison.Ordinal), Wait, "내보내기");
+                using (var exported = JsonDocument.Parse(File.ReadAllText(file)))
+                    Assert.Equal(new[] { "나 새 이름", "다", "가" }, exported.RootElement.EnumerateArray().Select(e => e.GetProperty("Name").GetString()));
+
+                // 둘을 지우고 [가져오기…] → 없던 둘만 더하고 남아 있던 하나는 건너뜀
+                foreach (var _ in new[] { 0, 1 })
+                {
+                    var count = SavedNames(plugin).Count;
+                    ui.Run(() => Ui.ContextMenu(Ui.ById<Button>(window, "StyleMine0"), "지우기"));
+                    await ui.WaitUntil(() => SavedNames(plugin).Count == count - 1, Wait, "지우기");
+                }
+                Assert.Equal(new[] { "가" }, SavedNames(plugin));
+                ui.Post(() => Ui.Click(Ui.ById<Button>(window, "StyleImportMine")));
+                await NativeDialogs.Open(ui, file, Wait);
+                var imported = await Answer(ui, "내 스타일", 0);
+                _out.WriteLine("가져오기 알림: " + imported);
+                Assert.Contains("2", imported);
+                Assert.Contains("1", imported);
+                Assert.Equal(new[] { "가", "나 새 이름", "다" }, SavedNames(plugin));
+                await ui.WaitFor(() => Ui.ById<Button>(window, "StyleMine2"), Wait, "가져온 단추");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "my-styles-imported"));
                 Assert.Empty(ui.TakeErrors());
             }
             finally

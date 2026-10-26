@@ -300,7 +300,7 @@ namespace VideoEditor.Ui
             return SaveSound(media.Path, media.AudioCodec, 0, 0, 1, Path.GetFileNameWithoutExtension(media.Path) + " 사운드");
         }
 
-        /// <summary>[사운드를 파일로 저장…] 타임라인: 그 클립 구간(In~Out)만, 속도를 바꿨으면 속도대로(WAV).</summary>
+        /// <summary>[사운드를 파일로 저장…] 타임라인: 그 클립 구간(In~Out)만, 속도를 바꿨으면 속도대로(WAV). 음량·페이드가 있으면 넣을지 묻는다(넣으면 WAV).</summary>
         public Task SaveClipSound(string clipId)
         {
             var clip = Project.FindClip(clipId);
@@ -311,10 +311,13 @@ namespace VideoEditor.Ui
             }
             var rate = Project.Rate;
             var name = Path.GetFileNameWithoutExtension(clip.Path) + " 사운드 " + rate.Timecode(clip.SourceIn).Replace(':', '-');
-            return SaveSound(clip.Path, Project.FindMedia(clip.Path)?.AudioCodec, rate.ToSeconds(clip.SourceIn), rate.ToSeconds(clip.SourceOut - clip.SourceIn), clip.Speed, name);
+            var volume = SoundExtract.ClipVolume(rate, clip);
+            if (volume != null && UiKit.Ask(_owner, "사운드를 파일로 저장", "이 클립의 음량·페이드를 넣어 저장할까요? 넣으면 WAV로 저장합니다.", "넣어 저장", "원본 소리 그대로") != 0)
+                volume = null;
+            return SaveSound(clip.Path, Project.FindMedia(clip.Path)?.AudioCodec, rate.ToSeconds(clip.SourceIn), rate.ToSeconds(clip.SourceOut - clip.SourceIn), clip.Speed, name, volume);
         }
 
-        private async Task SaveSound(string source, string codec, double from, double seconds, double speed, string name)
+        private async Task SaveSound(string source, string codec, double from, double seconds, double speed, string name, string volume = null)
         {
             try
             {
@@ -322,8 +325,8 @@ namespace VideoEditor.Ui
                 var tool = await NeedTool();
                 if (tool == null)
                     return;
-                // 원본 그대로 꺼낼 수 있으면 코덱에 맞는 그릇(.m4a 등), 속도를 바꿨으면 WAV
-                var copy = Math.Abs(speed - 1) < 1e-9;
+                // 원본 그대로 꺼낼 수 있으면 코덱에 맞는 그릇(.m4a 등), 속도를 바꿨거나 음량·페이드를 넣으면 WAV
+                var copy = Math.Abs(speed - 1) < 1e-9 && volume == null;
                 var extension = copy ? SoundExtract.ExtensionFor(codec) : ".wav";
                 var filter = extension == ".wav" ? "WAV (*.wav)|*.wav" : "원본 그대로 (*" + extension + ")|*" + extension + "|WAV (*.wav)|*.wav";
                 var folder = _session.FilePath != null ? Path.GetDirectoryName(_session.FilePath) : Path.GetDirectoryName(source);
@@ -338,7 +341,7 @@ namespace VideoEditor.Ui
                 if (dialog.ShowDialog(UiKit.OwnerOf(_owner)) != true)
                     return;
                 Status("사운드를 꺼내는 중… " + Path.GetFileName(dialog.FileName));
-                var saved = await SoundExtractor.Extract(tool, source, codec, dialog.FileName, from, seconds, speed, CancellationToken.None);
+                var saved = await SoundExtractor.Extract(tool, source, codec, dialog.FileName, from, seconds, speed, CancellationToken.None, volume);
                 var fallback = !string.Equals(saved, dialog.FileName, StringComparison.OrdinalIgnoreCase);
                 await ImportPaths(new[] { saved }, null, -1);
                 Status("사운드를 저장하고 미디어에 더했습니다: " + saved
@@ -460,8 +463,13 @@ namespace VideoEditor.Ui
                         var start = playhead + copy.Start - first;
                         var partner = partners[i] >= 0 ? copies[partners[i]] : null;
                         if (partner != null && copy.AudioOnly)
+                        {
                             start += partner.Start - (playhead + clips[partners[i]].Start - first);
-                        TimelineEdits.Place(p, track, copy, start);
+                            // 0 앞으로 가면 그 부분을 잘라 싱크를 지킨다
+                            ClipLinks.PlaceInSync(p, track, copy, start);
+                        }
+                        else
+                            TimelineEdits.Place(p, track, copy, start);
                     }
                     ClipLinks.CopyLinks(originals, copies);
                 }, "붙여 넣었습니다."))

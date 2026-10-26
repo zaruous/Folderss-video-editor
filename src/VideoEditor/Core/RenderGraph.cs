@@ -406,10 +406,18 @@ namespace VideoEditor.Core
             // 맞춤의 그림 크기(틀 가운데, 남는 곳은 투명 — 틀 맞춤의 scale과 같은 계산) — 그림을 움직이는 효과가 빈 곳은 두고 그림 안에서만 움직이게. 원본 크기를 모르면 틀 전체
             var (pictureWidth, pictureHeight) = fit == ClipFit.Fit && media != null && media.Width > 0 && media.Height > 0
                 ? FitSize(media.Width, media.Height, boxWidth, boxHeight, false) : (0, 0);
+            // 이어 넣은 흔들림·줌은 perspective 하나로 합친다(효과마다 다시 보간하지 않게)
+            var run = new List<EffectRender>();
+            void Flush()
+            {
+                if (run.Count > 0)
+                    text.Append(ShakeZoom.CombinedRender(run));
+                run.Clear();
+            }
             for (var i = 0; i < effects.Count; i++)
             {
                 var (effect, def) = effects[i];
-                text.Append(def.Recipe(new EffectRender
+                var render = new EffectRender
                 {
                     Effect = effect,
                     Def = def,
@@ -425,8 +433,16 @@ namespace VideoEditor.Core
                     TimeOffset = rate.ToSeconds(segStart - clip.Start),
                     Label = "fx" + n + "e" + i,
                     Mask = Personal(effects[i]) && masks.Count > 0 ? masks.Dequeue() : null
-                }));
+                };
+                if (ShakeZoom.CanCombine(def))
+                {
+                    run.Add(render);
+                    continue;
+                }
+                Flush();
+                text.Append(def.Recipe(render));
             }
+            Flush();
             // 구간 길이로 자른다: 한 장 그림을 tpad로 늘인 효과 그림은 한 장이 더 길어(N+1장), blend·overlay가 둘 다 끝날 때까지 이어져
             // 클립이 끝난 뒤 한 장이 더 보였다(빈 곳·아래 트랙 위에 번쩍 — 한 장 그리기와 이어 그리기도 달랐다)
             text.AppendFormat(CultureInfo.InvariantCulture, ",trim=end_frame={0}", segEnd - segStart);

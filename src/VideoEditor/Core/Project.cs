@@ -39,6 +39,15 @@ namespace VideoEditor.Core
         /// </summary>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public double VideoStart { get; set; }
+        /// <summary>
+        /// 이 정보를 읽은 판(<see cref="CurrentProbe"/>, 0 = 예전 프로젝트). 화면 시작 0은 "읽었더니 0"과 "읽지 않음"이 같아 보이므로,
+        /// 열 때 예전 판으로 읽은 동영상을 다시 읽는 데 쓴다.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int ProbeVersion { get; set; }
+
+        /// <summary>지금 읽기의 판: 1 = 화면 시작(<see cref="VideoStart"/>)을 기록한다.</summary>
+        public const int CurrentProbe = 1;
 
         [JsonIgnore]
         public string Name { get { return System.IO.Path.GetFileName(Path); } }
@@ -59,6 +68,7 @@ namespace VideoEditor.Core
             FileSize = other.FileSize;
             FileTime = other.FileTime;
             VideoStart = other.VideoStart;
+            ProbeVersion = other.ProbeVersion;
         }
 
         /// <summary>화면(프로젝트) 비율과 3% 넘게 다른 그림인지 — 맞춤이면 빈 곳, 채우기면 잘리는 곳이 생긴다.</summary>

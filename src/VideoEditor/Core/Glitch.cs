@@ -90,6 +90,27 @@ namespace VideoEditor.Core
             return r.Mask == null ? "" : ",split[" + r.Label + "o][" + r.Label + "g];[" + r.Label + "o][" + r.Label + "g][" + r.Mask + "]maskedmerge=planes=7";
         }
 
+        /// <summary>
+        /// 이 틀에서 밀 수 있는 거리(출력 px): 프로젝트 크기의 한도 127px을 효과 배율만큼(두 번에 나눠 밀어 254px까지).
+        /// 1080p를 4K로 내보내도 1080p와 같은 비율로 밀린다. 배율 1 이하는 127(한 번 — 예전과 같음).
+        /// </summary>
+        public static int Limit(double pixelScale)
+        {
+            return (int)Math.Min(2 * MaxShift, Math.Round(MaxShift * Math.Max(1, pixelScale)));
+        }
+
+        /// <summary>
+        /// 미는 지도 값(geq 식). pass 0 = 한 번에 미는 지도(clip(128 + 거리), 예전과 같은 글), 1·2 = 두 번에 나눠 미는 앞·뒤 지도 —
+        /// 둘의 합이 round(거리)를 ±limit로 자른 값이고 각각 128 ± 127 안이다. 줄마다 가로로만 미는 지도(같은 줄은 같은 거리)는 두 번 밀어도 한 번에 민 것과 같다.
+        /// </summary>
+        public static string Push(string offset, int pass, int limit)
+        {
+            if (pass == 0)
+                return "clip(128+" + offset + ",0,255)";
+            var total = "clip(round(" + offset + "),-" + limit + "," + limit + ")";
+            return pass == 1 ? "(128+" + total + "-trunc(" + total + "/2))" : "(128+trunc(" + total + "/2))";
+        }
+
         /// <summary>길이(프로젝트 px)를 이 틀의 출력 픽셀로, displace 한도(127px) 안의 정수로.</summary>
         public static int Shift(double projectPixels, double pixelScale)
         {
@@ -355,8 +376,12 @@ namespace VideoEditor.Core
             var rate = r.Number("rate") / 100;
             if (amount <= 0 || rate <= 0)
                 return Glitch.Pass(r);
-            var shift = Glitch.Shift(amount * ShiftMax, r.PixelScale);
-            var fringe = Glitch.Shift(r.Number("fringe") / 100 * FringeMax, r.PixelScale);
+            // 크게 내보낼 때(배율 > 1) 한도(127px)를 넘으면 두 번에 나눠 민다 — 줄마다 가로로만 밀어 한 번에 민 것과 같다
+            var limit = Glitch.Limit(r.PixelScale);
+            var reach = (amount * ShiftMax + r.Number("fringe") / 100 * FringeMax) * r.PixelScale;
+            var twice = limit > Glitch.MaxShift && reach > Glitch.MaxShift;
+            var shift = twice ? (int)Math.Min(limit, Math.Round(amount * ShiftMax * r.PixelScale)) : Glitch.Shift(amount * ShiftMax, r.PixelScale);
+            var fringe = twice ? (int)Math.Min(limit, Math.Round(r.Number("fringe") / 100 * FringeMax * r.PixelScale)) : Glitch.Shift(r.Number("fringe") / 100 * FringeMax, r.PixelScale);
             var rows = Math.Max(1, (int)Math.Round(r.Height / Math.Max(1, r.Number("thick") * r.PixelScale)));
             string H(string x) => Glitch.HashExpr(x);
             var frame = Glitch.FrameExpr(r, "T");
@@ -369,13 +394,24 @@ namespace VideoEditor.Core
             var key = "(" + group + "*9.17+" + m + "*1.73)";
             var active = gate + "*lt(" + H(key + "+0.25") + "," + N(0.25 + 0.35 * amount) + ")";
             var dx = N(shift) + "*" + power + "*(2*" + H(key + "*2.113+1.9") + "-1)";
-            string X(string extra) => "clip(128+" + active + "*(" + dx + extra + "),0,255)";
+            string X(string extra, int pass) => Glitch.Push(active + "*(" + dx + extra + ")", pass, limit);
 
             var text = new StringBuilder(Glitch.Begin(r, p + "a"));
             // 빨강은 오른쪽으로, 파랑은 왼쪽으로 조금 더(지도 값이 128 - 거리면 그만큼 왼쪽 것을 가져와 오른쪽으로 밀려 보인다)
-            text.Append(Glitch.Map(r, 1, rows, X(""), X("+" + N(fringe)), X("-" + N(fringe)), X(""), p + "x"));
-            text.Append(Glitch.FlatMap(r, p + "y"));
-            text.AppendFormat(CultureInfo.InvariantCulture, ";[{0}a][{0}x][{0}y]displace=edge=smear", p);
+            if (!twice)
+            {
+                text.Append(Glitch.Map(r, 1, rows, X("", 0), X("+" + N(fringe), 0), X("-" + N(fringe), 0), X("", 0), p + "x"));
+                text.Append(Glitch.FlatMap(r, p + "y"));
+                text.AppendFormat(CultureInfo.InvariantCulture, ";[{0}a][{0}x][{0}y]displace=edge=smear", p);
+            }
+            else
+            {
+                text.Append(Glitch.Map(r, 1, rows, X("", 1), X("+" + N(fringe), 1), X("-" + N(fringe), 1), X("", 1), p + "x"));
+                text.Append(Glitch.Map(r, 1, rows, X("", 2), X("+" + N(fringe), 2), X("-" + N(fringe), 2), X("", 2), p + "w"));
+                text.Append(Glitch.FlatMap(r, p + "y"));
+                text.Append(Glitch.FlatMap(r, p + "z"));
+                text.AppendFormat(CultureInfo.InvariantCulture, ";[{0}a][{0}x][{0}y]displace=edge=smear[{0}b];[{0}b][{0}w][{0}z]displace=edge=smear", p);
+            }
             text.Append(Glitch.Finish(r));
             return text.ToString();
         }
@@ -495,10 +531,24 @@ namespace VideoEditor.Core
             // 색 번짐: 빨강은 오른쪽으로, 파랑은 왼쪽으로 조금 번진다
             var red = N(bleed * 8 * r.PixelScale);
             var blue = N(bleed * 4 * r.PixelScale);
-            string X(string extra) => "clip(128+" + dx + extra + ",0,255)";
-            text.Append(Glitch.Map(r, 1, h, X(""), X("+" + blue), X("-" + red), X(""), p + "x"));
-            text.Append(Glitch.FlatMap(r, p + "y"));
-            text.AppendFormat(CultureInfo.InvariantCulture, ";[{0}][{1}x][{1}y]displace=edge=smear", source, p);
+            // 크게 내보낼 때 한도(127px)를 넘으면 두 번에 나눠 민다(줄마다 가로로만 밀어 한 번에 민 것과 같다)
+            var limit = Glitch.Limit(r.PixelScale);
+            var twice = limit > Glitch.MaxShift && (jitter * (12 + 3 + 80) + bleed * 8) * r.PixelScale > Glitch.MaxShift;
+            string X(string extra, int pass) => Glitch.Push(dx + extra, pass, limit);
+            if (!twice)
+            {
+                text.Append(Glitch.Map(r, 1, h, X("", 0), X("+" + blue, 0), X("-" + red, 0), X("", 0), p + "x"));
+                text.Append(Glitch.FlatMap(r, p + "y"));
+                text.AppendFormat(CultureInfo.InvariantCulture, ";[{0}][{1}x][{1}y]displace=edge=smear", source, p);
+            }
+            else
+            {
+                text.Append(Glitch.Map(r, 1, h, X("", 1), X("+" + blue, 1), X("-" + red, 1), X("", 1), p + "x"));
+                text.Append(Glitch.Map(r, 1, h, X("", 2), X("+" + blue, 2), X("-" + red, 2), X("", 2), p + "w"));
+                text.Append(Glitch.FlatMap(r, p + "y"));
+                text.Append(Glitch.FlatMap(r, p + "z"));
+                text.AppendFormat(CultureInfo.InvariantCulture, ";[{0}][{1}x][{1}y]displace=edge=smear[{1}b];[{1}b][{1}w][{1}z]displace=edge=smear", source, p);
+            }
             if (bleed > 0)
             {
                 // 색이 바랜다: 밝기 쪽으로 섞는다(최대 40%)

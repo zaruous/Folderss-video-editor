@@ -90,9 +90,9 @@ namespace VideoEditor.Tests
             Assert.True(ScanLine.Def.AllowsPersonOnly);
             Assert.Equal(new[] { "horizontal", "vertical", "rotate", "speed" }, ShakeZoom.CameraShake.Params.Select(p => p.Key));
             Assert.Equal(new[] { "amount", "speed", "blur" }, ShakeZoom.Earthquake.Params.Select(p => p.Key));
-            Assert.Equal(new[] { "amount", "bpm", "second" }, ShakeZoom.Heartbeat.Params.Select(p => p.Key));
+            Assert.Equal(new[] { "amount", "bpm", "second", "centerx", "centery" }, ShakeZoom.Heartbeat.Params.Select(p => p.Key));
             Assert.Equal(new[] { "zoom", "duration", "start", "centerx", "centery" }, ShakeZoom.PunchZoom.Params.Select(p => p.Key));
-            Assert.Equal(new[] { "zoom", "period", "elastic", "repeat" }, ShakeZoom.ZoomBounce.Params.Select(p => p.Key));
+            Assert.Equal(new[] { "zoom", "period", "elastic", "repeat", "centerx", "centery" }, ShakeZoom.ZoomBounce.Params.Select(p => p.Key));
             Assert.Equal(VideoEffects.All.Count, ids.Distinct().Count());
         }
 
@@ -145,6 +145,41 @@ namespace VideoEditor.Tests
                 var start = chain.IndexOf("perspective=", StringComparison.Ordinal);
                 Assert.Equal(16, CountOf(chain.Substring(start, chain.IndexOf(":eval=frame", StringComparison.Ordinal) - start), "'"));
             }
+        }
+
+        [Fact]
+        public void Graph_SeveralShakeZoomInARow_BecomeOnePerspective_OthersBreakTheRun()
+        {
+            // 흔들림·줌을 여럿 넣으면 효과마다 다시 보간해 그림이 무르고 느렸다 — 이어진 것은 perspective 하나로 합친다(#29)
+            var (project, clip) = OneClip(ShakeZoom.CameraShake);
+            clip.Effects.Add(VideoEffects.Create(ShakeZoom.PunchZoom));
+            clip.Effects.Add(VideoEffects.Create(ShakeZoom.Earthquake));
+            var chain = ClipChain(RenderGraph.Build(project, Options(project, 0, 60)).Filter);
+            Assert.Equal(1, CountOf(chain, "perspective="));
+            Assert.Equal(1, CountOf(chain, "scale="));
+            // 지진의 흐림은 합친 움직임 뒤에
+            Assert.Matches(":eval=frame,convolution=[^,]+,trim=end_frame=\\d+", chain);
+            var start = chain.IndexOf("perspective=", StringComparison.Ordinal);
+            Assert.Equal(16, CountOf(chain.Substring(start, chain.IndexOf(":eval=frame", StringComparison.Ordinal) - start), "'"));
+            foreach (var forbidden in new[] { "st(", "ld(", "random(", "time(" })
+                Assert.DoesNotContain(forbidden, chain);
+
+            // 사이에 다른 효과가 끼면 그 앞뒤는 따로(그리는 순서를 지킨다)
+            clip.Effects.Insert(1, VideoEffects.Create(RgbSplit.Def));
+            chain = RenderGraph.Build(project, Options(project, 0, 60)).Filter;
+            Assert.Equal(2, CountOf(chain, "perspective="));
+        }
+
+        [Fact]
+        public void CombinedMotion_OfOneEffect_IsTheSameText_AsTheEffectAlone()
+        {
+            foreach (var def in Family)
+            {
+                var render = new EffectRender { Effect = VideoEffects.Create(def), Def = def, Width = 640, Height = 360, PixelScale = 1, Rate = "30/1", Fps = 30, Seconds = 2, TimeOffset = 0, Label = "fx0" };
+                Assert.Equal(def.Recipe(render), ShakeZoom.CombinedRender(new[] { render }));
+                Assert.True(ShakeZoom.CanCombine(def));
+            }
+            Assert.False(ShakeZoom.CanCombine(ScanLine.Def));
         }
 
         [Fact]
@@ -211,6 +246,35 @@ namespace VideoEditor.Tests
             VideoEffects.SetNumber(effect, "amount", 10);
             Assert.Equal((4, 3), ShakeZoom.EarthquakeBlur(effect, 1920, 1080, 1));
             Assert.Equal((1, 1), ShakeZoom.EarthquakeBlur(effect, 480, 270, 0.25));
+        }
+
+        [Fact]
+        public void EarthquakeSigma_IsTheOneTimesKernelWidth_TimesTheScale()
+        {
+            // 3×3 고정이라 4K로 내보내면(배율 2) 흐림이 약했다(#29) — 1배 커널 [3 8 3]과 같은 표준 편차를 배율만큼
+            var one = Math.Sqrt((2.0 * 3 * 1 * 1) / (3 + 8 + 3));
+            Assert.Equal(one, ShakeZoom.EarthquakeSigma(3, 1), 9);
+            Assert.Equal(2 * one, ShakeZoom.EarthquakeSigma(3, 2), 9);
+            Assert.Equal(3 * one, ShakeZoom.EarthquakeSigma(3, 3), 9);
+            // 이웃 무게 0(그 방향은 흐리지 않음)은 배율이 커도 0
+            Assert.Equal(0, ShakeZoom.EarthquakeSigma(0, 2));
+            Assert.Equal(0, ShakeZoom.EarthquakeSigma(3, double.NaN));
+        }
+
+        [Fact]
+        public void Graph_Earthquake_At2x_WideGaussianBlur_AtProjectSizeAsBefore()
+        {
+            var (project, clip) = OneClip(ShakeZoom.Earthquake);
+            // 프로젝트 크기(640×360)는 예전과 같은 3×3
+            Assert.Contains("convolution=0m='9 24 9 24 64 24 9 24 9'", RenderGraph.Build(project, Options(project, 0, 30)).Filter);
+            // 두 배로 내보내면 같은 모양을 두 배 넓힌 가우스 흐림(R·G·B만)
+            var options = Options(project, 0, 30);
+            options.Width = 1280;
+            options.Height = 720;
+            var filter = RenderGraph.Build(project, options).Filter;
+            var sigma = RenderGraph.N(ShakeZoom.EarthquakeSigma(3, 2));
+            Assert.Contains(":eval=frame,gblur=sigma=" + sigma + ":sigmaV=" + sigma + ":planes=7,trim=end_frame=", filter);
+            Assert.DoesNotContain("convolution", filter);
         }
 
         [Fact]
@@ -329,6 +393,23 @@ namespace VideoEditor.Tests
             VideoEffects.SetNumber(effect, "centerx", 0);
             VideoEffects.SetNumber(effect, "centery", 100);
             Assert.Equal((0.0, 360.0), ShakeZoom.PunchZoomCenter(effect, 640, 360));
+        }
+
+        [Fact]
+        public void HeartbeatAndZoomBounce_HaveACenter_DefaultIsTheMiddle_OldProjectsOpenTheSame()
+        {
+            foreach (var def in new[] { ShakeZoom.Heartbeat, ShakeZoom.ZoomBounce, ShakeZoom.PunchZoom })
+            {
+                // 예전 프로젝트(중심 값 없음)는 가운데 — 지금과 같게
+                var old = new ClipEffect { Id = def.Id, Values = new Dictionary<string, double>() };
+                Assert.Equal((320.0, 180.0), ShakeZoom.ZoomCenter(old, def, 640, 360));
+                var effect = VideoEffects.Create(def);
+                VideoEffects.SetNumber(effect, "centerx", 25);
+                VideoEffects.SetNumber(effect, "centery", 100);
+                Assert.Equal((160.0, 360.0), ShakeZoom.ZoomCenter(effect, def, 640, 360));
+                Assert.Equal("%", def.Param("centerx").Unit);
+                Assert.Equal(50, def.Param("centery").Default);
+            }
         }
 
         [Fact]

@@ -122,13 +122,17 @@ namespace VideoEditor.Tests
         {
             Assert.Equal(6, TextEffects.BlurRadius(6, 1), 6);
             Assert.Equal(3, TextEffects.BlurRadius(6, 0.5), 6);
-            // 효과 배율을 곱한 뒤 상한 100(4K로 내보낼 때 흐림이 오래 걸리지 않게)
-            Assert.Equal(TextEffects.MaxBlurRadius, TextEffects.BlurRadius(100, 2), 6);
-            Assert.Equal(100, TextEffects.BlurRadius(80, 1.5), 6);
+            // 상한 100은 프로젝트 픽셀에 — 1080p 프로젝트를 4K(배율 2)로 내보내도 미리 보기와 같은 비율로 퍼진다(#26)
+            Assert.Equal(200, TextEffects.BlurRadius(100, 2), 6);
+            Assert.Equal(120, TextEffects.BlurRadius(80, 1.5), 6);
+            Assert.Equal(2 * TextEffects.BlurRadius(80, 1), TextEffects.BlurRadius(80, 2), 6);
+            Assert.Equal(TextEffects.MaxBlurRadius, TextEffects.BlurRadius(150, 1), 6);
+            // 출력 픽셀의 안전 상한(아주 작은 프로젝트를 크게 내보낼 때만)
+            Assert.Equal(TextEffects.MaxOutputBlurRadius, TextEffects.BlurRadius(100, 12), 6);
             Assert.Equal(0, TextEffects.BlurRadius(double.NaN, 1));
             Assert.Equal(0, TextEffects.BlurRadius(-4, 1));
             Assert.Equal(0, TextEffects.BlurRadius(6, double.PositiveInfinity));
-            Assert.Equal(TextEffects.MaxBlurRadius, TextEffects.BlurRadius(double.MaxValue, double.MaxValue), 6);
+            Assert.Equal(TextEffects.MaxOutputBlurRadius, TextEffects.BlurRadius(double.MaxValue, double.MaxValue), 6);
         }
 
         [Fact]
@@ -146,8 +150,8 @@ namespace VideoEditor.Tests
             var spread = StyledTextLayout.Spread(style, 1, 80);
             Assert.Equal(100 + 200 / System.Math.Sqrt(2) + 100, spread.Horizontal, 6);
             Assert.Equal(spread.Horizontal, spread.Vertical, 6);
-            // 효과 배율 2: 윤곽선·거리는 두 배, 흐림은 상한 100(그리개와 같은 반지름)
-            Assert.Equal(200 + 400 / System.Math.Sqrt(2) + 100, StyledTextLayout.Spread(style, 2, 160).Horizontal, 6);
+            // 효과 배율 2: 윤곽선·거리·흐림 모두 두 배(그리개와 같은 반지름 — 4K로 내보내도 미리 보기와 같은 비율)
+            Assert.Equal(200 + 400 / System.Math.Sqrt(2) + 200, StyledTextLayout.Spread(style, 2, 160).Horizontal, 6);
             var layout = StyledTextLayout.Fit(300, 80, style, 1, 4000, 4000);
             Assert.True(layout.OriginX >= spread.Horizontal && layout.OriginY >= spread.Vertical, "여백 " + layout.OriginX + "×" + layout.OriginY);
         }
@@ -198,16 +202,16 @@ namespace VideoEditor.Tests
             Assert.Equal(40, TextEffects.GlowPenThickness(double.NaN, 20, 1), 6);
             Assert.Equal(40, TextEffects.GlowPenThickness(-5, 20, 1), 6);
 
-            // 흐림 반지름 = 크기 / 2 × 효과 배율, 상한 100
+            // 흐림 반지름 = 크기 / 2 × 효과 배율(상한 100은 곱하기 전, 출력 상한 400)
             Assert.Equal(10, TextEffects.GlowBlurRadius(20, 1), 6);
             Assert.Equal(20, TextEffects.GlowBlurRadius(20, 2), 6);
-            Assert.Equal(TextEffects.MaxBlurRadius, TextEffects.GlowBlurRadius(100, 4), 6);
+            Assert.Equal(200, TextEffects.GlowBlurRadius(100, 4), 6);
             Assert.Equal(0, TextEffects.GlowBlurRadius(double.NaN, 1));
 
             // 번지는 거리 = 크기 × 효과 배율 + 흐림 반지름
             Assert.Equal(30, TextEffects.GlowExtent(20, 1), 6);
             Assert.Equal(150, TextEffects.GlowExtent(100, 1), 6);
-            Assert.Equal(400 + TextEffects.MaxBlurRadius, TextEffects.GlowExtent(100, 4), 6);
+            Assert.Equal(400 + 200, TextEffects.GlowExtent(100, 4), 6);
             Assert.Equal(0, TextEffects.GlowExtent(0, 1));
             Assert.Equal(0, TextEffects.GlowExtent(-3, 1));
         }
