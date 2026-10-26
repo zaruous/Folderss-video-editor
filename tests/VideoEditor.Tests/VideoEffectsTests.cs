@@ -462,6 +462,49 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void Probe_RecordsItsVersion_OldVideoMediaIsReadAgainOnOpen()
+        {
+            // 화면 시작 0은 "읽었더니 0"과 "예전 프로젝트라 읽지 않음"이 같아 보인다 — 읽은 판으로 가른다(#30)
+            const string plain = "{\"format\":{\"format_name\":\"mov,mp4\",\"duration\":\"3.0\",\"start_time\":\"0.000000\"},"
+                + "\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":1920,\"height\":1080,\"avg_frame_rate\":\"30/1\",\"start_time\":\"0.000000\"}]}";
+            var probed = FfmpegText.ParseProbe("plain.mp4", plain);
+            Assert.Equal(MediaInfo.CurrentProbe, probed.ProbeVersion);
+            var copy = new MediaInfo { Path = "x.mp4" };
+            copy.CopyFrom(probed);
+            Assert.Equal(MediaInfo.CurrentProbe, copy.ProbeVersion);
+            // 저장·다시 열기에 남고, 예전 파일(값 없음)은 0
+            var project = TestProjects.Empty();
+            project.Media.Add(probed);
+            Assert.Equal(MediaInfo.CurrentProbe, ProjectFile.FromSnapshot(ProjectFile.Snapshot(project)).Media[0].ProbeVersion);
+            project.Media[0].ProbeVersion = 0;
+            Assert.DoesNotContain("ProbeVersion", ProjectFile.Snapshot(project));
+
+            var folder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "fv-probe-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            try
+            {
+                MediaInfo Unchanged(string name, MediaKind kind, int version)
+                {
+                    var path = System.IO.Path.Combine(folder, name);
+                    System.IO.File.WriteAllText(path, "원본");
+                    var file = new System.IO.FileInfo(path);
+                    return new MediaInfo { Path = path, Kind = kind, HasVideo = kind != MediaKind.Audio, FileSize = file.Length, FileTime = file.LastWriteTimeUtc.Ticks, ProbeVersion = version };
+                }
+                // 파일은 그대로여도 예전 판으로 읽은 동영상은 다시 읽는다 — 사진·오디오는 화면 시작과 상관없어 그대로
+                Assert.True(VideoEditor.Media.MediaProbe.IsStale(Unchanged("old.mp4", MediaKind.Video, 0)));
+                Assert.False(VideoEditor.Media.MediaProbe.IsStale(Unchanged("new.mp4", MediaKind.Video, MediaInfo.CurrentProbe)));
+                Assert.False(VideoEditor.Media.MediaProbe.IsStale(Unchanged("old.png", MediaKind.Image, 0)));
+                Assert.False(VideoEditor.Media.MediaProbe.IsStale(Unchanged("old.mp3", MediaKind.Audio, 0)));
+                // 파일이 없으면 다시 읽지 않는다(예전과 같음)
+                Assert.False(VideoEditor.Media.MediaProbe.IsStale(new MediaInfo { Path = System.IO.Path.Combine(folder, "없음.mp4"), Kind = MediaKind.Video, HasVideo = true }));
+            }
+            finally
+            {
+                System.IO.Directory.Delete(folder, true);
+            }
+        }
+
+        [Fact]
         public void Graph_PersonOnly_UsesTheMaskInput_TrimmedLikeTheSource_OnlyWhenFound()
         {
             var project = TestProjects.Empty();

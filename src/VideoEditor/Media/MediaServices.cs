@@ -37,13 +37,17 @@ namespace VideoEditor.Media
             return info;
         }
 
-        /// <summary>읽은 뒤 파일이 바뀌었는지(크기·고친 시각, 모르면 바뀐 것으로). 파일이 없으면 false.</summary>
+        /// <summary>
+        /// 다시 읽어야 하는지: 읽은 뒤 파일이 바뀜(크기·고친 시각, 모르면 바뀐 것으로) 또는 예전 판으로 읽은 동영상(화면 시작을 기록하지 않음 — 인물 마스크가 어긋날 수 있다).
+        /// 파일이 없으면 false.
+        /// </summary>
         public static bool IsStale(MediaInfo media)
         {
             try
             {
                 var file = new FileInfo(media.Path);
-                return file.Exists && (media.FileSize == 0 || file.Length != media.FileSize || file.LastWriteTimeUtc.Ticks != media.FileTime);
+                return file.Exists && (media.FileSize == 0 || file.Length != media.FileSize || file.LastWriteTimeUtc.Ticks != media.FileTime
+                                       || (media.Kind == MediaKind.Video && media.HasVideo && media.ProbeVersion < MediaInfo.CurrentProbe));
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
             {
