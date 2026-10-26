@@ -277,6 +277,76 @@ namespace VideoEditor.Tests
             Assert.False(def.BuiltIn);
         }
 
+        // ---------- 이징(#32) ----------
+
+        private const string WipeExpr = "if(gt(X,W*P),B,if(eq(PLANE,0),a0(X,Y)*PI/PI,A))";
+
+        [Fact]
+        public void Ease_Check_NormalizesKnownNames_RejectsUnknownAndBuiltInXfade()
+        {
+            Assert.Equal("inout", Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr, Ease = " InOut " }, out _).Ease);
+            Assert.Equal("in", Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr, Ease = "in" }, out _).Ease);
+            Assert.Equal("out", Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr, Ease = "OUT" }, out _).Ease);
+            // 일정(linear)·없음은 적지 않는다 — 예전 정의와 같은 수식·같은 썸네일
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr, Ease = "linear" }, out _).Ease);
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr }, out _).Ease);
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr, Ease = "bounce" }, out var error));
+            Assert.Contains("ease", error);
+            // xfade 내장 효과는 이징을 걸 수 없다
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = "가", Xfade = "wipeleft", Ease = "inout" }, out error));
+            Assert.Contains("ease", error);
+            Assert.Null(Transitions.Check(new TransitionDef { Id = "A", Name = "가", Xfade = "wipeleft", Ease = "linear" }, out _).Ease);
+        }
+
+        [Fact]
+        public void Ease_ReplacesOnlyTheProgressVariable_LinearIsUnchanged()
+        {
+            var linear = Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr }, out _);
+            var eased = Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr, Ease = "inout" }, out _);
+            Assert.Equal("transition=custom:expr='" + WipeExpr + "'", Transitions.XfadeOption(linear));
+            var option = Transitions.XfadeOption(eased);
+            Assert.Equal("transition=custom:expr='if(gt(X,W*(P*P*(3-2*P))),B,if(eq(PLANE,0),a0(X,Y)*PI/PI,A))'", option);
+            Assert.Equal("transition=custom:expr='if(gt(X,W*(1-(1-P)*(1-P))),B,if(eq(PLANE,0),a0(X,Y)*PI/PI,A))'",
+                Transitions.XfadeOption(Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr, Ease = "in" }, out _)));
+            Assert.Equal("transition=custom:expr='if(gt(X,W*(P*P)),B,if(eq(PLANE,0),a0(X,Y)*PI/PI,A))'",
+                Transitions.XfadeOption(Transitions.Check(new TransitionDef { Id = "A", Name = "가", Expr = WipeExpr, Ease = "out" }, out _)));
+            // 썸네일 캐시는 이징이 다르면 다르다
+            Assert.NotEqual(Transitions.PreviewKey(linear), Transitions.PreviewKey(eased));
+            Assert.Contains("P*P*(3-2*P)", string.Join(" ", Transitions.PreviewArguments(eased)));
+            // 기본 효과는 이징이 없다(모양 그대로)
+            Assert.All(Transitions.All, d => Assert.Null(d.Ease));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("in")]
+        [InlineData("out")]
+        [InlineData("inout")]
+        public void Ease_Progress_KeepsTheEnds_AndOnlyGoesOneWay(string ease)
+        {
+            Assert.Equal(1, Transitions.EasedProgress(ease, 1), 9);
+            Assert.Equal(0, Transitions.EasedProgress(ease, 0), 9);
+            var previous = 1.0;
+            for (var i = 99; i >= 0; i--)
+            {
+                var value = Transitions.EasedProgress(ease, i / 100.0);
+                Assert.True(value <= previous + 1e-12, ease + " " + i);
+                previous = value;
+            }
+        }
+
+        [Fact]
+        public void Ease_Progress_SlowStartAndEnd()
+        {
+            // P는 1(시작)에서 0(끝)으로 — 진행 u = 1 − P. 시작에서 1/4 지났을 때(P = 0.75)
+            Assert.Equal(0.75, Transitions.EasedProgress(null, 0.75), 9);
+            Assert.Equal(0.84375, Transitions.EasedProgress("inout", 0.75), 9);
+            Assert.Equal(0.9375, Transitions.EasedProgress("in", 0.75), 9);
+            Assert.Equal(0.5625, Transitions.EasedProgress("out", 0.75), 9);
+            // 둘 다(inout)는 가운데에서 같다
+            Assert.Equal(0.5, Transitions.EasedProgress("inout", 0.5), 9);
+        }
+
         [Fact]
         public void PreviewArguments_UseTheSameXfadeOption()
         {
@@ -504,6 +574,32 @@ namespace VideoEditor.Tests
         private static bool IsRed((int R, int G, int B) p) { return p.R > 200 && p.B < 60; }
 
         private static bool IsBlue((int R, int G, int B) p) { return p.B > 200 && p.R < 60; }
+
+        [FfmpegFact]
+        public void Ease_MovesTheWipeAlongTheCurve()
+        {
+            // 64×8, 초당 8장, 0.5초부터 1초 동안 "X > W·P면 새 화면" 닦아내기 — 진행 1/4(4+2번째 장)·1/2(4+4번째 장)에서 새 화면 열 수
+            const string expr = "if(gt(X,W*P),B,A)";
+            // 새 화면 열 수 = X > 64·P인 열(경계 열은 빼므로 63 − 64·P): 일정 P 0.75 → 15, inout 0.84375 → 9, in 0.9375 → 3, out 0.5625 → 27
+            foreach (var (ease, quarter) in new[] { ((string)null, 15), ("inout", 9), ("in", 3), ("out", 27) })
+            {
+                var def = Transitions.Check(new TransitionDef { Id = "EaseTest", Name = "시험", Expr = expr, Ease = ease }, out var error);
+                Assert.NotNull(def);
+                var args = new[]
+                {
+                    "-hide_banner", "-nostdin", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "color=c=blue:s=64x8:r=8:d=2", "-f", "lavfi", "-i", "color=c=red:s=64x8:r=8:d=2",
+                    "-filter_complex", "[0]format=gbrap[a];[1]format=gbrap[b];[a][b]xfade=" + Transitions.XfadeOption(def) + ":duration=1:offset=0.5,format=rgb24",
+                    "-frames:v", "9", "-f", "rawvideo", "pipe:1"
+                };
+                var bytes = FfmpegRunner.RunBytes(FfmpegMedia.Tool.FfmpegPath, args, TimeSpan.FromSeconds(60), CancellationToken.None).GetAwaiter().GetResult();
+                int Red(int frame) => Enumerable.Range(0, 64).Count(x => bytes[(frame * 64 * 8 + x) * 3] > 200);
+                _out.WriteLine((ease ?? "일정") + ": 1/4 " + Red(6) + "열 · 1/2 " + Red(8) + "열");
+                Assert.InRange(Red(6), quarter - 1, quarter + 1);
+                if (ease != "in" && ease != "out")
+                    Assert.InRange(Red(8), 30, 32);
+            }
+        }
 
         [FfmpegFact]
         public void Wipe_MidwayShowsBothSides_ThenRed()
