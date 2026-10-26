@@ -165,15 +165,15 @@ namespace VideoEditor.Core
                 string Direction(string along, string scale, string half) => string.Format(CultureInfo.InvariantCulture, "128+127*({0}*{1}+{2}-{3})/max(0.001,hypot({0}*X+{2}-{4},{0}*Y+{2}-{5}))",
                     scale, along, half, along == "X" ? N(shape.CenterX) : N(shape.CenterY), N(shape.CenterX), N(shape.CenterY));
                 text.AppendFormat(CultureInfo.InvariantCulture, ",split[{0}l][{0}m];", p);
-                // 방향 지도(한 장, 면 순서 G·B·R·A): G = cos, B = sin(128 ± 127), R·A = 128. 큰 틀에서는 q×q칸마다 하나를 그려 remap으로 늘인다(수식 픽셀 1/q²)
+                // 방향 지도(한 장, 면 순서 G·B·R·A): G = cos, B = sin(128 ± 127), R·A = 128. 큰 틀에서는 q×q칸 가운데마다 하나를 그려(수식 픽셀 1/q²)
+                // 양선형으로 늘인다 — 칸 가운데 = 늘인 픽셀 가운데라 자리가 맞고, 가장 가까운 칸으로 늘이던(remap) 것보다 방향이 매끄럽다(고리 안쪽 계단이 없음).
+                // 이 지도는 클립 흐름이 아닌 따로 그린 한 장이라 체인의 scale 하나 규칙과 상관없다
                 if (q > 1)
                 {
                     int cw = (w + q - 1) / q, ch = (h + q - 1) / q;
                     text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r=128:g='{4}':b='{5}':a=128[{6}t];",
                         cw, ch, r.Rate, once, Direction("X", N(q), N(q / 2.0)), Direction("Y", N(q), N(q / 2.0)), p);
-                    text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gray16,geq=lum='floor(X/{4})'[{5}u];", w, h, r.Rate, once, q, p);
-                    text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gray16,geq=lum='floor(Y/{4})'[{5}j];", w, h, r.Rate, once, q, p);
-                    text.AppendFormat(CultureInfo.InvariantCulture, "[{0}t][{0}u][{0}j]remap{1}[{0}c];", p, hold);
+                    text.AppendFormat(CultureInfo.InvariantCulture, "[{0}t]scale={1}:{2}:flags=bilinear,crop={3}:{4}:0:0{5}[{0}c];", p, cw * q, ch * q, w, h, hold);
                 }
                 else
                 {
