@@ -249,6 +249,35 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void EarthquakeSigma_IsTheOneTimesKernelWidth_TimesTheScale()
+        {
+            // 3×3 고정이라 4K로 내보내면(배율 2) 흐림이 약했다(#29) — 1배 커널 [3 8 3]과 같은 표준 편차를 배율만큼
+            var one = Math.Sqrt((2.0 * 3 * 1 * 1) / (3 + 8 + 3));
+            Assert.Equal(one, ShakeZoom.EarthquakeSigma(3, 1), 9);
+            Assert.Equal(2 * one, ShakeZoom.EarthquakeSigma(3, 2), 9);
+            Assert.Equal(3 * one, ShakeZoom.EarthquakeSigma(3, 3), 9);
+            // 이웃 무게 0(그 방향은 흐리지 않음)은 배율이 커도 0
+            Assert.Equal(0, ShakeZoom.EarthquakeSigma(0, 2));
+            Assert.Equal(0, ShakeZoom.EarthquakeSigma(3, double.NaN));
+        }
+
+        [Fact]
+        public void Graph_Earthquake_At2x_WideGaussianBlur_AtProjectSizeAsBefore()
+        {
+            var (project, clip) = OneClip(ShakeZoom.Earthquake);
+            // 프로젝트 크기(640×360)는 예전과 같은 3×3
+            Assert.Contains("convolution=0m='9 24 9 24 64 24 9 24 9'", RenderGraph.Build(project, Options(project, 0, 30)).Filter);
+            // 두 배로 내보내면 같은 모양을 두 배 넓힌 가우스 흐림(R·G·B만)
+            var options = Options(project, 0, 30);
+            options.Width = 1280;
+            options.Height = 720;
+            var filter = RenderGraph.Build(project, options).Filter;
+            var sigma = RenderGraph.N(ShakeZoom.EarthquakeSigma(3, 2));
+            Assert.Contains(":eval=frame,gblur=sigma=" + sigma + ":sigmaV=" + sigma + ":planes=7,trim=end_frame=", filter);
+            Assert.DoesNotContain("convolution", filter);
+        }
+
+        [Fact]
         public void Graph_ShakeSizesFollowTheBox_ClipScale()
         {
             var (project, clip) = OneClip(ShakeZoom.CameraShake);

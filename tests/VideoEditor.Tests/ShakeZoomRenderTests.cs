@@ -242,6 +242,41 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
+        public void Earthquake_At2x_FfmpegAcceptsTheWideBlur_AndItIsWider()
+        {
+            // 320×240 프로젝트를 640×480으로: 넓힌 가로·세로 흐림을 FFmpeg가 받고, 표지 가장자리의 번진 폭이 1배 그림의 두 배쯤
+            double Spread(int scale)
+            {
+                var project = NewProject();
+                var clip = Add(project, project.MainTrack, Marker, 0);
+                AddEffect(clip, ShakeZoom.Earthquake, ("amount", 200), ("blur", 100), ("speed", 0.3));
+                var tool = FfmpegMedia.Tool;
+                var plan = RenderGraph.Build(project, new RenderOptions
+                {
+                    From = 0, To = 1, Width = Width * scale, Height = Height * scale, Audio = false, Preview = true,
+                    TempFolder = RenderEnvironment.TempFolder(), FfmpegMajor = tool.MajorVersion
+                });
+                var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1" }, out var script);
+                try
+                {
+                    var bytes = FfmpegRunner.RunBytes(tool.FfmpegPath, args, TimeSpan.FromSeconds(60), CancellationToken.None).GetAwaiter().GetResult();
+                    Assert.Equal(Width * scale * Height * scale, bytes.Length);
+                    // 반쯤 밝은(바탕과 흰색 사이) 픽셀 수 = 가장자리 번진 넓이 — 그림이 두 배면 둘레가 두 배라 흐림 폭이 같으면 두 배, 흐림 폭도 두 배면 네 배
+                    return bytes.Count(v => v > 90 && v < 200);
+                }
+                finally
+                {
+                    RenderCommand.TryDelete(script);
+                }
+            }
+            var one = Spread(1);
+            var two = Spread(2);
+            _out.WriteLine("반쯤 밝은 픽셀: 1배 " + one + " · 2배 " + two + " (" + (two / (double)Math.Max(1, one)).ToString("0.0") + "배)");
+            Assert.True(one > 0);
+            Assert.InRange(two / (double)one, 3, 5.5);
+        }
+
+        [FfmpegFact]
         public void TwoEffectsCombined_MarkerIsWhereBothMotionsPutIt()
         {
             // 빠른 줌(중심 25%·25%)을 먼저, 카메라 흔들림을 그 위에 — 표지는 두 움직임을 차례로 건 자리, 크기는 두 배율의 곱

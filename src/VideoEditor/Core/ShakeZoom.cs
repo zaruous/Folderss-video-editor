@@ -208,6 +208,18 @@ namespace VideoEditor.Core
                 y * (JoltShare * Jolt(time, rate, JoltSeed[1]) + (1 - JoltShare) * Waves(QuakeY, time, speed)));
         }
 
+        // 이 배율부터 3×3 대신 넓힌 가우스 흐림
+        private const double WideBlurScale = 1.5;
+
+        /// <summary>
+        /// 지진 흐림의 한 방향 표준 편차(출력 픽셀): 1배 커널 [weight 8 weight]의 표준 편차 √(2·weight ÷ (8 + 2·weight)) × 배율 — 흐림 폭이 배율에 비례한다.
+        /// weight 0이면 0(그 방향은 흐리지 않음).
+        /// </summary>
+        public static double EarthquakeSigma(int weight, double pixelScale)
+        {
+            return weight <= 0 || !(pixelScale > 0) ? 0 : Math.Sqrt(2.0 * weight / (8 + 2.0 * weight)) * pixelScale;
+        }
+
         /// <summary>
         /// 지진의 흐림: 3×3 흐림의 가로·세로 이웃 무게(0~8 — 가운데 8에 견줘, 8이면 세 칸을 고르게 섞음). 0, 0이면 흐리지 않는다.
         /// 흐림 값에 흔드는 거리를 곱한다(출력 픽셀 20px부터 흐림 값 그대로) — 줄인 재생 크기·작은 흔들림에서는 그만큼 약하다.
@@ -403,8 +415,17 @@ namespace VideoEditor.Core
             var blur = "";
             if (a > 0 || b > 0)
             {
-                var matrix = string.Join(" ", new double[] { a * b, 8 * b, a * b, 8 * a, 64, 8 * a, a * b, 8 * b, a * b }.Select(N));
-                blur = string.Format(CultureInfo.InvariantCulture, ",convolution=0m='{0}':1m='{0}':2m='{0}'", matrix);
+                if (r.PixelScale < WideBlurScale)
+                {
+                    var matrix = string.Join(" ", new double[] { a * b, 8 * b, a * b, 8 * a, 64, 8 * a, a * b, 8 * b, a * b }.Select(N));
+                    blur = string.Format(CultureInfo.InvariantCulture, ",convolution=0m='{0}':1m='{0}':2m='{0}'", matrix);
+                }
+                else
+                {
+                    // 크게 내보낼 때: 3×3은 흐림 반지름이 1px에 묶여 약하다 — 같은 모양(표준 편차)을 배율만큼 넓힌 가우스 흐림(R·G·B만 — planes 7, 알파 그대로).
+                    // 9칸 가로·세로 convolution은 4K에서 장당 +150ms 남짓이라 gblur(+70ms 남짓)로
+                    blur = string.Format(CultureInfo.InvariantCulture, ",gblur=sigma={0}:sigmaV={1}:planes=7", N(EarthquakeSigma(a, r.PixelScale)), N(EarthquakeSigma(b, r.PixelScale)));
+                }
             }
             return new Motion(N(CoverZoom(picture.Width, picture.Height, x, y, angle)),
                 angle > 0 ? N(angle) + "*" + JoltText(time, rate, JoltSeed[2]) : null,
