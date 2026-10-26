@@ -706,6 +706,28 @@ namespace VideoEditor.Tests
             Assert.DoesNotContain("-af", normal);
         }
 
+        [Fact]
+        public void ClipVolume_DefaultIsNone_VolumeAndFadesBecomeTheGraphExpression()
+        {
+            // 음량·페이드를 넣어 저장(#31): 렌더 그래프와 같은 식, 클립 처음이 0초
+            var rate = FrameRate.Default;
+            var clip = TestProjects.VideoClip(0, 60);
+            Assert.Null(SoundExtract.ClipVolume(rate, clip));
+            clip.Volume = 0.5;
+            Assert.Equal("0.5", SoundExtract.ClipVolume(rate, clip));
+            clip.FadeIn = 30;
+            Assert.Equal(RenderGraph.VolumeExpression(rate, clip, clip.Start), SoundExtract.ClipVolume(rate, clip));
+            Assert.Contains("min(1,max(0,(t+0)/1))", SoundExtract.ClipVolume(rate, clip));
+            // 음량을 넣으면 그대로 꺼낼 수 없다(WAV로), 속도 뒤에 음량
+            Assert.False(SoundExtract.ShouldCopy(".m4a", "aac", 1, shaped: true));
+            Assert.True(SoundExtract.ShouldCopy(".m4a", "aac", 1));
+            var args = SoundExtract.Arguments("a.mp4", "a.wav", false, 0, 2, 2, "0.5");
+            Assert.Equal("atempo=2,volume=0.5", args[args.IndexOf("-af") + 1]);
+            Assert.Equal("pcm_s16le", args[args.IndexOf("-c:a") + 1]);
+            var plain = SoundExtract.Arguments("a.mp4", "a.wav", false, 0, 2, 1, "0.5");
+            Assert.Equal("volume=0.5", plain[plain.IndexOf("-af") + 1]);
+        }
+
         // ---------- FFmpeg ----------
 
         private static string Output(string extension)
@@ -752,6 +774,51 @@ namespace VideoEditor.Tests
             Assert.Equal("pcm_s16le", info.AudioCodec);
             Assert.InRange(info.DurationSeconds, 0.45, 0.56);
             File.Delete(saved);
+        }
+
+        [FfmpegFact]
+        public async Task Extract_WithClipVolumeAndFadeIn_SoundsLikeTheTimeline()
+        {
+            // 시험 영상(2초, 사인파) 클립: 음량 50% + 1초 페이드 인 → 처음은 거의 소리 없고 1초 뒤는 원본의 절반
+            var clip = TestProjects.VideoClip(0, 60);
+            clip.Volume = 0.5;
+            clip.FadeIn = 30;
+            var plainPath = await SoundExtractor.Extract(FfmpegMedia.Tool, FfmpegMedia.TestVideo, "aac", Output(".wav"), 0, 2, 1, CancellationToken.None);
+            var shapedPath = await SoundExtractor.Extract(FfmpegMedia.Tool, FfmpegMedia.TestVideo, "aac", Output(".m4a"), 0, 2, 1, CancellationToken.None,
+                SoundExtract.ClipVolume(FrameRate.Default, clip));
+            try
+            {
+                // 음량을 넣었으니 원본 그대로(.m4a)가 아니라 WAV
+                Assert.EndsWith(".wav", shapedPath);
+                async Task<double> Rms(string path, double from, double to)
+                {
+                    var pcm = await FfmpegRunner.RunBytes(FfmpegMedia.Tool.FfmpegPath,
+                        new[] { "-hide_banner", "-nostdin", "-loglevel", "error", "-i", path, "-f", "s16le", "-ac", "1", "-ar", "48000", "pipe:1" }, TimeSpan.FromMinutes(1), CancellationToken.None);
+                    double sum = 0;
+                    var count = 0;
+                    for (var i = (int)(from * 48000); i < (int)(to * 48000) && i * 2 + 1 < pcm.Length; i++, count++)
+                    {
+                        var value = BitConverter.ToInt16(pcm, i * 2) / 32768.0;
+                        sum += value * value;
+                    }
+                    return Math.Sqrt(sum / Math.Max(1, count));
+                }
+                var original = await Rms(plainPath, 1.3, 1.8);
+                var start = await Rms(shapedPath, 0, 0.1);
+                var middle = await Rms(shapedPath, 0.45, 0.55);
+                var after = await Rms(shapedPath, 1.3, 1.8);
+                _out.WriteLine("원본 " + original.ToString("0.0000") + " · 처음 " + start.ToString("0.0000") + " · 0.5초 " + middle.ToString("0.0000") + " · 1.3초 뒤 " + after.ToString("0.0000"));
+                Assert.True(original > 0.03, "원본 소리 " + original);
+                Assert.True(start < original * 0.1, "처음은 거의 소리가 없어야 한다");
+                // 페이드 가운데(0.5초)는 음량 50% × 50% = 원본의 1/4
+                Assert.InRange(middle / original, 0.2, 0.3);
+                Assert.InRange(after / original, 0.45, 0.55);
+            }
+            finally
+            {
+                File.Delete(plainPath);
+                File.Delete(shapedPath);
+            }
         }
 
         private static async Task<byte[]> Pcm(Project project, long from, long to)

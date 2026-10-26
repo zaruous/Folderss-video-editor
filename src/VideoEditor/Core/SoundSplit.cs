@@ -596,11 +596,11 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// 다시 인코딩하지 않고 꺼낼지: 속도가 1일 때만. .wav로 저장하면 PCM 원본만 그대로(다른 코덱을 WAV에 담으면 못 여는 프로그램이 많다).
+        /// 다시 인코딩하지 않고 꺼낼지: 속도가 1이고 음량·페이드를 넣지 않을 때(shaped)만. .wav로 저장하면 PCM 원본만 그대로(다른 코덱을 WAV에 담으면 못 여는 프로그램이 많다).
         /// </summary>
-        public static bool ShouldCopy(string extension, string codec, double speed)
+        public static bool ShouldCopy(string extension, string codec, double speed, bool shaped = false)
         {
-            if (Math.Abs(speed - 1) > 1e-9)
+            if (shaped || Math.Abs(speed - 1) > 1e-9)
                 return false;
             if (string.Equals(extension, ".wav", StringComparison.OrdinalIgnoreCase))
                 return (codec ?? "").StartsWith("pcm_", StringComparison.OrdinalIgnoreCase);
@@ -608,10 +608,20 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// FFmpeg 인수: 첫 오디오 스트림만(-vn). from·seconds는 원본 초(from 0 = 처음부터, seconds ≤ 0 = 끝까지).
-        /// copy면 -c:a copy, 아니면 속도(atempo — 0.5보다 느리면 여러 번)를 걸어 WAV(pcm_s16le)로.
+        /// 클립의 음량·페이드 인/아웃을 넣어 저장할 volume 필터 값(렌더 그래프와 같은 식, 클립 처음 = 0초). 음량 100%에 페이드가 없으면 null(넣을 것 없음).
         /// </summary>
-        public static List<string> Arguments(string input, string output, bool copy, double from, double seconds, double speed)
+        public static string ClipVolume(FrameRate rate, Clip clip)
+        {
+            if (clip == null || (Math.Abs(clip.Volume - 1) < 1e-9 && clip.FadeIn <= 0 && clip.FadeOut <= 0))
+                return null;
+            return RenderGraph.VolumeExpression(rate, clip, clip.Start);
+        }
+
+        /// <summary>
+        /// FFmpeg 인수: 첫 오디오 스트림만(-vn). from·seconds는 원본 초(from 0 = 처음부터, seconds ≤ 0 = 끝까지).
+        /// copy면 -c:a copy, 아니면 속도(atempo — 0.5보다 느리면 여러 번)와 volume(<see cref="ClipVolume"/>, 속도 뒤 — 클립 시간으로)을 걸어 WAV(pcm_s16le)로.
+        /// </summary>
+        public static List<string> Arguments(string input, string output, bool copy, double from, double seconds, double speed, string volume = null)
         {
             var args = new List<string> { "-hide_banner", "-nostdin", "-loglevel", "error", "-y" };
             if (from > 0)
@@ -625,9 +635,11 @@ namespace VideoEditor.Core
             }
             else
             {
-                var tempo = RenderGraph.Tempo(speed);
-                if (tempo.Count > 0)
-                    args.AddRange(new[] { "-af", string.Join(",", tempo.Select(t => "atempo=" + RenderGraph.N(t))) });
+                var filters = RenderGraph.Tempo(speed).Select(t => "atempo=" + RenderGraph.N(t)).ToList();
+                if (volume != null)
+                    filters.Add("volume=" + volume);
+                if (filters.Count > 0)
+                    args.AddRange(new[] { "-af", string.Join(",", filters) });
                 args.AddRange(new[] { "-c:a", "pcm_s16le" });
             }
             args.Add(output);

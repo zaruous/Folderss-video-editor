@@ -15,14 +15,16 @@ namespace VideoEditor.Media
         /// <summary>
         /// input의 소리를 output에 저장하고 실제로 쓴 경로를 돌려준다(그대로 꺼내지 못했으면 확장자를 .wav로 바꾼 경로).
         /// from·seconds는 원본 초(seconds ≤ 0 = 끝까지), codec은 ffprobe의 오디오 코덱 이름(모르면 null).
+        /// volume(<see cref="SoundExtract.ClipVolume"/>)을 주면 클립의 음량·페이드를 넣어 WAV로 쓴다.
         /// </summary>
-        public static async Task<string> Extract(FfmpegTool tool, string input, string codec, string output, double from, double seconds, double speed, CancellationToken cancellation)
+        public static async Task<string> Extract(FfmpegTool tool, string input, string codec, string output, double from, double seconds, double speed, CancellationToken cancellation,
+                                                 string volume = null)
         {
-            if (SoundExtract.ShouldCopy(Path.GetExtension(output), codec, speed)
-                && await Run(tool, input, output, true, from, seconds, speed, cancellation).ConfigureAwait(false) == null)
+            if (SoundExtract.ShouldCopy(Path.GetExtension(output), codec, speed, volume != null)
+                && await Run(tool, input, output, true, from, seconds, speed, null, cancellation).ConfigureAwait(false) == null)
                 return output;
             var wav = Path.ChangeExtension(output, ".wav");
-            var error = await Run(tool, input, wav, false, from, seconds, speed, cancellation).ConfigureAwait(false);
+            var error = await Run(tool, input, wav, false, from, seconds, speed, volume, cancellation).ConfigureAwait(false);
             if (error != null)
                 throw new FfmpegException("사운드를 꺼내지 못했습니다.", error);
             return wav;
@@ -32,13 +34,13 @@ namespace VideoEditor.Media
         /// 옆의 임시 이름(같은 확장자 — FFmpeg가 그릇을 고른다)에 쓰고 다 되면 바꿔 넣는다: 실패해도 덮어쓰기로 고른 원래 파일이 남는다.
         /// 성공하면 null, 실패하면 FFmpeg 오류 글.
         /// </summary>
-        private static async Task<string> Run(FfmpegTool tool, string input, string output, bool copy, double from, double seconds, double speed, CancellationToken cancellation)
+        private static async Task<string> Run(FfmpegTool tool, string input, string output, bool copy, double from, double seconds, double speed, string volume, CancellationToken cancellation)
         {
             var full = Path.GetFullPath(output);
             var temp = Path.Combine(Path.GetDirectoryName(full), Path.GetFileNameWithoutExtension(full) + ".part-" + Guid.NewGuid().ToString("N").Substring(0, 8) + Path.GetExtension(full));
             try
             {
-                var result = await FfmpegRunner.RunText(tool.FfmpegPath, SoundExtract.Arguments(input, temp, copy, from, seconds, speed), TimeSpan.FromMinutes(30), cancellation).ConfigureAwait(false);
+                var result = await FfmpegRunner.RunText(tool.FfmpegPath, SoundExtract.Arguments(input, temp, copy, from, seconds, speed, volume), TimeSpan.FromMinutes(30), cancellation).ConfigureAwait(false);
                 if (result.ExitCode != 0 || !File.Exists(temp) || new FileInfo(temp).Length == 0)
                     return string.IsNullOrWhiteSpace(result.Error) ? "FFmpeg 오류(" + result.ExitCode + ")" : result.Error;
                 File.Move(temp, full, true);
