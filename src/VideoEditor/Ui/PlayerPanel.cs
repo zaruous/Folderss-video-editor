@@ -166,6 +166,8 @@ namespace VideoEditor.Ui
             {
                 services.ToolChanged -= toolChanged;
                 services.ToolChanged += toolChanged;
+                // 만든 뒤 화면에 붙기 전에 FFmpeg를 다시 찾아 바뀌었으면(예: 설정한 FFmpeg가 없어짐) 그 알림을 놓쳤으므로 지금 값으로 다시
+                UpdatePlaceholder();
             };
             Unloaded += (s, e) => services.ToolChanged -= toolChanged;
             UpdateTime();

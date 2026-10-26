@@ -32,6 +32,67 @@ namespace VideoEditor.UiTests
             return target.GetType().GetMethod(method, BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public).Invoke(target, args);
         }
 
+        /// <summary>
+        /// 글자 상자 범위(#27, Windows 실측): 미리 보기에서 상자 너비를 4,000px 넘게 끌어도 [글자] 탭 슬라이더가 그 값을 따라간다(최대 = 모델 상한 16,000).
+        /// </summary>
+        [EditorFact]
+        public async Task Preview_TextBoxDraggedPast4000_SliderFollows()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                const string text = "넓은 상자";
+                ui.Run(() => Ui.ById<TabControl>(window, "MediaTabs").SelectedIndex = 2);
+                await ui.WaitFor(() => Ui.ById<TextBox>(window, "NewTextBox"), Wait, "글자 탭");
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(window, "NewTextBox").Text = text;
+                    Ui.Click(Ui.ById<Button>(window, "AddTextButton"));
+                });
+                await ui.WaitUntil(() => Clips(window).Any(n => n.Contains(text)), Wait, "글자 클립");
+                await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
+                var overlay = ui.Run(() => Ui.ById<Canvas>(window, "TransformOverlay"));
+                await ui.WaitUntil(() => (bool)Get(overlay, "HasFrame") && overlay.ActualWidth > 0, Wait, "글자 틀");
+                object Clip() => ProjectClips(window).First(c => (string)Get(c, "Text") == text);
+                var project = ui.Run(() => Project(window));
+                var width = ui.Run(() => (int)Get(project, "Width"));
+                var zoom = ui.Run(() => Math.Min(overlay.ActualWidth / width, overlay.ActualHeight / (int)Get(project, "Height")));
+                // 오른쪽 옆을 프로젝트 6,000px만큼 오른쪽으로(화면 밖까지 끈다)
+                ui.Run(() =>
+                {
+                    var edges = (Point[])Invoke(overlay, "EdgePoints");
+                    Assert.True((bool)Invoke(overlay, "PointerDown", edges[1]));
+                    Invoke(overlay, "PointerMove", new Point(edges[1].X + 6000 * zoom, edges[1].Y));
+                    Assert.True((bool)Invoke(overlay, "PointerUp"));
+                });
+                await ui.WaitUntil(() => (double)Get(Clip(), "TextBoxWidth") > 4000, Wait, "상자 너비 4,000 넘음");
+                var boxWidth = ui.Run(() => (double)Get(Clip(), "TextBoxWidth"));
+                ui.Run(() => Ui.ById<TabControl>(window, "PropertyTabs").Items.OfType<TabItem>().First(t => (string)t.Header == "글자").IsSelected = true);
+                var slider = await ui.WaitFor(() => Ui.ById<Slider>(window, "PropTextBoxWidthSlider") is Slider shown && shown.IsVisible ? shown : null, Wait, "상자 너비 슬라이더");
+                ui.Run(() =>
+                {
+                    Assert.Equal(16000, slider.Maximum);
+                    Assert.Equal(boxWidth, slider.Value, 1);
+                    Assert.Equal(boxWidth, double.Parse(Ui.ById<TextBox>(window, "PropTextBoxWidth").Text, System.Globalization.CultureInfo.InvariantCulture));
+                    Ui.Snap(window, plugin.ShotFolder, "text-box-past-4000");
+                    // 작은 값은 숫자 칸으로 정확히 맞춘다
+                    var box = Ui.ById<TextBox>(window, "PropTextBoxWidth");
+                    Ui.Focus(box);
+                    box.Text = "37";
+                    Ui.Press(box, System.Windows.Input.Key.Enter);
+                });
+                await ui.WaitUntil(() => (double)Get(Clip(), "TextBoxWidth") == 37, Wait, "숫자 칸 37");
+                _out.WriteLine("끈 상자 너비 " + boxWidth + "px, 슬라이더 1px = 최대 16,000 / 폭 " + ui.Run(() => slider.ActualWidth).ToString("0") + "px");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
         [EditorFact]
         public async Task Preview_DragMovesAndCornerResizes_SelectedPhoto()
         {

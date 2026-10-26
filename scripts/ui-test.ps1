@@ -6,14 +6,17 @@
   - 캡처(PNG)와 기록은 -Work 폴더(기본: 임시 폴더\folderss-uitest\<플러그인 폴더 이름>) 아래 run-<시각>\shots, ui-test-<시각>.log에 남는다.
 
   - 시험 하나가 -HangMinutes(기본 5분)를 넘기면 vstest가 시험 프로세스를 끝내고 실패로 알린다(모달 창 등으로 멈춰도 끝없이 기다리지 않게).
+  - -Verbosity detailed면 통과한 시험의 출력(ITestOutputHelper — 실측값 등)도 기록에 남긴다(기본 normal은 실패한 시험의 출력만).
 
-  사용: pwsh scripts/ui-test.ps1 [-Filter <dotnet test 필터>] [-Configuration Debug|Release] [-Work <폴더>] [-HangMinutes 5]
+  사용: pwsh scripts/ui-test.ps1 [-Filter <dotnet test 필터>] [-Configuration Debug|Release] [-Work <폴더>] [-HangMinutes 5] [-Verbosity normal|detailed]
 #>
 param(
     [string]$Filter = '',
     [string]$Configuration = 'Debug',
     [string]$Work = '',
-    [int]$HangMinutes = 5
+    [int]$HangMinutes = 5,
+    [ValidateSet('quiet', 'minimal', 'normal', 'detailed')]
+    [string]$Verbosity = 'normal'
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -104,7 +107,7 @@ public static class HiddenDesktop
 
 $log = Join-Path $Work ("ui-test-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + ".log")
 $filterArg = if ($Filter) { " --filter `"$Filter`"" } else { '' }
-$cmd = "cmd.exe /c dotnet test `"$project`" -c $Configuration --no-build --nologo --logger `"console;verbosity=normal`" --blame-hang-timeout ${HangMinutes}m --blame-hang-dump-type none$filterArg > `"$log`" 2>&1"
+$cmd = "cmd.exe /c dotnet test `"$project`" -c $Configuration --no-build --nologo --logger `"console;verbosity=$Verbosity`" --blame-hang-timeout ${HangMinutes}m --blame-hang-dump-type none$filterArg > `"$log`" 2>&1"
 $leaks = New-Object 'System.Collections.Generic.List[string]'
 $desktopName = 'folderss-uitest-' + $PID
 Write-Host "숨은 데스크톱 '$desktopName'에서 실행 — 기록: $log"

@@ -122,6 +122,51 @@ namespace VideoEditor.UiTests
             type.GetMethod("PointerUp", flags).Invoke(canvas, new object[] { to, ModifierKeys.Alt });
         }
 
+        /// <summary>미디어 파일을 타임라인 트랙의 frame에 끌어 놓은 것처럼(TimelineCanvas.MediaDropped 처리기를 직접 부른다).</summary>
+        private static void DropMedia(Window window, string path, object track, long frame)
+        {
+            var canvas = Canvas(window);
+            var handler = (Delegate)canvas.GetType().GetField("MediaDropped", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(canvas);
+            handler.DynamicInvoke(new[] { path }, track, frame);
+        }
+
+        private static object AudioTrack(Window window)
+        {
+            return ((IList)Get(Project(window), "AudioTracks"))[0];
+        }
+
+        /// <summary>타임라인 이름에서 " · 링크"부터 끝(링크·어긋남 표시)을 뗀다.</summary>
+        private static string LinkSuffix(string name)
+        {
+            var at = name.IndexOf(" · 링크", StringComparison.Ordinal);
+            return at < 0 ? "" : name.Substring(at);
+        }
+
+        /// <summary>오른쪽 옆을 frames만큼 끈다(음수면 왼쪽). 끄는 동안 Alt(붙기 끔).</summary>
+        private static void TrimEnd(Window window, object clip, long frames)
+        {
+            var bounds = ClipBounds(window, clip);
+            var from = new Point(bounds.Right - 2, bounds.Top + bounds.Height / 2);
+            Drag(window, from, new Point(from.X + Px(window, frames), from.Y));
+        }
+
+        /// <summary>ffmpeg volumedetect의 평균 음량(dB).</summary>
+        private static double MeanVolume(string path)
+        {
+            var info = new System.Diagnostics.ProcessStartInfo(Path.Combine(FfmpegFolder, "ffmpeg.exe")) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
+            foreach (var arg in new[] { "-hide_banner", "-nostats", "-i", path, "-af", "volumedetect", "-f", "null", "-" })
+                info.ArgumentList.Add(arg);
+            using (var process = System.Diagnostics.Process.Start(info))
+            {
+                process.StandardOutput.ReadToEnd();
+                var error = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                var match = System.Text.RegularExpressions.Regex.Match(error, @"mean_volume:\s*(-?[\d.]+) dB");
+                Assert.True(match.Success, "volumedetect: " + error);
+                return double.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
         private static async Task DetachWithShortcut(UiThread ui, Window window)
         {
             ui.Run(() =>
@@ -338,6 +383,168 @@ namespace VideoEditor.UiTests
                     Key(window, System.Windows.Input.Key.Delete);
                 });
                 await ui.WaitUntil(() => Clips(window).Count == 0, Wait, "링크된 둘 다 삭제");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        /// <summary>
+        /// 짝 다듬기(#31, Windows 실측): 링크된 영상의 끝을 끌어 늘일 때 사운드가 오디오 트랙의 다음 소리에 막히면 둘 다 그 자리에서 멈춘다(길이가 같고 어긋남 없음).
+        /// </summary>
+        [EditorFact]
+        public async Task LinkedTrim_PartnerBlockedByNextSound_BothStopTogether()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                await Import(ui, window, Path.Combine(MediaFolder, "testsrc.mp4"));
+                await AddToTimeline(ui, window, "testsrc.mp4");
+                await DetachWithShortcut(ui, window);
+                // 영상 끝을 1초 줄이면 사운드도 함께 0~2초
+                ui.Run(() => TrimEnd(window, VideoClip(window), -30));
+                await ui.WaitUntil(() => Clips(window).Contains("동영상 1 · testsrc.mp4 · 00:00:00:00–00:00:02:00 · 링크")
+                                         && Clips(window).Contains("오디오 1 · testsrc.mp4 · 00:00:00:00–00:00:02:00 · 링크"), Wait, "함께 줄임");
+                // 오디오 1의 2초 10프레임(70)에 다른 소리
+                ui.Run(() => DropMedia(window, Path.Combine(MediaFolder, "tone.wav"), AudioTrack(window), 70));
+                await ui.WaitUntil(() => Clips(window).Any(n => n.StartsWith("오디오 1 · tone.wav · 00:00:02:10–", StringComparison.Ordinal)), Wait, "다음 소리");
+                // 영상 끝을 다시 1초 늘인다 → 사운드가 70에 막혀 둘 다 70에서 멈춤
+                ui.Run(() =>
+                {
+                    SelectClip(window, n => n.StartsWith("동영상 1 · testsrc.mp4", StringComparison.Ordinal));
+                    TrimEnd(window, VideoClip(window), 30);
+                });
+                await ui.WaitUntil(() => Clips(window).Contains("동영상 1 · testsrc.mp4 · 00:00:00:00–00:00:02:10 · 링크"), Wait, "영상이 막힌 자리에서 멈춤");
+                ui.Run(() =>
+                {
+                    Assert.Contains("오디오 1 · testsrc.mp4 · 00:00:00:00–00:00:02:10 · 링크", Clips(window));
+                    Assert.DoesNotContain(Clips(window), n => n.Contains("어긋남"));
+                    Ui.Snap(window, plugin.ShotFolder, "sound-split-trim-blocked");
+                });
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        /// <summary>
+        /// 붙여 넣기 경계(#31, Windows 실측): 사운드가 영상보다 앞선 링크 짝을 잘라 마그네틱 주 트랙 0초에 붙여 넣으면
+        /// 영상은 0으로 당겨지고, 사운드는 0 앞 부분이 잘려 0부터 놓인다. 원래의 어긋남(값)은 그대로이고 새 어긋남은 생기지 않는다.
+        /// </summary>
+        [EditorFact]
+        public async Task Paste_SoundBeforeZero_CutsTheHead_KeepsTheOffset()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                await Import(ui, window, Path.Combine(MediaFolder, "testsrc.mp4"));
+                await AddToTimeline(ui, window, "testsrc.mp4");
+                await DetachWithShortcut(ui, window);
+                ui.Run(() => Ui.ClickToggle(Ui.ById<ToggleButton>(window, "MagneticToggle")));
+                await ui.WaitUntil(() => !(bool)Get(Project(window), "Magnetic"), Wait, "마그네틱 끔");
+                // Alt로 영상만 15프레임 오른쪽 → 사운드가 영상보다 15프레임 앞선 짝
+                ui.Run(() =>
+                {
+                    var from = Center(window, VideoClip(window));
+                    DragAlone(window, from, new Point(from.X + Px(window, 15), from.Y));
+                });
+                await ui.WaitUntil(() => Clips(window).Any(n => n.StartsWith("동영상 1 · testsrc.mp4 · 00:00:00:15–00:00:03:15 · 링크 · 어긋남", StringComparison.Ordinal)), Wait, "영상만 옮김");
+                var (videoSuffix, soundSuffix) = ui.Run(() => (LinkSuffix(Clips(window).First(n => n.StartsWith("동영상 1", StringComparison.Ordinal))),
+                                                               LinkSuffix(Clips(window).First(n => n.StartsWith("오디오 1", StringComparison.Ordinal)))));
+                // 둘 다 잘라 내고, 마그네틱을 켠 뒤 0초에 붙여 넣는다
+                ui.Run(() =>
+                {
+                    SelectClip(window, n => n.StartsWith("오디오 1", StringComparison.Ordinal));
+                    Assert.Equal(2, SelectedCount(window));
+                    Key(window, System.Windows.Input.Key.X, ModifierKeys.Control);
+                });
+                await ui.WaitUntil(() => Clips(window).Count == 0, Wait, "잘라 내기");
+                ui.Run(() => Ui.ClickToggle(Ui.ById<ToggleButton>(window, "MagneticToggle")));
+                await ui.WaitUntil(() => (bool)Get(Project(window), "Magnetic"), Wait, "마그네틱 켬");
+                ui.Run(() =>
+                {
+                    Key(window, System.Windows.Input.Key.Home);
+                    Key(window, System.Windows.Input.Key.V, ModifierKeys.Control);
+                });
+                await ui.WaitUntil(() => Clips(window).Count == 2, Wait, "붙여 넣기");
+                ui.Run(() =>
+                {
+                    Assert.Contains("동영상 1 · testsrc.mp4 · 00:00:00:00–00:00:03:00" + videoSuffix, Clips(window));
+                    // 0 앞 15프레임을 잘라 0~2초 15프레임, 원본 시작은 15프레임 뒤
+                    Assert.Contains("오디오 1 · testsrc.mp4 · 00:00:00:00–00:00:02:15" + soundSuffix, Clips(window));
+                    Assert.Equal(15L, (long)Get(SoundClip(window), "SourceIn"));
+                    Ui.Snap(window, plugin.ShotFolder, "sound-split-paste-before-zero");
+                });
+                _out.WriteLine("붙여 넣기 전후 어긋남: 영상" + videoSuffix + " / 사운드" + soundSuffix);
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        /// <summary>
+        /// 음량·페이드 넣어 저장(#31, Windows 실측): 음량을 바꾼 클립의 [사운드를 파일로 저장…]은 넣을지 묻는다.
+        /// [넣어 저장] → WAV(평균 음량이 원본보다 약 6dB 낮음), [원본 소리 그대로] → 원본 코덱(AAC) 그대로.
+        /// </summary>
+        [EditorFact]
+        public async Task SaveClipSound_WithVolume_AsksAndBothChoicesWork()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                await Import(ui, window, Path.Combine(MediaFolder, "testsrc.mp4"));
+                await AddToTimeline(ui, window, "testsrc.mp4");
+                ui.Run(() => SelectClip(window, n => n.StartsWith("동영상 1 · testsrc.mp4", StringComparison.Ordinal)));
+                await ui.WaitFor(() => Ui.ById<TabControl>(window, "PropertyTabs"), Wait, "속성 패널");
+                ui.Run(() => Ui.ById<TabControl>(window, "PropertyTabs").Items.OfType<TabItem>().First(t => (string)t.Header == "소리").IsSelected = true);
+                var volume = await ui.WaitFor(() => Ui.ById<TextBox>(window, "PropVolume") is TextBox shown && shown.IsVisible ? shown : null, Wait, "음량 칸");
+                ui.Run(() =>
+                {
+                    Ui.Focus(volume);
+                    volume.Text = "50";
+                    Ui.Press(volume, System.Windows.Input.Key.Enter);
+                });
+                await ui.WaitUntil(() => Math.Abs((double)Get(VideoClip(window), "Volume") - 0.5) < 1e-9, Wait, "음량 50%");
+
+                async Task<string> SaveWith(int button, string extension)
+                {
+                    var path = Path.Combine(plugin.Root, "volume-" + button + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + extension);
+                    ui.Post(() => InvokeMenu(ClipMenu(window, VideoClip(window)), "사운드를 파일로 저장"));
+                    var ask = await ui.WaitFor(() => Ui.Windows().FirstOrDefault(w => w.IsVisible && w.Title == "사운드를 파일로 저장"), Wait, "넣어 저장할지 묻는 창");
+                    ui.Run(() =>
+                    {
+                        Assert.Contains("음량·페이드를 넣어 저장할까요?", string.Join(" ", Ui.Texts(ask)));
+                        Assert.Contains("넣어 저장", Ui.Texts(Ui.ById<Button>(ask, "AskButton0")));
+                        Assert.Contains("원본 소리 그대로", Ui.Texts(Ui.ById<Button>(ask, "AskButton1")));
+                        if (button == 0)
+                            Ui.Snap(ask, plugin.ShotFolder, "sound-save-ask-volume");
+                        Ui.Click(Ui.ById<Button>(ask, "AskButton" + button));
+                    });
+                    await NativeDialogs.SaveAs(ui, path, Wait);
+                    await ui.WaitUntil(() => Ui.ById<ListBox>(window, "MediaList").Items.Cast<FrameworkElement>().Any(i => System.Windows.Automation.AutomationProperties.GetName(i) == Path.GetFileName(path)), Wait, "저장한 사운드가 미디어에");
+                    return path;
+                }
+
+                var shaped = await SaveWith(0, ".wav");
+                var original = await SaveWith(1, ".m4a");
+                Assert.Equal("pcm_s16le", RunTool("ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", shaped).Trim());
+                Assert.Equal("aac", RunTool("ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", original).Trim());
+                var difference = MeanVolume(shaped) - MeanVolume(original);
+                _out.WriteLine("평균 음량 차이(넣어 저장 − 원본): " + difference.ToString("0.00") + "dB, 길이 " + Duration(shaped) + "초");
+                Assert.InRange(difference, -7.5, -4.5);
+                Assert.InRange(Duration(shaped), 2.9, 3.1);
                 Assert.Empty(ui.TakeErrors());
             }
             finally

@@ -294,6 +294,77 @@ namespace VideoEditor.UiTests
             }
         }
 
+        /// <summary>
+        /// 효과 편집 화면 보완(#28, Windows 실측): 레이 스캐닝 방향은 고르기 칸(선택지 넷)이고 고른 번호가 값이 된다.
+        /// [위로]·[아래로]는 맨 위·맨 아래에서 꺼지고, 누르면 그리는 순서가 바뀌며(고른 값은 효과를 따라감) 실행 취소 한 번에 돌아간다.
+        /// 좁은 속성 패널에서도 머리줄(이름 · [아래로][위로][빼기])이 줄 밖으로 넘치지 않는다.
+        /// </summary>
+        [EditorFact]
+        public async Task EffectRows_RayDirectionChoice_MoveUpDown_OneUndoStep()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                await RedAtOneSecond(ui, window);
+                await AddScanLineFromTab(ui, window);
+                // 레이 스캐닝을 끌어 놓아 둘째 효과로(끌어 놓기 이벤트를 만들 수 없어 처리기를 직접 부른다)
+                ui.Run(() =>
+                {
+                    var canvas = Canvas(window);
+                    var handler = (Delegate)canvas.GetType().GetField("VideoEffectDropped", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(canvas);
+                    handler.DynamicInvoke("ray-scan", Get(Red(window), "Id"));
+                });
+                await ui.WaitUntil(() => Effects(window)?.Count == 2, Wait, "레이 스캐닝 더함");
+                var direction = await ui.WaitFor(() => Ui.ById<ComboBox>(window, "Effect1_dir"), Wait, "방향 고르기 칸");
+                ui.Run(() =>
+                {
+                    Assert.Equal(new[] { "scan-line", "ray-scan" }, Effects(window).Cast<object>().Select(e => (string)Get(e, "Id")));
+                    Assert.Equal(4, direction.Items.Count);
+                    Assert.Equal(0, direction.SelectedIndex);
+                    // 맨 위의 [위로]·맨 아래의 [아래로]는 꺼짐
+                    Assert.False(Ui.ById<Button>(window, "EffectMoveUp0").IsEnabled);
+                    Assert.True(Ui.ById<Button>(window, "EffectMoveDown0").IsEnabled);
+                    Assert.True(Ui.ById<Button>(window, "EffectMoveUp1").IsEnabled);
+                    Assert.False(Ui.ById<Button>(window, "EffectMoveDown1").IsEnabled);
+                    // 머리줄 단추가 줄 안에 있다(넘치면 오른쪽이 잘린다)
+                    foreach (var name in new[] { "EffectMoveDown0", "EffectMoveUp0", "EffectRemove0" })
+                    {
+                        var button = Ui.ById<Button>(window, name);
+                        var row = (FrameworkElement)VisualTreeHelper.GetParent(button);
+                        var right = button.TranslatePoint(new Point(button.ActualWidth, 0), row).X;
+                        Assert.True(right <= row.ActualWidth + 0.5, name + " 오른쪽 " + right + " > 줄 " + row.ActualWidth);
+                    }
+                    Ui.Snap(window, plugin.ShotFolder, "effect-rows-choice-and-move");
+                    direction.SelectedIndex = 2;
+                });
+                await ui.WaitUntil(() => Math.Abs(Value(window, 1, "dir") - 2) < 1e-9, Wait, "방향 2(위→아래)");
+
+                // [아래로]: 스캔 라인이 위(나중)로 → 레이가 먼저. 고른 방향은 효과를 따라 0번 줄로
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "EffectMoveDown0")));
+                await ui.WaitUntil(() => (string)Get(Effects(window)[0], "Id") == "ray-scan", Wait, "순서 바뀜");
+                await ui.WaitUntil(() => Ui.ById<ComboBox>(window, "Effect0_dir")?.SelectedIndex == 2, Wait, "방향 칸이 효과를 따라감");
+                ui.Run(() =>
+                {
+                    Assert.False(Ui.ById<Button>(window, "EffectMoveUp0").IsEnabled);
+                    Assert.False(Ui.ById<Button>(window, "EffectMoveDown1").IsEnabled);
+                    Ui.Snap(window, plugin.ShotFolder, "effect-rows-moved");
+                });
+                // 실행 취소 한 번 = 순서만 되돌림(방향 2는 그대로), 한 번 더 = 방향 0
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => (string)Get(Effects(window)[0], "Id") == "scan-line" && Math.Abs(Value(window, 1, "dir") - 2) < 1e-9, Wait, "순서 실행 취소");
+                ui.Run(() => Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control));
+                await ui.WaitUntil(() => Math.Abs(Value(window, 1, "dir")) < 1e-9, Wait, "방향 실행 취소");
+                await ui.WaitUntil(() => Ui.ById<ComboBox>(window, "Effect1_dir")?.SelectedIndex == 0, Wait, "방향 칸 0");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
         [EditorFact]
         public async Task PersonOnly_ShowsMaskStatus_BuildButtonRunsTheCommand_AndMaskLimitsTheLine()
         {
