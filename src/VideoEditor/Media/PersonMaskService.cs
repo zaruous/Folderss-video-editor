@@ -32,7 +32,10 @@ namespace VideoEditor.Media
         public string ModelFolder { get { return Path.Combine(Folder, "models"); } }
         public string MaskFolder { get { return Path.Combine(Folder, "masks"); } }
 
-        /// <summary>원본의 마스크가 준비돼 있으면 그 경로(원본이 그 뒤 바뀌었거나 만드는 중(.part)이면 null). 디스크만 본다.</summary>
+        /// <summary>
+        /// 원본의 마스크가 준비돼 있으면 그 경로(원본이 그 뒤 바뀌었거나 만드는 중(.part)이면 null). 디스크만 본다.
+        /// 찾은 마스크는 사용 시각을 지금으로 적는다(캐시 상한 정리가 오래 안 쓴 것부터 지운다 — NTFS는 접근 시각을 잘 갱신하지 않음).
+        /// </summary>
         public string Find(string sourcePath)
         {
             var name = CacheName(sourcePath);
@@ -42,7 +45,17 @@ namespace VideoEditor.Media
             {
                 var path = Path.Combine(MaskFolder, name + PersonMaskText.Extension(image));
                 if (File.Exists(path))
+                {
+                    try
+                    {
+                        File.SetLastAccessTimeUtc(path, DateTime.UtcNow);
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                    {
+                        // FFmpeg가 읽는 중이면 못 고칠 수 있다 — 마스크는 그대로 쓴다
+                    }
                     return path;
+                }
             }
             return null;
         }
@@ -171,6 +184,7 @@ namespace VideoEditor.Media
                         throw new InvalidOperationException("만드는 동안 원본 파일이 바뀌었습니다. 다시 만드세요: " + media.Name);
                     File.Move(part, final, true);
                     RemoveOld(final);
+                    RecordSource(final, media.Path);
                     return final;
                 }
                 finally
@@ -305,8 +319,38 @@ namespace VideoEditor.Media
             }
         }
 
-        /// <summary>끊긴 만들기·내려받기가 남긴 .part 가운데 age 넘게 그대로인 것을 지운다(편집기가 시작할 때 — 만드는 중인 파일은 계속 바뀐다).</summary>
-        public void Cleanup(TimeSpan age)
+        /// <summary>마스크 캐시 크기 상한(기본). 넘으면 오래 안 쓴 것부터 지운다.</summary>
+        public const long MaxCacheBytes = 10L * 1024 * 1024 * 1024;
+        // 이 안에 쓴 마스크는 상한을 넘어도 남긴다(다시 만드는 데 몇 분 걸린다)
+        private static readonly TimeSpan KeepRecent = TimeSpan.FromDays(1);
+        private const string SourceExtension = ".source";
+        private static readonly System.Text.RegularExpressions.Regex MaskName =
+            new System.Text.RegularExpressions.Regex("^[0-9a-f]{16}-[0-9a-f]{16}\\.(mkv|png)$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        /// <summary>마스크 옆에 원본 경로를 적어 둔다(마스크 이름은 경로의 해시라 원본을 알 수 없다 — 원본을 지운 마스크를 정리하려고). 못 적어도 마스크는 쓴다.</summary>
+        internal static void RecordSource(string mask, string sourcePath)
+        {
+            try
+            {
+                File.WriteAllText(SourceRecord(mask), Path.GetFullPath(sourcePath));
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
+            {
+                // 기록이 없으면 크기 상한으로만 정리된다
+            }
+        }
+
+        private static string SourceRecord(string mask)
+        {
+            return Path.Combine(Path.GetDirectoryName(mask), Path.GetFileNameWithoutExtension(mask) + SourceExtension);
+        }
+
+        /// <summary>
+        /// 편집기가 시작할 때(배경에서): 끊긴 만들기·내려받기가 남긴 .part 가운데 age 넘게 그대로인 것(만드는 중인 파일은 계속 바뀐다),
+        /// 원본이 지워졌거나 바뀐 마스크(원본 기록으로 — 원본 폴더째 없으면 빠진 드라이브일 수 있어 남김, 기록이 없는 예전 마스크는 남김), 마스크 없이 남은 기록을 지운다.
+        /// 그래도 maxBytes를 넘으면 오래 안 쓴 마스크부터 지운다(하루 안에 쓴 것은 남김).
+        /// </summary>
+        public void Cleanup(TimeSpan age, long maxBytes = MaxCacheBytes)
         {
             foreach (var folder in new[] { MaskFolder, ModelFolder })
             {
@@ -325,6 +369,75 @@ namespace VideoEditor.Media
                     // 다음 시작 때 다시
                 }
             }
+            try
+            {
+                if (Directory.Exists(MaskFolder))
+                    TrimMasks(maxBytes);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                // 다음 시작 때 다시
+            }
+        }
+
+        private void TrimMasks(long maxBytes)
+        {
+            var folder = new DirectoryInfo(MaskFolder);
+            var masks = folder.EnumerateFiles().Where(f => MaskName.IsMatch(f.Name)).ToList();
+            var names = new HashSet<string>(masks.Select(f => Path.GetFileNameWithoutExtension(f.Name)), StringComparer.OrdinalIgnoreCase);
+            foreach (var record in folder.EnumerateFiles("*" + SourceExtension).ToList())
+            {
+                if (!names.Contains(Path.GetFileNameWithoutExtension(record.Name)))
+                    RenderCommand.TryDelete(record.FullName);
+            }
+            var alive = new List<FileInfo>();
+            foreach (var mask in masks)
+            {
+                if (IsOrphan(mask))
+                    Remove(mask);
+                else
+                    alive.Add(mask);
+            }
+            var total = alive.Sum(f => f.Length);
+            var now = DateTime.UtcNow;
+            foreach (var mask in alive.OrderBy(LastUsed))
+            {
+                if (total <= maxBytes || now - LastUsed(mask) < KeepRecent)
+                    break;
+                var length = mask.Length;
+                if (Remove(mask))
+                    total -= length;
+            }
+        }
+
+        /// <summary>원본 기록이 있고, 원본 폴더는 있는데 파일이 없거나 지금 원본으로 지은 이름이 이 마스크가 아니면(원본이 바뀜) true.</summary>
+        private static bool IsOrphan(FileInfo mask)
+        {
+            var record = SourceRecord(mask.FullName);
+            if (!File.Exists(record))
+                return false;
+            var source = File.ReadAllText(record).Trim();
+            if (source.Length == 0)
+                return false;
+            if (!File.Exists(source))
+                return Directory.Exists(Path.GetDirectoryName(source));
+            return !string.Equals(CacheName(source) + mask.Extension, mask.Name, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static DateTime LastUsed(FileInfo file)
+        {
+            return file.LastAccessTimeUtc > file.LastWriteTimeUtc ? file.LastAccessTimeUtc : file.LastWriteTimeUtc;
+        }
+
+        /// <summary>마스크와 그 원본 기록을 지운다. 마스크를 지웠으면 true(쓰는 중이면 못 지움).</summary>
+        private static bool Remove(FileInfo mask)
+        {
+            var path = mask.FullName;
+            RenderCommand.TryDelete(path);
+            if (File.Exists(path))
+                return false;
+            RenderCommand.TryDelete(SourceRecord(path));
+            return true;
         }
     }
 }
