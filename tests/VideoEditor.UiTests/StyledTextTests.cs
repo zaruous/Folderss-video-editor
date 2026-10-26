@@ -498,7 +498,7 @@ namespace VideoEditor.UiTests
                 Assert.True(max.Centroid(true).Weight > 0, "그림자가 있어야 한다");
                 Assert.Equal(0, max.BorderInk());
             }
-            // 효과 배율 2: 거리는 두 배, 흐림 반지름은 상한 100
+            // 효과 배율 2: 거리·흐림 반지름 모두 두 배(흐림 상한 100은 곱하기 전 — #26)
             var scaled = await Render(rasterizer, Request(rasterizer, "WAV가", 3840, 2160, 240, WhiteFill + "," + Shadow(200, 30, 100), 2), "shadow-max-scale-2");
             Assert.Equal(0, scaled.BorderInk());
         }

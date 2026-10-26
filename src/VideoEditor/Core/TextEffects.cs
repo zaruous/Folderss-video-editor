@@ -5,8 +5,10 @@ namespace VideoEditor.Core
     /// <summary>꾸민 글자 효과 계산(순수 함수 — 그리개와 시험이 함께 쓴다). 좌표는 글자 영역을 0~1로 정규화한 상자.</summary>
     public static class TextEffects
     {
-        /// <summary>흐림 반지름 상한(출력 픽셀). 큰 그림(4K)에서 흐림이 오래 걸리지 않게 효과 배율을 곱한 뒤에 자른다.</summary>
+        /// <summary>흐림 반지름 상한(프로젝트 픽셀 — 스타일 값의 범위와 같다). 효과 배율을 곱하기 전에 자른다 — 4K로 내보내도 미리 보기와 같은 비율로 퍼지게.</summary>
         public const double MaxBlurRadius = 100;
+        /// <summary>흐림 반지름의 출력 픽셀 안전 상한: 프로젝트보다 4배 넘게 키워 내보낼 때만 걸린다(아주 큰 흐림이 오래 걸리지 않게).</summary>
+        public const double MaxOutputBlurRadius = 400;
 
         /// <summary>
         /// 선형 그라데이션의 시작·끝점. 0° = 왼쪽 → 오른쪽, 90° = 위 → 아래(시계 방향).
@@ -42,11 +44,12 @@ namespace VideoEditor.Core
             return (d * Math.Cos(radians), d * Math.Sin(radians));
         }
 
-        /// <summary>그릴 흐림 반지름(픽셀): 흐림 × 효과 배율을 0~<see cref="MaxBlurRadius"/>로 자른다. 잘못된 값은 0.</summary>
+        /// <summary>그릴 흐림 반지름(출력 픽셀): 흐림(0~<see cref="MaxBlurRadius"/>로 자름) × 효과 배율, 많아야 <see cref="MaxOutputBlurRadius"/>. 잘못된 값은 0.</summary>
         public static double BlurRadius(double blur, double effectScale)
         {
-            var radius = blur * effectScale;
-            return double.IsFinite(blur) && double.IsFinite(effectScale) && blur > 0 && effectScale > 0 ? Math.Min(MaxBlurRadius, radius) : 0;
+            if (!(double.IsFinite(blur) && double.IsFinite(effectScale) && blur > 0 && effectScale > 0))
+                return 0;
+            return Math.Min(MaxOutputBlurRadius, Math.Min(MaxBlurRadius, blur) * effectScale);
         }
 
         /// <summary>
@@ -64,7 +67,7 @@ namespace VideoEditor.Core
             return double.IsFinite(thickness) ? thickness : 0;
         }
 
-        /// <summary>광선 흐림 반지름(픽셀): 크기의 절반을 <see cref="BlurRadius"/>로(× 효과 배율, 상한 <see cref="MaxBlurRadius"/>).</summary>
+        /// <summary>광선 흐림 반지름(픽셀): 크기의 절반을 <see cref="BlurRadius"/>로(× 효과 배율, 상한은 곱하기 전 <see cref="MaxBlurRadius"/>·출력 <see cref="MaxOutputBlurRadius"/>).</summary>
         public static double GlowBlurRadius(double size, double effectScale)
         {
             return BlurRadius(size / 2, effectScale);

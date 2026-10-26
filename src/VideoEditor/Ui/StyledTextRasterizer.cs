@@ -30,7 +30,7 @@ namespace VideoEditor.Ui
         private bool _disposed;
 
         /// <summary>그리는 방식을 바꾸면 올린다(캐시 키에 들어가 예전 PNG를 쓰지 않게).</summary>
-        public int Version { get { return 9; } }
+        public int Version { get { return 10; } }
 
         /// <summary>어느 스레드에서 불러도 된다. 배경 그리기 스레드에 맡기고 끝날 때까지(최대 30초) 기다린다.</summary>
         public void Render(TextImageRequest request, string pngPath, CancellationToken cancellation)
@@ -490,7 +490,7 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// 그림자 층: 본문이 칠하는 모양(채우기 영역 + 켰으면 윤곽선, 채우기가 없으면 윤곽선 고리만)을 그림자 색 × 불투명도로 칠해
-        /// 거리·각도만큼 옮기고, 가우스 흐림(반지름 = 흐림 × 효과 배율, 상한 <see cref="TextEffects.MaxBlurRadius"/>)을 건다.
+        /// 거리·각도만큼 옮기고, 가우스 흐림(반지름 = <see cref="TextEffects.BlurRadius"/> — 흐림 × 효과 배율, 상한은 곱하기 전)을 건다.
         /// 거리·흐림은 여백 계산(<see cref="StyledTextLayout.Spread"/>)과 같은 값이라 그림 가장자리에서 잘리지 않는다. 꺼졌거나 보이지 않으면 null.
         /// </summary>
         private static Visual ShadowLayer(Geometry geometry, Rect ink, TextStyle style, double effectScale, Vector origin)
@@ -528,7 +528,7 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// 광선 층(앞쪽 층에서 본문 바로 아래): 본문이 칠하는 모양을 크기만큼 넓혀(윤곽선을 켰으면 그 바깥 가장자리부터) 광선 색 × 불투명도로 칠하고
-        /// 가우스 흐림(반지름 = 크기 / 2 × 효과 배율, 상한 <see cref="TextEffects.MaxBlurRadius"/>)을 건다.
+        /// 가우스 흐림(반지름 = <see cref="TextEffects.GlowBlurRadius"/> — 크기 / 2 × 효과 배율, 상한은 곱하기 전)을 건다.
         /// 글자 윤곽을 두께 (윤곽선 두께 + 크기) × 2인 펜(<see cref="TextEffects.GlowPenThickness"/>)으로 그리고 채운다 — 이음은 둥글게,
         /// 각지게 윤곽선이면 각지게(한도 <see cref="TextEffects.GlowMiterLimit"/> — 모서리 끝도 윤곽선 모서리 끝 + 크기까지).
         /// 채우기가 없으면(속 빈 글자) 본문은 윤곽선 고리만 칠하므로 광선도 고리 둘레만: 글자 밖은 고리 바깥 가장자리에서, 글자 속은 고리 안쪽 가장자리(글자 윤곽)에서 크기만큼.
