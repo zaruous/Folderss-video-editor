@@ -708,8 +708,8 @@ namespace VideoEditor.Ui
         private UIElement TextBoxRows(string id)
         {
             var panel = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
-            panel.Children.Add(NumberRow("상자 너비", "PropTextBoxWidth", 0, 4000, "px", id, c => c.TextBoxWidth, (c, v) => c.TextBoxWidth = ClipLayout.TextBoxLength(v)));
-            panel.Children.Add(NumberRow("상자 높이", "PropTextBoxHeight", 0, 4000, "px", id, c => c.TextBoxHeight, (c, v) => c.TextBoxHeight = ClipLayout.TextBoxLength(v)));
+            panel.Children.Add(NumberRow("상자 너비", "PropTextBoxWidth", 0, ClipLayout.MaxTextBox, "px", id, c => c.TextBoxWidth, (c, v) => c.TextBoxWidth = ClipLayout.TextBoxLength(v)));
+            panel.Children.Add(NumberRow("상자 높이", "PropTextBoxHeight", 0, ClipLayout.MaxTextBox, "px", id, c => c.TextBoxHeight, (c, v) => c.TextBoxHeight = ClipLayout.TextBoxLength(v)));
             // 보이는 순서는 아래 배열(enum 순서에 기대지 않는다)
             var verticals = new[] { TextVerticalAlign.Top, TextVerticalAlign.Middle, TextVerticalAlign.Bottom };
             var vertical = new ComboBox();
