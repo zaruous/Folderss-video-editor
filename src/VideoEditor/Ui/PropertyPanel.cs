@@ -441,6 +441,8 @@ namespace VideoEditor.Ui
                 }, mergeKey);
             }
             var head = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+            // [위로]·[아래로]·[빼기] — 이름이 다 보일 자리가 없으면(좁은 패널) 다음 줄 오른쪽으로 내린다
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             var remove = UiKit.TextButton("빼기", "EffectRemove" + index, () => Edit(id, c =>
             {
                 if (EffectOf(c) != null)
@@ -448,8 +450,6 @@ namespace VideoEditor.Ui
             }, null));
             remove.MinWidth = 50;
             remove.Padding = new Thickness(6, 1, 6, 1);
-            DockPanel.SetDock(remove, Dock.Right);
-            head.Children.Add(remove);
             // 순서 바꾸기(뒤 효과가 앞 효과 위에 그린다) — 실행 취소 한 단계
             foreach (var (text, to) in new[] { ("아래로", index + 1), ("위로", index - 1) })
             {
@@ -462,9 +462,11 @@ namespace VideoEditor.Ui
                 move.MinWidth = 0;
                 move.Padding = new Thickness(6, 1, 6, 1);
                 move.IsEnabled = target >= 0 && target < count;
-                DockPanel.SetDock(move, Dock.Right);
-                head.Children.Add(move);
+                buttons.Children.Insert(0, move);
             }
+            buttons.Children.Add(remove);
+            DockPanel.SetDock(buttons, Dock.Right);
+            head.Children.Add(buttons);
             var title = Section(def?.Name ?? "알 수 없는 효과(" + effectId + ")");
             title.ToolTip = def?.Description;
             DockPanel.SetDock(title, Dock.Left);
@@ -477,6 +479,9 @@ namespace VideoEditor.Ui
             AutomationProperties.SetAutomationId(group, "EffectGroup" + index);
             head.Children.Add(group);
             box.Children.Add(head);
+            var lower = new DockPanel { Margin = new Thickness(0, 0, 0, 2), Visibility = Visibility.Collapsed };
+            box.Children.Add(lower);
+            head.SizeChanged += (s, e) => FoldRight(head, lower, buttons, TextWidth(title) + TextWidth(group));
             if (def == null)
             {
                 var note = UiKit.Label("이 판에서 그리지 못하는 효과입니다(새 판에서 만든 효과일 수 있습니다). 그대로 두면 저장할 때 남고, 빼도 됩니다.", true);
@@ -1480,6 +1485,38 @@ namespace VideoEditor.Ui
             return new TextBlock { Text = text, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 4, 0, 4) };
         }
 
+        /// <summary>글이 잘리지 않고 다 보이는 폭(지금 글꼴로 잰 글 폭 + 바깥 여백).</summary>
+        private static double TextWidth(TextBlock text)
+        {
+            var formatted = new System.Windows.Media.FormattedText(text.Text ?? "", System.Globalization.CultureInfo.CurrentUICulture, text.FlowDirection,
+                new System.Windows.Media.Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch), text.FontSize, System.Windows.Media.Brushes.Black,
+                System.Windows.Media.VisualTreeHelper.GetDpi(text).PixelsPerDip);
+            return formatted.WidthIncludingTrailingWhitespace + text.Margin.Left + text.Margin.Right + text.Padding.Left + text.Padding.Right + 1;
+        }
+
+        /// <summary>
+        /// 줄(line)의 폭에서 오른쪽 부분(part)을 빼고 남는 폭이 need보다 좁으면 part를 아랫줄(lower)로 내리고, 넓어지면 다시 올린다 — 좁은 패널에서도 이름·슬라이더가 쓸 만한 폭을 갖게.
+        /// part는 line의 첫 자식(Dock.Right)으로 들어가 있다가 lower로 옮겨진다. 폭은 지금 그려진 값(ActualWidth)만 쓴다(크기가 바뀌는 중에 다시 재지 않게).
+        /// </summary>
+        private static void FoldRight(DockPanel line, DockPanel lower, FrameworkElement part, double need)
+        {
+            var folded = lower.Children.Contains(part);
+            var fold = line.ActualWidth - part.ActualWidth < need;
+            if (fold == folded || part.ActualWidth <= 0)
+                return;
+            if (fold)
+            {
+                line.Children.Remove(part);
+                lower.Children.Add(part);
+            }
+            else
+            {
+                lower.Children.Remove(part);
+                line.Children.Insert(0, part);
+            }
+            lower.Visibility = fold ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         /// <summary>이름(폭 84) · 컨트롤 한 줄.</summary>
         private static UIElement Row(string label, UIElement control)
         {
@@ -1502,7 +1539,12 @@ namespace VideoEditor.Ui
             _commands.EditClip(id, (p, c) => change(c), mergeKey);
         }
 
-        /// <summary>이름 · 슬라이더 · 숫자 칸 · 단위 한 줄. edit이 있으면 그것으로(프로젝트 편집), 없으면 set으로 클립 값을 바꾼다.</summary>
+        // 숫자 줄의 슬라이더가 이보다 좁아지면 아랫줄로 내린다
+        private const double MinSlider = 100;
+
+        /// <summary>
+        /// 이름 · 슬라이더 · 숫자 칸 · 단위 한 줄(좁으면 슬라이더만 아랫줄). edit이 있으면 그것으로(프로젝트 편집), 없으면 set으로 클립 값을 바꾼다.
+        /// </summary>
         private UIElement NumberRow(string label, string automationId, double min, double max, string unit, string id,
             Func<Clip, double> get, Action<Clip, double> set, Action<Project, Clip, double> edit = null)
         {
@@ -1525,6 +1567,22 @@ namespace VideoEditor.Ui
             AutomationProperties.SetAutomationId(slider, automationId + "Slider");
             AutomationProperties.SetName(slider, label);
             row.Children.Add(slider);
+            // 좁은 패널(1280×800 창 등)에서는 이름·숫자 칸·단위를 빼면 슬라이더가 19px까지 줄어 쓸 수 없었다 — MinSlider보다 좁으면 아랫줄에 줄 폭 전체로
+            var outer = new StackPanel { Margin = row.Margin };
+            row.Margin = new Thickness(0);
+            var lower = new DockPanel { Margin = new Thickness(0, 3, 0, 0), Visibility = Visibility.Collapsed };
+            outer.Children.Add(row);
+            outer.Children.Add(lower);
+            outer.SizeChanged += (s, e) =>
+            {
+                var fixedWidth = name.ActualWidth + box.ActualWidth + box.Margin.Left + unitText.ActualWidth + unitText.Margin.Left;
+                var fold = outer.ActualWidth - fixedWidth < MinSlider;
+                if (fold == lower.Children.Contains(slider) || name.ActualWidth <= 0)
+                    return;
+                (fold ? (Panel)row : lower).Children.Remove(slider);
+                (fold ? (Panel)lower : row).Children.Add(slider);
+                lower.Visibility = fold ? Visibility.Visible : Visibility.Collapsed;
+            };
             var mergeKey = automationId + ":" + id;
             // 칸에 마지막으로 보인 값 — 적은 글이 이것과 다를 때만 편집한다(포커스를 둔 채 실행 취소한 뒤 칸을 떠나도 옛 값을 다시 적용하지 않게)
             string shown = null;
@@ -1591,7 +1649,7 @@ namespace VideoEditor.Ui
                 }
             }
             (_collect ?? _refreshers).Add(Refresh);
-            return row;
+            return outer;
         }
     }
 }
