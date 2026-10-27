@@ -348,6 +348,18 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void PreviewOrder_UserEffectsFirst_ThenBuiltIns_KeepingTheirOrder()
+        {
+            // 사용자 효과 썸네일이 내장 64개 다음 차례라 60초 기다렸다(#34) — 내장 효과는 한 번 그리면 디스크에 남으므로 사용자 효과부터
+            var builtIns = Transitions.All.Where(d => d.BuiltIn).Take(3).ToList();
+            var user1 = Transitions.Check(new TransitionDef { Id = "MineA", Name = "내 A", Expr = "if(gt(X,W*P),B,A)" }, out _);
+            var user2 = Transitions.Check(new TransitionDef { Id = "MineB", Name = "내 B", Xfade = "wipeleft" }, out _);
+            var shown = new[] { builtIns[0], user1, builtIns[1], builtIns[2], user2 };
+            Assert.Equal(new[] { "MineA", "MineB", builtIns[0].Id, builtIns[1].Id, builtIns[2].Id }, Transitions.PreviewOrder(shown).Select(d => d.Id));
+            Assert.Empty(Transitions.PreviewOrder(new TransitionDef[0]));
+        }
+
+        [Fact]
         public void PreviewArguments_UseTheSameXfadeOption()
         {
             var args = Transitions.PreviewArguments(Transitions.Find("Heart")).ToList();

@@ -779,7 +779,11 @@ namespace VideoEditor.Ui
                 }
                 StopPreview();
                 list.Items.Clear();
-                foreach (var def in usable.Where(d => group == allGroups || d.Group == group))
+                var shown = usable.Where(d => group == allGroups || d.Group == group).ToList();
+                // 썸네일은 사용자 효과부터 그리기를 청한다(같은 효과는 한 번만 그리므로 칸을 만들 때 같은 그림을 받는다)
+                foreach (var def in Transitions.PreviewOrder(shown))
+                    _ = _services.TransitionPreview(def);
+                foreach (var def in shown)
                     list.Items.Add(TransitionTile(def));
                 list.SelectedItem = list.Items.Cast<ListBoxItem>().FirstOrDefault(i => ((TransitionDef)i.Tag).Id == keep) ?? list.Items.Cast<ListBoxItem>().FirstOrDefault();
                 var errors = _services.TransitionErrors;
