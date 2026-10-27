@@ -1398,20 +1398,11 @@ namespace VideoEditor.Ui
             var project = Project;
             if (tool == null)
                 return;
-            var fresh = new List<MediaInfo>();
-            foreach (var media in project.Media.ToList())
-            {
-                if (!MediaProbe.IsStale(media))
-                    continue;
-                try
-                {
-                    fresh.Add(await MediaProbe.Probe(tool, media.Path, CancellationToken.None));
-                }
-                catch (Exception)
-                {
-                    // 읽지 못한 파일은 그대로 둔다(미디어가 아닌 것으로 바뀜 등)
-                }
-            }
+            // 몇 개씩 함께 읽는다(프로세스 시작이 느린 PC에서 하나씩이면 동영상 8개에 20초 넘게 걸렸다). 읽지 못한 파일은 그대로 둔다(미디어가 아닌 것으로 바뀜 등)
+            // 목록은 UI 스레드에서 복사하고 파일 확인만 뒤에서
+            var media = project.Media.ToList();
+            var stale = await Task.Run(() => media.Where(MediaProbe.IsStale).Select(m => m.Path).ToList());
+            var fresh = await MediaProbe.ProbeAll(stale, path => MediaProbe.Probe(tool, path, CancellationToken.None), MediaProbe.Parallel);
             // 그사이 다른 프로젝트를 열었으면 버린다
             if (fresh.Count == 0 || !ReferenceEquals(project, Project))
                 return;
