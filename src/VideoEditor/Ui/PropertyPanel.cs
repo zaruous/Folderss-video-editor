@@ -135,6 +135,13 @@ namespace VideoEditor.Ui
             }
             else
             {
+                if (clip.Kind == ClipKind.Art)
+                {
+                    tabs.Items.Add(new TabItem { Header = "모양", Content = ShapeTab(id, clip.Art?.Kind ?? ArtKind.Rectangle) });
+                    var styleTab = new TabItem { Header = "꾸미기", Content = StyleTab(id, true) };
+                    AutomationProperties.SetAutomationId(styleTab, "StyleTab");
+                    tabs.Items.Add(styleTab);
+                }
                 if (clip.Kind == ClipKind.Text)
                 {
                     tabs.Items.Add(new TabItem { Header = "글자", Content = TextTab(id) });
@@ -175,6 +182,8 @@ namespace VideoEditor.Ui
         {
             if (clip.Kind == ClipKind.Text)
                 return "글자";
+            if (clip.Kind == ClipKind.Art)
+                return "요소";
             if (clip.AudioOnly)
                 return "분리한 사운드";
             switch (clip.MediaKind)
@@ -774,12 +783,14 @@ namespace VideoEditor.Ui
         /// 광선 묶음(켜기·색·크기·불투명도), 반사 묶음(켜기·크기·간격·불투명도), 맨 끝에 휘기 묶음(종류·정도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
         /// </summary>
-        private UIElement StyleTab(string id)
+        private UIElement StyleTab(string id, bool art = false)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             panel.Children.Add(Section("스타일 모음"));
             panel.Children.Add(PresetGallery(id));
             panel.Children.Add(MyStyles(id));
+            // 아트 요소는 글꼴·휘기 묶음을 숨긴다(모양에는 쓰지 않음 — 스타일은 글자와 같은 것을 쓴다)
+            var fontFrom = panel.Children.Count;
             var warning = UiKit.Label("이 PC에 없는 글꼴이라 맑은 고딕으로 그립니다.", true);
             warning.TextWrapping = TextWrapping.Wrap;
             warning.Margin = new Thickness(0, 2, 0, 6);
@@ -834,6 +845,7 @@ namespace VideoEditor.Ui
             };
             panel.Children.Add(Row("정렬", align));
 
+            var fontTo = panel.Children.Count;
             // 채우기: 단색·선형·원형 그라데이션·없음 — 색은 1개(단색) 또는 2~4개(그라데이션), 선형은 각도
             panel.Children.Add(Section("채우기"));
             var fillKinds = new[] { FillKind.Solid, FillKind.Linear, FillKind.Radial, FillKind.None };
@@ -1119,7 +1131,7 @@ namespace VideoEditor.Ui
                 {
                     var family = c.Style?.FontFamily ?? TextStyle.DefaultFont;
                     fonts.SelectedItem = StyledTextRasterizer.Fonts.FirstOrDefault(f => f.Names.Contains(family, StringComparer.OrdinalIgnoreCase));
-                    warning.Visibility = StyledTextRasterizer.IsInstalled(family) ? Visibility.Collapsed : Visibility.Visible;
+                    warning.Visibility = art || StyledTextRasterizer.IsInstalled(family) ? Visibility.Collapsed : Visibility.Visible;
                     bold.IsChecked = c.Style?.Bold == true;
                     italic.IsChecked = c.Style?.Italic == true;
                     align.SelectedIndex = (int)(c.Style?.Align ?? TextAlign.Center);
@@ -1131,6 +1143,7 @@ namespace VideoEditor.Ui
             });
 
             // 휘기(맨 끝 묶음): 종류 · 정도(-100~100%) — 정도는 휘기가 있을 때만 고친다
+            var warpFrom = panel.Children.Count;
             panel.Children.Add(Section("휘기"));
             // 보이는 순서는 아래 배열(enum 순서에 기대지 않는다)
             var warpKinds = new[] { WarpKind.None, WarpKind.ArchUp, WarpKind.ArchDown, WarpKind.Circle, WarpKind.Wave, WarpKind.Bulge, WarpKind.Pinch, WarpKind.Slant, WarpKind.Stairs };
@@ -1168,6 +1181,52 @@ namespace VideoEditor.Ui
                     _updating = was;
                 }
             });
+            if (art)
+            {
+                for (var i = fontFrom; i < panel.Children.Count; i++)
+                {
+                    if (i < fontTo || i >= warpFrom)
+                        panel.Children[i].Visibility = Visibility.Collapsed;
+                }
+            }
+            return panel;
+        }
+
+        /// <summary>
+        /// [모양] 아트 요소의 상자(너비·높이)와 종류별 값 — 사각형: 모서리 반경, 다각형·별: 변·뿔 수, 별: 안쪽 비율, 선·화살표: 두께·점선, 화살표: 머리 크기.
+        /// 길이는 프로젝트 픽셀(크기 배율 전). 모양 손잡이(미리 보기에서 끌기)는 다음 단계.
+        /// </summary>
+        private UIElement ShapeTab(string id, ArtKind kind)
+        {
+            var panel = new StackPanel { Margin = new Thickness(6) };
+            ArtShape Shape(Clip c) => c.Art ??= ArtShape.Default(kind);
+            var line = kind == ArtKind.Line || kind == ArtKind.Arrow;
+            panel.Children.Add(NumberRow("너비", "ArtWidth", 1, 4000, "px", id, c => c.Art?.Width ?? 400, (c, v) => Shape(c).Width = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
+            panel.Children.Add(NumberRow("높이", "ArtHeight", 1, 4000, "px", id, c => c.Art?.Height ?? 300, (c, v) => Shape(c).Height = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
+            if (kind == ArtKind.Rectangle)
+                panel.Children.Add(NumberRow("모서리", "ArtCornerRadius", 0, 1000, "px", id, c => c.Art?.CornerRadius ?? 0, (c, v) => Shape(c).CornerRadius = Math.Max(0, v)));
+            if (kind == ArtKind.Polygon || kind == ArtKind.Star)
+                panel.Children.Add(NumberRow(kind == ArtKind.Star ? "뿔 수" : "변 수", "ArtSides", 3, 12, "", id, c => c.Art?.Sides ?? 5,
+                    (c, v) => Shape(c).Sides = (int)Math.Round(Math.Max(3, Math.Min(12, v)))));
+            if (kind == ArtKind.Star)
+                panel.Children.Add(NumberRow("안쪽", "ArtInnerRatio", 10, 95, "%", id, c => (c.Art?.InnerRatio ?? 0.5) * 100,
+                    (c, v) => Shape(c).InnerRatio = Math.Max(0.1, Math.Min(0.95, v / 100))));
+            if (line)
+            {
+                panel.Children.Add(NumberRow("두께", "ArtThickness", 1, 200, "px", id, c => c.Art?.Thickness ?? 12,
+                    (c, v) => Shape(c).Thickness = Math.Max(1, Math.Min(ArtShape.MaxThickness, v))));
+                var dashed = new CheckBox { Content = "점선" };
+                AutomationProperties.SetAutomationId(dashed, "ArtDashed");
+                dashed.Click += (s, e) => Edit(id, c => Shape(c).Dashed = dashed.IsChecked == true, null);
+                panel.Children.Add(Row("선", dashed));
+                _refreshers.Add(() => dashed.IsChecked = _session.Project.FindClip(id)?.Art?.Dashed == true);
+            }
+            if (kind == ArtKind.Arrow)
+                panel.Children.Add(NumberRow("머리", "ArtHeadSize", 1.5, 10, "×", id, c => c.Art?.HeadSize ?? 3, (c, v) => Shape(c).HeadSize = Math.Max(1.5, Math.Min(10, v))));
+            var hint = UiKit.Label(line ? "선·화살표는 상자 가운데 높이에서 왼쪽 끝 → 오른쪽 끝으로 긋습니다. 방향은 [화면] 탭의 회전으로 바꿉니다." : "색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.", true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Margin = new Thickness(0, 4, 0, 4);
+            panel.Children.Add(hint);
             return panel;
         }
 

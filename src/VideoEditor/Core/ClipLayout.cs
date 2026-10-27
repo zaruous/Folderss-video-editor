@@ -121,7 +121,7 @@ namespace VideoEditor.Core
         /// <summary>
         /// 재생 헤드 frame에서 점(x, y)(프로젝트 픽셀)에 보이는 맨 위 클립(없으면 null) — 미리 보기에서 눌러 고르기.
         /// 쌓는 순서는 렌더 그래프와 같고(동영상 트랙 위 번호가 위), 숨김·잠금·자막 트랙(libass가 그림)은 건너뛴다.
-        /// 동영상·사진은 보이는 영역(<see cref="Content"/>), 글자는 상자(<see cref="TextBox"/> — textBox는 크기 배율 전 상자 크기를 잰다)로, 회전·크기 배율을 따른다.
+        /// 동영상·사진은 보이는 영역(<see cref="Content"/>), 글자는 상자(<see cref="TextBox"/> — textBox는 크기 배율 전 상자 크기를 잰다), 아트는 모양 상자로, 회전·크기 배율을 따른다.
         /// </summary>
         public static Clip HitTest(Project project, long frame, double x, double y, Func<Clip, (double Width, double Height)> textBox)
         {
@@ -134,7 +134,9 @@ namespace VideoEditor.Core
                 foreach (var clip in track.Clips.Where(c => c.IsVisual && c.Contains(frame)).OrderByDescending(c => c.Start))
                 {
                     var rect = Content(project, clip);
-                    if (clip.Kind == ClipKind.Text)
+                    if (clip.Kind == ClipKind.Art && clip.Art != null)
+                        rect = TextBox(project, clip, clip.Art.Width, clip.Art.Height);
+                    else if (clip.Kind == ClipKind.Text)
                     {
                         var box = textBox(clip);
                         rect = TextBox(project, clip, box.Width, box.Height);

@@ -123,7 +123,9 @@ namespace VideoEditor.Core
         /// <summary>파일(동영상·오디오·이미지).</summary>
         Media,
         /// <summary>글자(타이틀).</summary>
-        Text
+        Text,
+        /// <summary>아트 요소(도형·선·화살표 — <see cref="Clip.Art"/>, 꾸미기는 <see cref="Clip.Style"/>).</summary>
+        Art
     }
 
     /// <summary>
@@ -213,6 +215,10 @@ namespace VideoEditor.Core
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public TextVerticalAlign TextVerticalAlign { get; set; }
 
+        /// <summary>아트 클립의 모양(아트 클립만, 아니면 null — 저장할 때 빠진다).</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public ArtShape Art { get; set; }
+
         [JsonIgnore]
         public long Duration
         {
@@ -229,12 +235,17 @@ namespace VideoEditor.Core
         [JsonIgnore]
         public string Name
         {
-            get { return Kind == ClipKind.Text ? (string.IsNullOrEmpty(Text) ? "글자" : Text.Split('\n')[0]) : System.IO.Path.GetFileName(Path); }
+            get
+            {
+                if (Kind == ClipKind.Art)
+                    return ArtShape.DisplayName(Art?.Kind ?? ArtKind.Rectangle);
+                return Kind == ClipKind.Text ? (string.IsNullOrEmpty(Text) ? "글자" : Text.Split('\n')[0]) : System.IO.Path.GetFileName(Path);
+            }
         }
 
         /// <summary>화면에 보이는 클립(동영상·이미지·글자 — 오디오 트랙의 클립은 아님).</summary>
         [JsonIgnore]
-        public bool IsVisual { get { return !AudioOnly && (Kind == ClipKind.Text || HasVideo); } }
+        public bool IsVisual { get { return !AudioOnly && (Kind == ClipKind.Text || Kind == ClipKind.Art || HasVideo); } }
 
         /// <summary>소리를 내는 클립.</summary>
         [JsonIgnore]
@@ -261,6 +272,7 @@ namespace VideoEditor.Core
             copy.LinkId = null;
             copy.Unlinked = false;
             copy.Style = Style?.Clone();
+            copy.Art = Art?.Clone();
             copy.Effects = Effects?.Select(e => e?.Clone()).ToList();
             copy.Words = Words?.Select(w => new ClipWord { Text = w.Text, Start = w.Start, End = w.End }).ToList();
             return copy;
@@ -324,6 +336,8 @@ namespace VideoEditor.Core
     public sealed class Project
     {
         public const int CurrentVersion = 2;
+        /// <summary>아트 클립이 있는 프로젝트의 형식 — 아트가 없으면 계속 <see cref="CurrentVersion"/>으로 저장해 예전 플러그인에서도 열린다.</summary>
+        public const int ArtVersion = 3;
 
         public int Version { get; set; } = CurrentVersion;
         public int Width { get; set; } = 1920;

@@ -1139,6 +1139,21 @@ namespace VideoEditor.Ui
                 _session.Select(new[] { Project.FindClip(id) });
         }
 
+        /// <summary>
+        /// 아트 요소를 넣는다: trackId·frame이 없으면(두 번 누르기) 재생 헤드에, 있으면(타임라인에 끌어 놓기) 그 줄·자리에(<see cref="TimelineEdits.AddArt"/>). 실행 취소 한 번에 사라진다.
+        /// </summary>
+        public void AddArt(ArtKind kind, string trackId = null, long frame = -1)
+        {
+            var start = frame >= 0 ? frame : _session.Playhead;
+            string id = null;
+            if (Run(p =>
+                {
+                    var clip = TimelineEdits.AddArt(p, kind, start, p.Rate.ToFrames(_services.ImageSeconds), trackId == null ? null : p.FindTrack(trackId));
+                    id = clip.Id;
+                }, ArtShape.DisplayName(kind) + "을(를) 넣었습니다."))
+                _session.Select(new[] { Project.FindClip(id) });
+        }
+
         // ---------- 마커·In/Out ----------
 
         public void AddMarker()

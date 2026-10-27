@@ -323,13 +323,19 @@ namespace VideoEditor.Tests
         [Fact]
         public void Key_CoversEveryProperty()
         {
-            // 요청·스타일에 필드를 더하고 키에 넣기를 잊으면 여기서 걸린다(예전 PNG를 잘못 다시 쓰게 됨)
-            var baseline = Request().Key(1);
+            // 요청·스타일에 필드를 더하고 키에 넣기를 잊으면 여기서 걸린다(예전 PNG를 잘못 다시 쓰게 됨). 아트 모양도 채워 그 필드까지 본다
+            TextImageRequest WithArt()
+            {
+                var r = Request();
+                r.Art = new ArtShape();
+                return r;
+            }
+            var baseline = WithArt().Key(1);
             var paths = PropertyPaths(typeof(TextImageRequest), new List<PropertyInfo>()).ToList();
-            Assert.True(paths.Count >= 34, "속성 " + paths.Count + "개");
+            Assert.True(paths.Count >= 43, "속성 " + paths.Count + "개");
             foreach (var path in paths)
             {
-                var request = Request();
+                var request = WithArt();
                 object owner = request;
                 foreach (var property in path.Take(path.Count - 1))
                     owner = property.GetValue(owner);
@@ -863,6 +869,28 @@ namespace VideoEditor.Tests
             {
                 RenderCommand.TryDelete(script);
             }
+        }
+
+        [FfmpegFact]
+        public void Art_PlacedLikeStyledText_AndTransparentWithoutRasterizer()
+        {
+            // #7: 아트 요소도 그리개 PNG를 같은 체인으로 얹는다 — 가운데·옮기기·크기 배율이 꾸민 글자와 같다
+            var (project, text) = StyledProject();
+            var rasterizer = new FakeTextRasterizer(LazyRedText.Value);
+            var textBox = RedBox(Frame(project, 10, rasterizer));
+            project.MainTrack.Clips.Remove(text);
+            var art = TimelineEdits.CreateArt(ArtKind.Rectangle, 0, 30);
+            TimelineEdits.Place(project, project.MainTrack, art, 0);
+            Assert.Equal(textBox, RedBox(Frame(project, 10, rasterizer)));
+            art.X = 50;
+            art.Scale = 0.5;
+            var moved = RedBox(Frame(project, 10, rasterizer));
+            _out.WriteLine("글자 " + textBox + " · 아트 옮김·반 " + moved);
+            Assert.InRange(moved.Right - moved.Left + 1, 98, 102);
+            Assert.InRange((moved.Left + moved.Right) / 2.0, 160 + 50 - 2, 160 + 50 + 2);
+            // 그리개가 없으면 투명(검은 바탕만) — 글자로 그리지 않는다
+            var plain = Frame(project, 10, null);
+            Assert.Equal((-1, -1), (RedBox(plain).Right, RedBox(plain).Bottom));
         }
 
         [FfmpegFact]

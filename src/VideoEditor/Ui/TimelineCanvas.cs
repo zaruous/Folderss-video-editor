@@ -39,6 +39,8 @@ namespace VideoEditor.Ui
         public const string TransitionDataFormat = "VideoEditor.Transition";
         /// <summary>효과 탭에서 끄는 동영상 효과 — 효과 id.</summary>
         public const string VideoEffectDataFormat = "VideoEditor.VideoEffect";
+        /// <summary>요소 탭에서 끈 아트 요소(모양 종류 이름).</summary>
+        public const string ArtDataFormat = "VideoEditor.Art";
         private const double EdgeGrip = 7;
         private const double DragThreshold = 3;
         private const double SnapPixels = 8;
@@ -156,6 +158,8 @@ namespace VideoEditor.Ui
         public event Action<string> StatusMessage;
         /// <summary>파일·미디어를 끌어 놓음: 경로들, 놓은 트랙(줄 아래 빈 곳이면 null), 프레임.</summary>
         public event Action<string[], Track, long> MediaDropped;
+        /// <summary>요소 탭의 아트 요소를 끌어 놓음: 모양 종류, 놓은 트랙(줄 아래 빈 곳이면 null), 프레임.</summary>
+        public event Action<ArtKind, Track, long> ArtDropped;
         /// <summary>[전환] 탭의 전환을 클립에 놓음 — ("종류|초", 클립 Id).</summary>
         public event Action<string, string> TransitionDropped;
         /// <summary>효과 탭의 동영상 효과를 클립에 놓음 — (효과 id, 클립 Id).</summary>
@@ -629,7 +633,8 @@ namespace VideoEditor.Ui
                 return;
             }
             var paths = DroppedPaths(e.Data);
-            if (paths == null || paths.Length == 0)
+            var art = e.Data.GetDataPresent(ArtDataFormat);
+            if (!art && (paths == null || paths.Length == 0))
             {
                 e.Effects = DragDropEffects.None;
             }
@@ -678,7 +683,9 @@ namespace VideoEditor.Ui
             _dropTrack = null;
             _dropFrame = -1;
             InvalidateVisual();
-            if (paths != null && paths.Length > 0)
+            if (e.Data.GetDataPresent(ArtDataFormat) && Enum.TryParse(e.Data.GetData(ArtDataFormat) as string, out ArtKind kind) && Enum.IsDefined(kind))
+                ArtDropped?.Invoke(kind, track, Math.Max(0, frame));
+            else if (paths != null && paths.Length > 0)
                 MediaDropped?.Invoke(paths, track, frame);
             e.Handled = true;
         }
@@ -862,7 +869,7 @@ namespace VideoEditor.Ui
         private void DrawClip(DrawingContext dc, TimelineRow row, Clip clip, Rect rect, FrameRate rate)
         {
             var fill = row.Track.Subtitles ? SubtitleClipBrush
-                : clip.Kind == ClipKind.Text ? TextClipBrush
+                : clip.Kind == ClipKind.Text || clip.Kind == ClipKind.Art ? TextClipBrush
                 : TimelineEdits.IsAudioClip(clip) ? AudioBrush
                 : clip.MediaKind == MediaKind.Image ? ImageBrush : VideoBrush;
             var selected = _session.IsSelected(clip);
@@ -1189,7 +1196,7 @@ namespace VideoEditor.Ui
             protected override Point GetClickablePointCore() { return new Point(double.NaN, double.NaN); }
             protected override string GetHelpTextCore() { return ""; }
             protected override string GetItemStatusCore() { return ""; }
-            protected override string GetItemTypeCore() { return _track.Subtitles ? "자막" : _clip.Kind == ClipKind.Text ? "글자" : _clip.MediaKind.ToString(); }
+            protected override string GetItemTypeCore() { return _track.Subtitles ? "자막" : _clip.Kind == ClipKind.Text ? "글자" : _clip.Kind == ClipKind.Art ? "요소" : _clip.MediaKind.ToString(); }
             protected override AutomationPeer GetLabeledByCore() { return null; }
             protected override AutomationOrientation GetOrientationCore() { return AutomationOrientation.None; }
             protected override bool HasKeyboardFocusCore() { return false; }

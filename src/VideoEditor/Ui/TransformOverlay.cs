@@ -158,6 +158,10 @@ namespace VideoEditor.Ui
                 var box = TextSize(_clip, _boxWidth, _boxHeight);
                 content = ClipLayout.TextBox(_session.Project, probe, box.Width, box.Height);
             }
+            else if (_clip.Kind == ClipKind.Art && _clip.Art != null)
+            {
+                content = ClipLayout.TextBox(_session.Project, probe, _clip.Art.Width, _clip.Art.Height);
+            }
             var (zoom, left, top) = Screen();
             return (new Point(left + content.CenterX * zoom, top + content.CenterY * zoom), content.Width * zoom, content.Height * zoom, content.Rotation);
         }

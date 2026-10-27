@@ -64,6 +64,42 @@ namespace VideoEditor.Core
             };
         }
 
+        /// <summary>아트 요소 클립: 모양 기본값과 단색 채우기(파랑) 스타일.</summary>
+        public static Clip CreateArt(ArtKind kind, long start, long frames)
+        {
+            return new Clip
+            {
+                Kind = ClipKind.Art,
+                Art = ArtShape.Default(kind),
+                Style = ArtStyle(),
+                HasVideo = true,
+                Start = Math.Max(0, start),
+                SourceOut = Math.Max(1, frames)
+            };
+        }
+
+        /// <summary>
+        /// 아트 요소를 start에 넣는다(요소 탭에서 두 번 누르기·끌어 놓기). 트랙: preferred(끌어 놓은 줄)가 쓸 수 있는 동영상 트랙이고 그 구간이 비었으면 거기,
+        /// 아니면 그 구간이 빈 덮어 쓰기 트랙(주 트랙은 빼고 — 주 트랙에 놓아 뒤 클립을 밀지 않게), 없으면 새 동영상 트랙. 넣은 클립을 돌려준다.
+        /// </summary>
+        public static Clip AddArt(Project project, ArtKind kind, long start, long frames, Track preferred = null)
+        {
+            var clip = CreateArt(kind, start, frames);
+            bool Free(Track t) => t.Kind == TrackKind.Video && !t.Locked && !t.Subtitles && !t.Clips.Any(c => c.Start < clip.End && c.End > clip.Start);
+            var track = preferred != null && Free(preferred) ? preferred
+                : project.VideoTracks.Skip(1).FirstOrDefault(Free) ?? AddTrack(project, TrackKind.Video);
+            Place(project, track, clip, clip.Start);
+            return clip;
+        }
+
+        /// <summary>아트 요소의 처음 스타일(파란 단색 채우기).</summary>
+        public static TextStyle ArtStyle()
+        {
+            var style = new TextStyle();
+            style.Fill.Colors = new List<string> { "#3B82F6" };
+            return style;
+        }
+
         /// <summary>오디오 트랙에 놓을 클립인지(오디오 파일, 분리한 오디오).</summary>
         public static bool IsAudioClip(Clip clip)
         {

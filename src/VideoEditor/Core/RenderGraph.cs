@@ -320,6 +320,14 @@ namespace VideoEditor.Core
             var rate = project.Rate;
             var fps = rate.Rational;
             var segFrames = segEnd - segStart;
+            if (clip.Kind == ClipKind.Art)
+            {
+                // 그리개가 없으면(그릴 수 없음) 투명 — 다른 클립은 그대로 그린다
+                if (UsesRasterizer(clip, options))
+                    return StyledText(project, options, plan, clip, segFrames);
+                return string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba",
+                    options.Width, options.Height, fps, N(rate.ToSeconds(segFrames)));
+            }
             if (clip.Kind == ClipKind.Text)
             {
                 // 꾸민 글자, 또는 글자 상자를 정한 글자(줄 나눔·상자는 그리개만 할 수 있다 — 스타일이 없으면 처음 꾸밀 때와 같은 스타일로).
@@ -512,6 +520,8 @@ namespace VideoEditor.Core
             var (canvasWidth, canvasHeight, shrink) = StyledCanvas(options);
             var style = (clip.Style ?? TextStyle.FromLegacy(clip)).Clone();
             style.Normalize();
+            if (clip.Kind == ClipKind.Art)
+                return Overlay(options, plan, rate, segFrames, ArtRequest(clip, style, k * shrink, canvasWidth, canvasHeight));
             var boxWidth = ClipLayout.TextBoxLength(clip.TextBoxWidth);
             var boxHeight = ClipLayout.TextBoxLength(clip.TextBoxHeight);
             var request = new TextImageRequest
@@ -527,6 +537,32 @@ namespace VideoEditor.Core
                 // 높이가 자동이면 세로 자리는 그림에 영향이 없다 — 같은 그림이 다른 캐시 파일이 되지 않게 기본값으로
                 VerticalAlign = boxHeight > 0 && Enum.IsDefined(clip.TextVerticalAlign) ? clip.TextVerticalAlign : TextVerticalAlign.Middle
             };
+            return Overlay(options, plan, rate, segFrames, request);
+        }
+
+        /// <summary>
+        /// 아트 요소 요청: 꾸미기 중 모양에 쓰는 것(채우기·윤곽선·그림자·광선·반사)만 남긴다 — 화면에서 숨긴 글꼴·휘기·글자 크기가 달라도 같은 그림이 다른 캐시 파일이 되지 않게.
+        /// </summary>
+        private static TextImageRequest ArtRequest(Clip clip, TextStyle style, double scale, int canvasWidth, int canvasHeight)
+        {
+            var used = new TextStyle { Fill = style.Fill, Outline = style.Outline, Shadow = style.Shadow, Glow = style.Glow, Reflection = style.Reflection };
+            used.Normalize();
+            var art = (clip.Art ?? new ArtShape()).Clone();
+            art.Normalize();
+            return new TextImageRequest
+            {
+                Text = "",
+                Style = used,
+                EffectScale = scale,
+                CanvasWidth = canvasWidth,
+                CanvasHeight = canvasHeight,
+                Art = art
+            };
+        }
+
+        /// <summary>그리개가 그릴 PNG를 입력으로 더하고 그 화면 원본(캔버스 크기 그대로 — 공통 체인이 크기 배율로 줄여 얹는다).</summary>
+        private static string Overlay(RenderOptions options, RenderPlan plan, FrameRate rate, long segFrames, TextImageRequest request)
+        {
             // 파일 이름에는 해시만 쓴다 — 글·클립 Id(프로젝트 파일 값)가 경로에 섞이지 않게
             var path = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "styled-text", "st-" + request.Key(options.TextRasterizer.Version) + ".png");
             plan.TextImages[path] = request;
@@ -537,9 +573,17 @@ namespace VideoEditor.Core
             return string.Format(CultureInfo.InvariantCulture, "[{0}:v]setpts=PTS-STARTPTS,format=rgba", index);
         }
 
-        /// <summary>글자를 그리개로 그리는지: 꾸민 글자이거나 글자 상자를 정했고, 그리개가 있고, 긴 글(drawtext 대체 경로)이 아닐 때.</summary>
+        /// <summary>그리개가 그리는 PNG가 필요한 클립인지: 꾸민 글자·글자 상자를 정한 글자, 아트 요소(미리 보기가 재생 전에 그려 둘지 정한다).</summary>
+        public static bool NeedsTextImage(Clip clip)
+        {
+            return clip != null && (clip.Kind == ClipKind.Art || clip.Kind == ClipKind.Text && (clip.Style != null || ClipLayout.HasTextBox(clip)));
+        }
+
+        /// <summary>그리개로 그리는지: 아트 요소(그리개가 있으면), 또는 꾸민 글자이거나 글자 상자를 정했고, 그리개가 있고, 긴 글(drawtext 대체 경로)이 아닐 때.</summary>
         private static bool UsesRasterizer(Clip clip, RenderOptions options)
         {
+            if (clip.Kind == ClipKind.Art)
+                return options.TextRasterizer != null;
             return clip.Kind == ClipKind.Text && (clip.Style != null || ClipLayout.HasTextBox(clip)) && options.TextRasterizer != null
                 && (clip.Text ?? "").Length <= MaxStyledTextLength;
         }
