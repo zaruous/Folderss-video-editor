@@ -38,8 +38,8 @@ namespace VideoEditor.Ui
             _services = services;
             _commands = commands;
             AutomationProperties.SetAutomationId(_tabs, "MediaTabs");
-            // 탭이 여섯이라 머리글 여백을 줄인다(기본 크기 창의 좁은 패널에서도 탭 줄이 한 줄에)
-            UiKit.StyleTabs(_tabs, 8);
+            // 탭이 여섯이라 머리글 여백을 줄인다(1280×800 창의 264px 패널에서도 탭 줄이 한 줄에 — 여백 8이면 제 폭 합 285px로 두 줄, 5면 249px)
+            UiKit.StyleTabs(_tabs, 5);
             _tabs.Items.Add(new TabItem { Header = "미디어", Content = MediaTab() });
             var folderTab = new TabItem { Header = "폴더", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
             _tabs.Items.Add(folderTab);
