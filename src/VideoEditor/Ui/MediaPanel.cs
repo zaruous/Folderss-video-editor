@@ -38,12 +38,15 @@ namespace VideoEditor.Ui
             _services = services;
             _commands = commands;
             AutomationProperties.SetAutomationId(_tabs, "MediaTabs");
-            // 탭이 다섯이라 머리글 여백을 줄인다(기본 크기 창의 좁은 패널에서도 탭 줄이 한 줄에)
-            UiKit.StyleTabs(_tabs, 8);
+            // 탭이 여섯이라 머리글 여백을 줄인다(1280×800 창의 264px 패널에서도 탭 줄이 한 줄에 — 여백 8이면 제 폭 합 285px로 두 줄, 5면 249px)
+            UiKit.StyleTabs(_tabs, 5);
             _tabs.Items.Add(new TabItem { Header = "미디어", Content = MediaTab() });
             var folderTab = new TabItem { Header = "폴더", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
             _tabs.Items.Add(folderTab);
             _tabs.Items.Add(new TabItem { Header = "글자", Content = TextTab() });
+            var artTab = new TabItem { Header = "요소", Content = ArtTab() };
+            AutomationProperties.SetAutomationId(artTab, "ArtTab");
+            _tabs.Items.Add(artTab);
             // 효과·전환 탭은 처음 볼 때 만든다(효과마다 썸네일을 FFmpeg로 그리므로 열지 않으면 그리지 않게)
             _effectsTab = new TabItem { Header = "효과", Content = new TextBlock { Text = "불러오는 중…", Margin = new Thickness(8) } };
             AutomationProperties.SetAutomationId(_effectsTab, "EffectsTab");
@@ -311,6 +314,76 @@ namespace VideoEditor.Ui
             folder.PathChanged += (s, e) => _services.SaveSetting(EditorServices.LastFolderKey, folder.CurrentPath);
             panel.Children.Add(folder.View);
             return panel;
+        }
+
+        // ---------- 요소 ----------
+
+        /// <summary>
+        /// [요소] 도형·선·화살표 칸: 두 번 누르면 재생 헤드에, 타임라인으로 끌어 놓으면 그 줄·자리에 넣는다(<see cref="EditorCommands.AddArt"/>).
+        /// 칸의 그림은 모양 윤곽(<see cref="ArtGeometry"/>)을 그대로 그린 것이라 FFmpeg·그리개를 기다리지 않는다.
+        /// </summary>
+        private UIElement ArtTab()
+        {
+            var panel = new StackPanel { Margin = new Thickness(8) };
+            panel.Children.Add(UiKit.Label("두 번 누르면 재생 헤드 위치에, 타임라인으로 끌어 놓으면 그 자리에 넣습니다.", true));
+            var tiles = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+            AutomationProperties.SetAutomationId(tiles, "ArtTiles");
+            foreach (ArtKind kind in Enum.GetValues(typeof(ArtKind)))
+                tiles.Children.Add(ArtTile(kind));
+            panel.Children.Add(tiles);
+            return new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        }
+
+        private Button ArtTile(ArtKind kind)
+        {
+            const double Icon = 44;
+            var name = ArtShape.DisplayName(kind);
+            var shape = ArtShape.Default(kind);
+            var scale = Icon / Math.Max(shape.Width, shape.Height);
+            var geometry = new GeometryGroup();
+            foreach (var polygon in ArtGeometry.Outline(shape, scale))
+            {
+                var figure = new PathFigure { StartPoint = new Point(polygon[0].X, polygon[0].Y), IsClosed = true };
+                figure.Segments.Add(new PolyLineSegment(polygon.Skip(1).Select(p => new Point(p.X, p.Y)), true));
+                geometry.Children.Add(new PathGeometry(new[] { figure }));
+            }
+            var path = new System.Windows.Shapes.Path { Data = geometry, Fill = new SolidColorBrush(Color.FromRgb(0x3B, 0x82, 0xF6)) };
+            var picture = new Grid { Width = Icon, Height = Icon, Margin = new Thickness(0, 2, 0, 2) };
+            path.HorizontalAlignment = HorizontalAlignment.Center;
+            path.VerticalAlignment = VerticalAlignment.Center;
+            picture.Children.Add(path);
+            var content = new StackPanel();
+            content.Children.Add(picture);
+            content.Children.Add(new TextBlock { Text = name, HorizontalAlignment = HorizontalAlignment.Center, FontSize = 11 });
+            var button = new Button { Content = content, Width = 64, Padding = new Thickness(2), Margin = new Thickness(0, 0, 4, 4), ToolTip = name };
+            AutomationProperties.SetAutomationId(button, "ArtTile" + kind);
+            AutomationProperties.SetName(button, name);
+            button.MouseDoubleClick += (s, e) =>
+            {
+                _commands.AddArt(kind);
+                e.Handled = true;
+            };
+            var dragStart = new Point();
+            var pressed = false;
+            button.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                dragStart = e.GetPosition(button);
+                pressed = true;
+            };
+            button.PreviewMouseLeftButtonUp += (s, e) => pressed = false;
+            button.PreviewMouseMove += (s, e) =>
+            {
+                if (!pressed || e.LeftButton != MouseButtonState.Pressed)
+                    return;
+                var point = e.GetPosition(button);
+                if (Math.Abs(point.X - dragStart.X) < 6 && Math.Abs(point.Y - dragStart.Y) < 6)
+                    return;
+                pressed = false;
+                var data = new DataObject();
+                data.SetData(TimelineCanvas.ArtDataFormat, kind.ToString());
+                DragDrop.DoDragDrop(button, data, DragDropEffects.Copy);
+            };
+            return button;
         }
 
         // ---------- 글자 ----------
@@ -779,7 +852,11 @@ namespace VideoEditor.Ui
                 }
                 StopPreview();
                 list.Items.Clear();
-                foreach (var def in usable.Where(d => group == allGroups || d.Group == group))
+                var shown = usable.Where(d => group == allGroups || d.Group == group).ToList();
+                // 썸네일은 사용자 효과부터 그리기를 청한다(같은 효과는 한 번만 그리므로 칸을 만들 때 같은 그림을 받는다)
+                foreach (var def in Transitions.PreviewOrder(shown))
+                    _ = _services.TransitionPreview(def);
+                foreach (var def in shown)
                     list.Items.Add(TransitionTile(def));
                 list.SelectedItem = list.Items.Cast<ListBoxItem>().FirstOrDefault(i => ((TransitionDef)i.Tag).Id == keep) ?? list.Items.Cast<ListBoxItem>().FirstOrDefault();
                 var errors = _services.TransitionErrors;

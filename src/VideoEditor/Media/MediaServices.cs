@@ -14,6 +14,41 @@ namespace VideoEditor.Media
     /// <summary>파일 정보 읽기(ffprobe).</summary>
     public static class MediaProbe
     {
+        /// <summary>
+        /// 여러 파일을 함께 읽을 수(<see cref="ProbeAll"/>): 4개, 코어가 적으면 그만큼. 프로세스 시작이 느린 PC(약 1.5초)에서 기다림을 겹치게 —
+        /// ffprobe 하나는 가볍지만 너무 많이 띄우면 편집 중인 미리 보기와 다툰다.
+        /// </summary>
+        public static int Parallel { get; } = Math.Max(1, Math.Min(4, Environment.ProcessorCount));
+
+        /// <summary>
+        /// paths를 parallel개씩 함께 읽어 읽은 것만 paths 차례로 돌려준다(읽지 못한 파일은 빠진다). parallel이 1 이하면 하나씩.
+        /// probe는 파일 하나를 읽는 함수(보통 <see cref="Probe"/>).
+        /// </summary>
+        public static async Task<List<MediaInfo>> ProbeAll(IReadOnlyList<string> paths, Func<string, Task<MediaInfo>> probe, int parallel)
+        {
+            var results = new MediaInfo[paths.Count];
+            using (var gate = new SemaphoreSlim(Math.Max(1, parallel)))
+            {
+                await Task.WhenAll(paths.Select(async (path, i) =>
+                {
+                    await gate.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        results[i] = await probe(path).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // 읽지 못한 파일은 빼고 나머지를 돌려준다
+                    }
+                    finally
+                    {
+                        gate.Release();
+                    }
+                })).ConfigureAwait(false);
+            }
+            return results.Where(r => r != null).ToList();
+        }
+
         public static async Task<MediaInfo> Probe(FfmpegTool tool, string path, CancellationToken cancellation)
         {
             var result = await FfmpegRunner.RunText(tool.FfprobePath,

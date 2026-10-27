@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
+using System.Threading.Tasks;
 using VideoEditor.Core;
 using VideoEditor.Media;
 using Xunit;
@@ -203,6 +204,42 @@ namespace VideoEditor.Tests
         {
             Assert.Equal(0, ClipLayout.Snap(5, 8));
             Assert.Equal(-9, ClipLayout.Snap(-9, 8));
+        }
+
+        [Fact]
+        public async Task ProbeAll_ReadsSeveralAtOnce_KeepsOrder_SkipsFailures()
+        {
+            // 예전 프로젝트를 열 때 동영상을 하나씩 다시 읽어 8개에 23.6초 걸렸다(프로세스 시작이 느린 PC, #34) — 몇 개씩 함께
+            var running = 0;
+            var most = 0;
+            async Task<MediaInfo> Fake(string path)
+            {
+                var now = System.Threading.Interlocked.Increment(ref running);
+                lock (this)
+                    most = System.Math.Max(most, now);
+                await Task.Delay(100);
+                System.Threading.Interlocked.Decrement(ref running);
+                if (path.EndsWith("bad", System.StringComparison.Ordinal))
+                    throw new System.InvalidOperationException("못 읽음");
+                return new MediaInfo { Path = path };
+            }
+            var paths = Enumerable.Range(0, 8).Select(i => i == 3 ? "v3.bad" : "v" + i + ".mp4").ToList();
+            var read = await MediaProbe.ProbeAll(paths, Fake, 4);
+            Assert.Equal(paths.Where(p => !p.EndsWith("bad")), read.Select(m => m.Path));
+            // 함께 읽는지는 동시에 돈 수로 본다 — 걸린 시간은 다른 시험(FFmpeg)과 함께 돌면 늘어난다(Windows 전체 실행에서 넷씩인데도 1236ms)
+            Assert.Equal(4, most);
+            Assert.Empty(await MediaProbe.ProbeAll(new string[0], Fake, 4));
+            // 한 번에 하나(1 이하)도 된다
+            most = 0;
+            Assert.Equal(2, (await MediaProbe.ProbeAll(new[] { "a.mp4", "b.mp4" }, Fake, 0)).Count);
+            Assert.Equal(1, most);
+        }
+
+        [Fact]
+        public void ProbeParallel_IsAFewButNotMoreThanTheCores()
+        {
+            Assert.InRange(MediaProbe.Parallel, 1, 4);
+            Assert.True(MediaProbe.Parallel <= System.Math.Max(1, System.Environment.ProcessorCount));
         }
     }
 }

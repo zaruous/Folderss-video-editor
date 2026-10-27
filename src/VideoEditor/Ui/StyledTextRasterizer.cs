@@ -166,24 +166,40 @@ namespace VideoEditor.Ui
             style.Normalize();
             var size = Clamp(request.FontPixelSize, 0.5, 4000, 1);
 
-            // 줄을 나누고 상자 안에 놓는다(재기와 같은 함수) — 조각들은 기준선을 맞춘다
-            var arranged = Arrange(request.Text, style, size, request.WrapWidth, request.BoxHeight, request.VerticalAlign);
-            var boxWidth = arranged.BoxWidth;
-            var boxHeight = arranged.BoxHeight;
+            double boxWidth, boxHeight;
             var geometry = new GeometryGroup { FillRule = FillRule.Nonzero };
-            foreach (var line in arranged.Lines)
+            if (request.Art != null)
             {
-                foreach (var piece in line.Pieces)
-                    geometry.Children.Add(piece.Text.BuildGeometry(new Point(line.X + piece.Offset, line.Top + line.Baseline - piece.Text.Baseline)));
-            }
-            cancellation.ThrowIfCancellationRequested();
-            // 휘기는 효과를 칠하기 전에 글자 윤곽에 먼저 — 채우기·윤곽선(뒤에 더할 효과도)이 모두 휘어진 윤곽을 쓴다. 없음·정도 0이면 그대로(바이트까지 같게).
-            // 기준은 글 덩어리(상자가 없으면 상자와 같다 — 상자가 글보다 크면 줄들이 차지한 곳)
-            var block = arranged.Block;
-            if (style.Warp.Kind != WarpKind.None && style.Warp.Amount != 0 && block.Width > 0 && block.Height > 0)
-            {
-                geometry = Warp(geometry, style.Warp, block, cancellation);
+                // 아트 요소: 모양 윤곽(출력 픽셀)을 글자 윤곽 대신 칠한다 — 상자 = 모양 상자, 휘기는 쓰지 않는다
+                var art = request.Art.Clone();
+                art.Normalize();
+                var scale = Clamp(request.EffectScale, 0.001, 100, 1);
+                boxWidth = art.Width * scale;
+                boxHeight = art.Height * scale;
+                foreach (var polygon in ArtGeometry.Outline(art, scale))
+                    geometry.Children.Add(Polygon(polygon));
                 cancellation.ThrowIfCancellationRequested();
+            }
+            else
+            {
+                // 줄을 나누고 상자 안에 놓는다(재기와 같은 함수) — 조각들은 기준선을 맞춘다
+                var arranged = Arrange(request.Text, style, size, request.WrapWidth, request.BoxHeight, request.VerticalAlign);
+                boxWidth = arranged.BoxWidth;
+                boxHeight = arranged.BoxHeight;
+                foreach (var line in arranged.Lines)
+                {
+                    foreach (var piece in line.Pieces)
+                        geometry.Children.Add(piece.Text.BuildGeometry(new Point(line.X + piece.Offset, line.Top + line.Baseline - piece.Text.Baseline)));
+                }
+                cancellation.ThrowIfCancellationRequested();
+                // 휘기는 효과를 칠하기 전에 글자 윤곽에 먼저 — 채우기·윤곽선(뒤에 더할 효과도)이 모두 휘어진 윤곽을 쓴다. 없음·정도 0이면 그대로(바이트까지 같게).
+                // 기준은 글 덩어리(상자가 없으면 상자와 같다 — 상자가 글보다 크면 줄들이 차지한 곳)
+                var block = arranged.Block;
+                if (style.Warp.Kind != WarpKind.None && style.Warp.Amount != 0 && block.Width > 0 && block.Height > 0)
+                {
+                    geometry = Warp(geometry, style.Warp, block, cancellation);
+                    cancellation.ThrowIfCancellationRequested();
+                }
             }
 
             // PNG 가운데 = 배치 상자 가운데. 글자 모양이 상자 밖으로 나가도(기울임·행간이 좁을 때·휘기·상자보다 긴 글) 잘리지 않게 대칭으로 넓힌다
@@ -230,6 +246,16 @@ namespace VideoEditor.Ui
             encoder.Frames.Add(BitmapFrame.Create(bitmap));
             using (var stream = File.Create(pngPath))
                 encoder.Save(stream);
+        }
+
+        /// <summary>닫힌 다각형 하나(아트 모양의 윤곽 조각).</summary>
+        private static PathGeometry Polygon(IReadOnlyList<(double X, double Y)> points)
+        {
+            var figure = new PathFigure { StartPoint = new Point(points[0].X, points[0].Y), IsClosed = true, IsFilled = true };
+            figure.Segments.Add(new PolyLineSegment(points.Skip(1).Select(p => new Point(p.X, p.Y)), true));
+            var path = new PathGeometry();
+            path.Figures.Add(figure);
+            return path;
         }
 
         /// <summary>줄 나눔: CR·LF와 FormattedText가 줄을 바꾸는 유니코드 줄·문단 구분자·NEL(그래야 줄마다 정렬이 맞다).</summary>

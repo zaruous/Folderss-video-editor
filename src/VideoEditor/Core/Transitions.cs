@@ -99,6 +99,16 @@ namespace VideoEditor.Core
         /// <summary>디졸브.</summary>
         public static TransitionDef Dissolve { get { return BuiltIns[0]; } }
 
+        /// <summary>
+        /// 썸네일을 그릴 차례: 사용자 효과 먼저, 그다음 기본 효과(각각 보이는 차례 그대로). 기본 효과는 한 번 그리면 데이터 폴더 캐시에 남지만
+        /// 새로 넣은 사용자 효과는 처음 그려야 하므로, 기본 효과 64개 뒤에서 기다리지 않게.
+        /// </summary>
+        public static IEnumerable<TransitionDef> PreviewOrder(IEnumerable<TransitionDef> shown)
+        {
+            var list = shown.ToList();
+            return list.Where(d => !d.BuiltIn).Concat(list.Where(d => d.BuiltIn));
+        }
+
         /// <summary>id 형식(영문으로 시작하는 영문·숫자·_·- 48자 이내)인지.</summary>
         public static bool IsValidId(string id)
         {

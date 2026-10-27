@@ -40,8 +40,8 @@ namespace VideoEditor.Core
         {
             var folder = Path.GetDirectoryName(Path.GetFullPath(path));
             var copy = FromSnapshot(Snapshot(project));
-            // 예전 형식 파일을 열어 저장해도 지금 형식으로 쓴다
-            copy.Version = Project.CurrentVersion;
+            // 예전 형식 파일을 열어 저장해도 지금 형식으로 쓴다 — 아트 클립이 있을 때만 새 형식(없으면 예전 플러그인에서도 열린다)
+            copy.Version = copy.AllClips.Any(c => c.Kind == ClipKind.Art) ? Project.ArtVersion : Project.CurrentVersion;
             foreach (var media in copy.Media)
                 media.Path = Project.Relative(folder, media.Path);
             foreach (var clip in copy.AllClips)
@@ -66,7 +66,7 @@ namespace VideoEditor.Core
             }
             if (project == null)
                 throw new InvalidDataException("프로젝트 파일이 비어 있습니다.");
-            if (project.Version > Project.CurrentVersion)
+            if (project.Version > Project.ArtVersion)
                 throw new InvalidDataException("더 새 버전의 플러그인에서 만든 프로젝트입니다(형식 " + project.Version + ").");
             Validate(project);
             var folder = Path.GetDirectoryName(Path.GetFullPath(path));
@@ -141,7 +141,17 @@ namespace VideoEditor.Core
                     clip.TransitionDef = def != null && def.Id == clip.Transition ? def : null;
                 }
                 clip.TransitionIn = Math.Max(0, clip.TransitionIn);
-                if (clip.Kind != ClipKind.Text)
+                if (clip.Kind == ClipKind.Art)
+                {
+                    clip.Art ??= new ArtShape();
+                    clip.Art.Normalize();
+                    clip.Style ??= TimelineEdits.ArtStyle();
+                }
+                else
+                {
+                    clip.Art = null;
+                }
+                if (clip.Kind != ClipKind.Text && clip.Kind != ClipKind.Art)
                     clip.Style = null;
                 else
                     clip.Style?.Normalize();

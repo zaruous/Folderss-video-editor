@@ -96,6 +96,53 @@ namespace VideoEditor.UiTests
         }
 
         /// <summary>
+        /// 사용자 효과 썸네일 먼저(#34, Windows 실측): 편집기를 열 때 이미 효과 폴더에 있던 사용자 효과는 [전환] 탭을 처음 열 때 내장 효과보다 먼저 그린다.
+        /// 편집기를 열 때 폴더를 읽는 것(EditorServices.LoadTransitions)을 탭을 열기 전에 불러 흉내 낸다. 사용자 썸네일이 나온 때 내장 썸네일이 몇 개 나와 있었는지 센다.
+        /// </summary>
+        [EditorFact]
+        public async Task UserTransitionAtStartup_ThumbnailComesBeforeBuiltIns()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            var file = Path.Combine(plugin.Manager.DataDirectory, "transitions", "startup-test.json");
+            var services = ui.Run(() =>
+            {
+                var panel = Ui.Find<FrameworkElement>(window, e => e.GetType().Name == "MediaPanel");
+                return panel.GetType().GetField("_services", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(panel);
+            });
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file));
+                File.WriteAllText(file, "{ \"transitions\": [ { \"id\": \"UiStartupWipe\", \"name\": \"시작 시험 닦기\", \"expr\": \"if(gt(Y,H*P),B,A)\" } ] }");
+                var cache = Path.Combine(plugin.Manager.DataDirectory, "cache", "transitions");
+                var cachedBefore = Directory.Exists(cache) ? Directory.GetFiles(cache, "*.png").Length : 0;
+                ui.Run(() => services.GetType().GetMethod("LoadTransitions").Invoke(services, null));
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                ui.Run(() => Ui.ById<TabControl>(window, "MediaTabs").SelectedItem = Ui.ById<TabItem>(window, "TransitionsTab"));
+                await ui.WaitUntil(() => Ui.ById<ListBox>(window, "TransitionList") != null && Tiles(window).Contains("Transition_UiStartupWipe"), Wait, "사용자 효과 칸");
+                ui.Run(() => Tile(window, "UiStartupWipe").BringIntoView());
+                await ui.WaitUntil(() => Thumbnail(window, "UiStartupWipe") != null, TimeSpan.FromMinutes(4), "사용자 효과 썸네일");
+                var seconds = watch.Elapsed.TotalSeconds;
+                var builtInsDone = ui.Run(() => Tiles(window).Count(id => id != "Transition_UiStartupWipe" && Thumbnail(window, id.Substring("Transition_".Length)) != null));
+                var total = ui.Run(() => Tiles(window).Count);
+                _out.WriteLine(string.Format("편집기를 열 때 있던 사용자 효과: 탭을 열고 썸네일까지 {0:0.0}초 · 그때 내장 썸네일 {1}/{2}개 · 탭을 열기 전 캐시 {3}개",
+                    seconds, builtInsDone, total - 1, cachedBefore));
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "transition-startup-user-first"));
+                // 캐시가 비어 있었다면 사용자 효과는 첫 묶음(그리기 문 셋)에 든다 — 앞서 나온 내장 썸네일은 몇 개뿐
+                if (cachedBefore == 0)
+                    Assert.True(builtInsDone <= 6, "사용자 효과보다 먼저 나온 내장 썸네일 " + builtInsDone);
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                File.Delete(file);
+                ui.Run(() => services.GetType().GetMethod("LoadTransitions").Invoke(services, null));
+                await CloseEditor(ui, window);
+            }
+        }
+
+        /// <summary>
         /// 전환 이징(#32, Windows 실측): 효과 파일에 "ease": "inout"을 적은 사용자 수식 전환은 [전환] 탭에 썸네일이 붙고,
         /// 미리 보기에서 전환 1/4 지점의 새 화면(빨강) 넓이가 이징 없는 같은 수식보다 좁다(천천히 시작). 가운데 지점은 거의 같다.
         /// </summary>
@@ -132,7 +179,7 @@ namespace VideoEditor.UiTests
                 });
                 var watch = System.Diagnostics.Stopwatch.StartNew();
                 await ui.WaitUntil(() => Thumbnail(window, "UiWipeLinear") != null && Thumbnail(window, "UiWipeEase") != null, TimeSpan.FromMinutes(4), "사용자 효과 썸네일");
-                _out.WriteLine("사용자 효과 썸네일까지 " + watch.Elapsed.TotalSeconds.ToString("0.0") + "초(내장 효과 " + (ui.Run(() => Tiles(window).Count) - 2) + "개 뒤)");
+                _out.WriteLine("[다시 읽기]로 더한 사용자 효과 썸네일까지 " + watch.Elapsed.TotalSeconds.ToString("0.0") + "초(탭을 열 때 이미 청한 내장 효과 " + (ui.Run(() => Tiles(window).Count) - 2) + "개 뒤)");
                 ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "transition-ease-thumbnails"));
 
                 async Task<int> RedAt(string kind, string timecode)

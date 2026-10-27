@@ -1022,6 +1022,136 @@ namespace VideoEditor.UiTests
             Assert.True(uhdTime < 15000, "4K 흐림 200 그리기 " + uhdTime + "ms");
         }
 
+        // ---------- 아트 요소(#7) ----------
+
+        /// <summary>아트 요소 요청: 글 없이 모양(art: ArtShape JSON 필드들)을 같은 꾸미기로 그린다.</summary>
+        private static object ArtRequest(object rasterizer, string art, string style = null, double effectScale = 1.0, int canvasWidth = 1280, int canvasHeight = 720)
+        {
+            var json = "{\"Text\":\"\",\"FontPixelSize\":80,\"EffectScale\":" + effectScale.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                       + ",\"CanvasWidth\":" + canvasWidth + ",\"CanvasHeight\":" + canvasHeight + ",\"Style\":{\"Fill\":{\"Kind\":\"Solid\",\"Colors\":[\"" + Fill + "\"]}"
+                       + (style == null ? "" : "," + style) + "},\"Art\":{" + art + "}}";
+            var options = new JsonSerializerOptions();
+            options.Converters.Add(new JsonStringEnumConverter());
+            return JsonSerializer.Deserialize(json, rasterizer.GetType().Assembly.GetType("VideoEditor.Core.TextImageRequest", true), options);
+        }
+
+        /// <summary>플러그인의 모양 윤곽(ArtGeometry.Outline, 요청의 배율)으로 구한 넓이(조각마다 신발끈 공식)와 둘레.</summary>
+        private static (double Area, double Perimeter) OutlineArea(object request)
+        {
+            var art = request.GetType().GetProperty("Art").GetValue(request);
+            var scale = (double)request.GetType().GetProperty("EffectScale").GetValue(request);
+            var geometry = art.GetType().Assembly.GetType("VideoEditor.Core.ArtGeometry", true);
+            var outline = (System.Collections.IEnumerable)geometry.GetMethod("Outline").Invoke(null, new[] { art, (object)scale });
+            double area = 0, perimeter = 0;
+            foreach (System.Collections.IEnumerable polygon in outline)
+            {
+                var points = polygon.Cast<ValueTuple<double, double>>().ToList();
+                double twice = 0;
+                for (var i = 0; i < points.Count; i++)
+                {
+                    var (x1, y1) = points[i];
+                    var (x2, y2) = points[(i + 1) % points.Count];
+                    twice += x1 * y2 - x2 * y1;
+                    perimeter += Math.Sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
+                }
+                area += Math.Abs(twice) / 2;
+            }
+            return (area, perimeter);
+        }
+
+        /// <summary>
+        /// 아트 요소 그리기(#7, Windows 실측): 모양마다 그리개가 칠한 픽셀 수가 윤곽 계산의 넓이와 맞고(가장자리 반 픽셀 띠 안),
+        /// 효과가 없으면 PNG = 모양 상자, 닫힌 모양의 가운데는 채우기 색이다. 선은 두께만큼, 점선은 대시마다 끊긴다.
+        /// </summary>
+        [UiFact]
+        public async Task Rasterizer_ArtShapes_PaintTheirOutlineArea_BoxIsThePng()
+        {
+            var rasterizer = NewRasterizer();
+            var shapes = new[]
+            {
+                ("rectangle", "\"Kind\":\"Rectangle\",\"Width\":400,\"Height\":300", true),
+                ("rounded-rectangle", "\"Kind\":\"Rectangle\",\"Width\":400,\"Height\":300,\"CornerRadius\":60", true),
+                ("ellipse", "\"Kind\":\"Ellipse\",\"Width\":300,\"Height\":200", true),
+                ("triangle", "\"Kind\":\"Triangle\",\"Width\":400,\"Height\":300", true),
+                ("hexagon", "\"Kind\":\"Polygon\",\"Width\":300,\"Height\":300,\"Sides\":6", true),
+                ("star", "\"Kind\":\"Star\",\"Width\":300,\"Height\":300,\"Sides\":5,\"InnerRatio\":0.5", true),
+                ("heart", "\"Kind\":\"Heart\",\"Width\":300,\"Height\":300", true),
+                ("line", "\"Kind\":\"Line\",\"Width\":400,\"Height\":60,\"Thickness\":12", false),
+                ("dashed-line", "\"Kind\":\"Line\",\"Width\":400,\"Height\":60,\"Thickness\":12,\"Dashed\":true", false),
+                ("arrow", "\"Kind\":\"Arrow\",\"Width\":400,\"Height\":60,\"Thickness\":12,\"HeadSize\":3", false)
+            };
+            foreach (var (name, art, closed) in shapes)
+            {
+                var request = ArtRequest(rasterizer, art);
+                var png = await Render(rasterizer, request, "art-" + name);
+                var (area, perimeter) = OutlineArea(request);
+                var painted = png.PaintedCount();
+                _out.WriteLine(string.Format("{0}: PNG {1}×{2} · 칠한 픽셀 {3} · 윤곽 넓이 {4:0} ({5:+0.00;-0.00}%)", name, png.Width, png.Height, painted, area, (painted - area) / area * 100));
+                Assert.InRange(painted, area - perimeter * 0.6 - 4, area + perimeter * 0.6 + 4);
+                var box = JsonDocument.Parse("{" + art + "}").RootElement;
+                Assert.InRange(png.Width, box.GetProperty("Width").GetDouble() - 1, box.GetProperty("Width").GetDouble() + 2);
+                Assert.InRange(png.Height, box.GetProperty("Height").GetDouble() - 1, box.GetProperty("Height").GetDouble() + 2);
+                if (closed)
+                    Assert.Equal((255, 51, 102), ColorNear(png, png.Width / 2, png.Height / 2));
+            }
+            // 선: 가운데 열에서 두께 12, 점선: 가운데 줄이 대시(12×3)·사이(12×2) 무늬로 여러 토막
+            var line = await Render(rasterizer, ArtRequest(rasterizer, shapes[7].Item2), "art-line");
+            Assert.InRange(Enumerable.Range(0, line.Height).Count(y => line.Painted(line.Width / 2, y)), 11, 13);
+            var dashed = await Render(rasterizer, ArtRequest(rasterizer, shapes[8].Item2), "art-dashed-line");
+            Assert.InRange(dashed.Runs(dashed.Height / 2), 6, 8);
+        }
+
+        /// <summary>
+        /// 아트 요소에 꾸미기를 다 켜도(윤곽선·그림자·광선·반사) PNG 가장자리에 닿지 않고, 윤곽선은 채우기 바깥 띠다.
+        /// 크게 그리면(4K 화면에 효과 배율 7 — 원 지름 2100px) 윤곽을 그 크기로 다시 계산해 가장자리가 반지름에서 1.5px 안이다.
+        /// 화면보다 큰 모양은 글자처럼 화면 크기에서 잘린다(1280×720 화면이면 PNG도 1280×720).
+        /// </summary>
+        [UiFact]
+        public async Task Rasterizer_ArtWithEveryEffect_StaysInside_BigCircleKeepsItsEdge()
+        {
+            var rasterizer = NewRasterizer();
+            const string effects = "\"Outline\":{\"Enabled\":true,\"Color\":\"#000000\",\"Width\":10,\"Join\":\"Miter\"},"
+                                   + "\"Shadow\":{\"Enabled\":true,\"Color\":\"#000000\",\"Distance\":20,\"Angle\":45,\"Blur\":30,\"Opacity\":0.6},"
+                                   + "\"Glow\":{\"Enabled\":true,\"Color\":\"#38BDF8\",\"Size\":30,\"Opacity\":0.8},"
+                                   + "\"Reflection\":{\"Enabled\":true,\"Size\":50,\"Gap\":10,\"Opacity\":0.5}";
+            var plain = await Render(rasterizer, ArtRequest(rasterizer, "\"Kind\":\"Rectangle\",\"Width\":400,\"Height\":300"), "art-rect-plain");
+            var styled = await Render(rasterizer, ArtRequest(rasterizer, "\"Kind\":\"Rectangle\",\"Width\":400,\"Height\":300", effects), "art-rect-effects");
+            _out.WriteLine("사각형 400×300: 효과 없음 PNG " + plain.Width + "×" + plain.Height + " · 효과 넷 " + styled.Width + "×" + styled.Height + " · 조금이라도 칠한 픽셀 " + plain.InkCount() + " → " + styled.InkCount());
+            Assert.True(styled.Width > plain.Width + 40 && styled.Height > plain.Height + 40, "효과만큼 PNG가 넓어짐");
+            Assert.Equal(0, styled.BorderInk());
+            Assert.True(styled.InkCount() > plain.InkCount() * 1.5, "효과가 모양 바깥을 칠함");
+            // 윤곽선: 모양 상자 왼쪽 변 바로 바깥(가운데 높이)이 검정. 상자는 PNG 가운데(여백 대칭)
+            var left = styled.Width / 2 - 200;
+            var (r, g, b, a) = styled.Pixel(left - 2, styled.Height / 2);
+            Assert.True(a > 200 && r < 60 && g < 60 && b < 60, "윤곽선 " + (r, g, b, a));
+            Assert.Equal((255, 51, 102), ColorNear(styled, styled.Width / 2, styled.Height / 2));
+
+            var watch = Stopwatch.StartNew();
+            var request = ArtRequest(rasterizer, "\"Kind\":\"Ellipse\",\"Width\":300,\"Height\":300", null, 7.0, 3840, 2160);
+            var big = await Render(rasterizer, request, "art-circle-x8");
+            var time = watch.ElapsedMilliseconds;
+            var (area, _) = OutlineArea(request);
+            double cx = big.Width / 2.0, cy = big.Height / 2.0, worst = 0;
+            for (var degree = 0; degree < 360; degree += 3)
+            {
+                var angle = degree * Math.PI / 180;
+                var radius = 0.0;
+                for (var d = 950.0; d < 1150; d += 0.25)
+                {
+                    var x = (int)Math.Floor(cx + d * Math.Cos(angle));
+                    var y = (int)Math.Floor(cy + d * Math.Sin(angle));
+                    if (x < 0 || y < 0 || x >= big.Width || y >= big.Height || !big.Painted(x, y))
+                        break;
+                    radius = d;
+                }
+                worst = Math.Max(worst, Math.Abs(radius - 1050));
+            }
+            _out.WriteLine(string.Format("원 300 × 배율 7: PNG {0}×{1} · {2}ms · 칠한 픽셀 {3} / 원 넓이 {4:0} · 가장자리 반지름 오차 최대 {5:0.00}px", big.Width, big.Height, time, big.PaintedCount(), area, worst));
+            Assert.InRange(big.Width, 2099, 2102);
+            Assert.InRange(big.PaintedCount(), area * 0.995, area * 1.005);
+            Assert.True(worst <= 1.5, "가장자리 오차 " + worst);
+        }
+
         private static string Warp(string kind, double amount)
         {
             return "\"Warp\":{\"Kind\":\"" + kind + "\",\"Amount\":" + amount.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}";

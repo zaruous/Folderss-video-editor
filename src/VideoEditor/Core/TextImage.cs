@@ -40,6 +40,11 @@ namespace VideoEditor.Core
         public double BoxHeight { get; set; }
         /// <summary>상자가 글보다 높을 때 글을 놓는 자리.</summary>
         public TextVerticalAlign VerticalAlign { get; set; }
+        /// <summary>
+        /// 아트 요소의 모양(정규화한 사본). 있으면 글 대신 이 모양(<see cref="ArtGeometry"/>, 길이 × <see cref="EffectScale"/>)을 같은 꾸미기로 그린다 —
+        /// PNG 가운데 = 모양 상자 가운데. 글자 요청은 null(키가 예전과 같아 이미 그린 글자 PNG를 그대로 쓴다).
+        /// </summary>
+        public ArtShape Art { get; set; }
 
         /// <summary>
         /// 캐시 키: 픽셀에 영향을 주는 값을 정해진 순서의 JSON으로 적고 SHA-256(소문자 16진 64자)으로.
@@ -89,6 +94,20 @@ namespace VideoEditor.Core
             Number(json, "reflection.opacity", style.Reflection.Opacity);
             Quoted(json, "warp.kind", style.Warp.Kind.ToString());
             Number(json, "warp.amount", style.Warp.Amount);
+            if (Art != null)
+            {
+                var art = Art.Clone();
+                art.Normalize();
+                Quoted(json, "art.kind", art.Kind.ToString());
+                Number(json, "art.width", art.Width);
+                Number(json, "art.height", art.Height);
+                Number(json, "art.cornerRadius", art.CornerRadius);
+                Number(json, "art.sides", art.Sides);
+                Number(json, "art.innerRatio", art.InnerRatio);
+                Number(json, "art.thickness", art.Thickness);
+                Flag(json, "art.dashed", art.Dashed);
+                Number(json, "art.headSize", art.HeadSize);
+            }
             json.Length--;
             json.Append('}');
             var hash = SHA256.HashData(Encoding.UTF8.GetBytes(json.ToString()));
