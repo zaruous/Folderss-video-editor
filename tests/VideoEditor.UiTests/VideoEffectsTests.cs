@@ -24,6 +24,13 @@ namespace VideoEditor.UiTests
     /// </summary>
     public class VideoEffectsTests
     {
+        private readonly Xunit.Abstractions.ITestOutputHelper _out;
+
+        public VideoEffectsTests(Xunit.Abstractions.ITestOutputHelper output)
+        {
+            _out = output;
+        }
+
         /// <summary>시험에서 플러그인의 IPersonMaskProvider를 흉내 낸다 — 플러그인 형식은 다른 로드 컨텍스트라 DispatchProxy로 만든다. 어떤 원본이든 Mask를 돌려준다.</summary>
         public class MaskProxy : DispatchProxy
         {
@@ -182,6 +189,127 @@ namespace VideoEditor.UiTests
                 encoder.Save(stream);
         }
 
+        /// <summary>
+        /// 효과 줄 index의 머리(UI 스레드): 이름(title)이 잘리지 않고 다 보이는지, [아래로]·[위로]·[빼기] 묶음이 아랫줄로 내려갔는지,
+        /// 그 묶음 오른쪽 끝이 효과 칸 오른쪽을 넘은 폭(0 이하면 안).
+        /// </summary>
+        private static (bool TitleWhole, bool Folded, double Overflow, string Detail) EffectHead(Window window, int index, string title)
+        {
+            // 새로 만든 효과 줄이 아직 배치되지 않았으면 폭이 0이다 — 배치(접기 포함)를 마친 뒤 잰다
+            window.UpdateLayout();
+            var buttons = (FrameworkElement)VisualTreeHelper.GetParent(Ui.ById<Button>(window, "EffectRemove" + index));
+            var line = (DockPanel)VisualTreeHelper.GetParent(buttons);
+            var box = (FrameworkElement)VisualTreeHelper.GetParent(line);
+            var name = Ui.FindAll<TextBlock>(box, t => t.Text == title).First();
+            var head = (FrameworkElement)VisualTreeHelper.GetParent(name);
+            var group = Ui.ById<FrameworkElement>(window, "EffectGroup" + index);
+            var need = new FormattedText(title, System.Globalization.CultureInfo.CurrentUICulture, name.FlowDirection,
+                new Typeface(name.FontFamily, name.FontStyle, name.FontWeight, name.FontStretch), name.FontSize, Brushes.Black, VisualTreeHelper.GetDpi(name).PixelsPerDip).WidthIncludingTrailingWhitespace;
+            var folded = !line.Children.OfType<TextBlock>().Any(t => t.Text == title);
+            var overflow = buttons.TranslatePoint(new Point(buttons.ActualWidth, 0), box).X - box.ActualWidth;
+            var detail = string.Format("이름 {0:0.0}/{1:0.0}px · 묶음 {2:0.0}px · 머리줄 {3:0.0}px · 단추 {4:0.0}px · 효과 칸 {5:0.0}px · 아랫줄 {6}",
+                name.ActualWidth, need, group?.ActualWidth ?? -1, head.ActualWidth, buttons.ActualWidth, box.ActualWidth, folded);
+            return (name.ActualWidth + 1 >= need, folded, overflow, detail);
+        }
+
+        /// <summary>속성 패널 탭마다 보이는 숫자 줄 슬라이더(UI 스레드, 탭을 차례로 고른다): (탭, id, 폭, 아랫줄인지 — 줄에 이름이 없음).</summary>
+        private static List<(string Tab, string Id, double Width, bool Folded)> PropertySliders(Window window)
+        {
+            var tabs = Ui.ById<TabControl>(window, "PropertyTabs");
+            var keep = tabs.SelectedItem;
+            var result = new List<(string, string, double, bool)>();
+            foreach (var tab in tabs.Items.Cast<TabItem>().ToList())
+            {
+                tabs.SelectedItem = tab;
+                window.UpdateLayout();
+                foreach (var slider in Ui.FindAll<Slider>((DependencyObject)tab.Content, s => s.IsVisible && System.Windows.Automation.AutomationProperties.GetAutomationId(s).EndsWith("Slider", StringComparison.Ordinal)))
+                {
+                    var row = VisualTreeHelper.GetParent(slider) as Panel;
+                    result.Add((Ui.ContentText(tab.Header), System.Windows.Automation.AutomationProperties.GetAutomationId(slider), slider.ActualWidth, row != null && !row.Children.OfType<TextBlock>().Any()));
+                }
+            }
+            tabs.SelectedItem = keep;
+            window.UpdateLayout();
+            return result;
+        }
+
+        /// <summary>속성 패널이 든 열(편집 화면 위쪽 격자의 오른쪽 열) — 폭을 바꿔 넓은 패널을 만든다.</summary>
+        private static ColumnDefinition PropertyColumn(Window window)
+        {
+            DependencyObject element = Ui.ById<TabControl>(window, "PropertyTabs");
+            while (element != null)
+            {
+                var parent = VisualTreeHelper.GetParent(element);
+                if (parent is Grid grid && grid.ColumnDefinitions.Count == 5 && element is UIElement child)
+                    return grid.ColumnDefinitions[Grid.GetColumn(child)];
+                element = parent;
+            }
+            throw new InvalidOperationException("속성 패널 열을 찾지 못했습니다");
+        }
+
+        /// <summary>
+        /// 좁은 속성 패널(#34, Windows 실측): 1280×800 창에서 숫자 줄의 슬라이더는 아랫줄로 내려와 100px 넘는 폭을 갖고(전에는 19px),
+        /// 효과 머리줄은 이름이 다 보이게 [아래로]·[위로]·[빼기]를 다음 줄 오른쪽으로 내린다. 패널을 넓히면 둘 다 한 줄로 돌아온다.
+        /// </summary>
+        [EditorFact]
+        public async Task NarrowPanel_SlidersAndEffectButtonsFold_WidePanelRestoresOneLine()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            ColumnDefinition column = null;
+            var original = default(GridLength);
+            try
+            {
+                await RedAtOneSecond(ui, window);
+                await AddScanLineFromTab(ui, window);
+                await ui.WaitFor(() => Ui.ById<Slider>(window, "Effect0_glowSlider"), Wait, "효과 슬라이더");
+                var title = Catalog(plugin).Single(d => d.Id == "scan-line").Name;
+                ui.Run(() =>
+                {
+                    var narrow = PropertySliders(window);
+                    _out.WriteLine(string.Format("좁은 패널 {0:0}px: 슬라이더 {1}개, 폭 {2:0}~{3:0}px, 아랫줄 {4}개", Ui.ById<TabControl>(window, "PropertyTabs").ActualWidth,
+                        narrow.Count, narrow.Min(s => s.Width), narrow.Max(s => s.Width), narrow.Count(s => s.Folded)));
+                    foreach (var s in narrow)
+                        Assert.True(s.Width >= 100, s.Tab + " · " + s.Id + " 폭 " + s.Width);
+                    Assert.Contains(narrow, s => s.Folded);
+                    var head = EffectHead(window, 0, title);
+                    _out.WriteLine("좁은 패널 효과 머리줄: " + head.Detail);
+                    Assert.True(head.TitleWhole && head.Folded && head.Overflow <= 0.5, "좁은 패널 효과 머리줄 " + head);
+                    Ui.Snap(window, plugin.ShotFolder, "narrow-panel-folded");
+                });
+
+                // 패널을 넓히면 한 줄로
+                ui.Run(() =>
+                {
+                    column = PropertyColumn(window);
+                    original = column.Width;
+                    column.Width = new GridLength(90, GridUnitType.Star);
+                    window.UpdateLayout();
+                });
+                await Task.Delay(300);
+                ui.Run(() =>
+                {
+                    var wide = PropertySliders(window);
+                    _out.WriteLine(string.Format("넓은 패널 {0:0}px: 슬라이더 폭 {1:0}~{2:0}px, 아랫줄 {3}개", Ui.ById<TabControl>(window, "PropertyTabs").ActualWidth,
+                        wide.Min(s => s.Width), wide.Max(s => s.Width), wide.Count(s => s.Folded)));
+                    Assert.DoesNotContain(wide, s => s.Folded);
+                    Assert.All(wide, s => Assert.True(s.Width >= 100, s.Id + " 폭 " + s.Width));
+                    var head = EffectHead(window, 0, title);
+                    _out.WriteLine("넓은 패널 효과 머리줄: " + head.Detail);
+                    Assert.True(head.TitleWhole && !head.Folded && head.Overflow <= 0.5, "넓은 패널 효과 머리줄 " + head);
+                    Ui.Snap(window, plugin.ShotFolder, "wide-panel-one-line");
+                });
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                if (column != null)
+                    ui.Run(() => column.Width = original);
+                await CloseEditor(ui, window);
+            }
+        }
+
         /// <summary>플러그인의 효과 목록(id·이름·묶음·처음 나온 판 — 다른 로드 컨텍스트라 리플렉션으로).</summary>
         private static List<(string Id, string Name, string Group, int Since)> Catalog(PluginUnderTest plugin)
         {
@@ -328,13 +456,13 @@ namespace VideoEditor.UiTests
                     Assert.True(Ui.ById<Button>(window, "EffectMoveDown0").IsEnabled);
                     Assert.True(Ui.ById<Button>(window, "EffectMoveUp1").IsEnabled);
                     Assert.False(Ui.ById<Button>(window, "EffectMoveDown1").IsEnabled);
-                    // 머리줄 단추가 줄 안에 있다(넘치면 오른쪽이 잘린다)
-                    foreach (var name in new[] { "EffectMoveDown0", "EffectMoveUp0", "EffectRemove0" })
+                    // 머리줄: 이름이 다 보이고, [아래로]·[위로]·[빼기] 묶음은 효과 칸 안(좁으면 다음 줄 오른쪽 — #34)
+                    foreach (var (index, id) in new[] { (0, "scan-line"), (1, "ray-scan") })
                     {
-                        var button = Ui.ById<Button>(window, name);
-                        var row = (FrameworkElement)VisualTreeHelper.GetParent(button);
-                        var right = button.TranslatePoint(new Point(button.ActualWidth, 0), row).X;
-                        Assert.True(right <= row.ActualWidth + 0.5, name + " 오른쪽 " + right + " > 줄 " + row.ActualWidth);
+                        var head = EffectHead(window, index, Catalog(plugin).Single(d => d.Id == id).Name);
+                        _out.WriteLine(id + " 머리줄: " + head.Detail);
+                        Assert.True(head.TitleWhole, id + " 이름이 잘림 — " + head.Detail);
+                        Assert.True(head.Overflow <= 0.5, id + " 단추가 효과 칸 밖으로 " + head.Overflow + " — " + head.Detail);
                     }
                     Ui.Snap(window, plugin.ShotFolder, "effect-rows-choice-and-move");
                     direction.SelectedIndex = 2;
@@ -571,8 +699,8 @@ namespace VideoEditor.UiTests
                     Assert.NotNull(Ui.ById<ListBox>((DependencyObject)tab.Content, "TransitionList"));
                     Assert.Null(Ui.ById<ListBox>((DependencyObject)tab.Content, "VideoEffectList"));
                     Assert.False(Ui.ById<ListBox>(window, "VideoEffectList").IsVisible);
-                    // 탭 차례: 미디어 · 폴더 · 글자 · 효과 · 전환
-                    Assert.Equal(new object[] { "미디어", "폴더", "글자", "효과", "전환" }, Ui.ById<TabControl>(window, "MediaTabs").Items.Cast<TabItem>().Select(t => t.Header));
+                    // 탭 차례: 미디어 · 폴더 · 글자 · 요소(#7) · 효과 · 전환
+                    Assert.Equal(new object[] { "미디어", "폴더", "글자", "요소", "효과", "전환" }, Ui.ById<TabControl>(window, "MediaTabs").Items.Cast<TabItem>().Select(t => t.Header));
                     Ui.Snap(window, plugin.ShotFolder, "transitions-tab");
                 });
                 Assert.Empty(ui.TakeErrors());

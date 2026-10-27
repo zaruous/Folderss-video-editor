@@ -224,13 +224,10 @@ namespace VideoEditor.Tests
                 return new MediaInfo { Path = path };
             }
             var paths = Enumerable.Range(0, 8).Select(i => i == 3 ? "v3.bad" : "v" + i + ".mp4").ToList();
-            var watch = System.Diagnostics.Stopwatch.StartNew();
             var read = await MediaProbe.ProbeAll(paths, Fake, 4);
-            watch.Stop();
             Assert.Equal(paths.Where(p => !p.EndsWith("bad")), read.Select(m => m.Path));
+            // 함께 읽는지는 동시에 돈 수로 본다 — 걸린 시간은 다른 시험(FFmpeg)과 함께 돌면 늘어난다(Windows 전체 실행에서 넷씩인데도 1236ms)
             Assert.Equal(4, most);
-            // 하나씩이면 800ms — 넷씩이면 두 번(200ms 남짓)
-            Assert.True(watch.ElapsedMilliseconds < 600, watch.ElapsedMilliseconds + "ms");
             Assert.Empty(await MediaProbe.ProbeAll(new string[0], Fake, 4));
             // 한 번에 하나(1 이하)도 된다
             most = 0;
