@@ -94,11 +94,17 @@ namespace VideoEditor.Ui
             var copy = ProjectFile.FromSnapshot(ProjectFile.Snapshot(project));
             var size = OutputSize(copy);
             var rasterizer = _services.TextRasterizer;
+            // 미리 보기 도우미가 있으면 ffmpeg.exe를 띄우지 않고 그린다(실패하면 ffmpeg.exe로)
+            var helper = _services.HelperFor(tool);
             Task.Run(async () =>
             {
                 // 연달아 들어오는 요청(끌기·키 반복)은 잠깐 모아 마지막 것만 그린다
                 await Task.Delay(40, cancel.Token).ConfigureAwait(false);
-                return await PreviewRenderer.Frame(tool, copy, frame, size.Width, size.Height, cancel.Token, rasterizer).ConfigureAwait(false);
+                var bytes = await PreviewRenderer.Frame(tool, copy, frame, size.Width, size.Height, cancel.Token, rasterizer, helper,
+                    ex => _services.ReportHelperFailure(helper, ex)).ConfigureAwait(false);
+                if (helper != null && helper.IsAlive)
+                    _services.ReportHelperSuccess();
+                return bytes;
             }, cancel.Token).ContinueWith(t =>
             {
                 if (t.Status != TaskStatus.RanToCompletion)
@@ -164,7 +170,8 @@ namespace VideoEditor.Ui
         {
             try
             {
-                _playback = new Playback(this, tool, copy, from, to, width, height, Muted, rasterizer);
+                var helper = _services.HelperFor(tool);
+                _playback = new Playback(this, tool, helper, copy, from, to, width, height, Muted, rasterizer, ex => _services.ReportHelperFailure(helper, ex));
             }
             catch (Exception ex)
             {
@@ -194,7 +201,7 @@ namespace VideoEditor.Ui
             _frameCancel?.Cancel();
         }
 
-        /// <summary>재생 한 번: 화면 프로세스 + 소리 프로세스 + 읽는 스레드 + 표시 타이머.</summary>
+        /// <summary>재생 한 번: 화면 흐름 + 소리 흐름(도우미의 파이프 또는 ffmpeg.exe 프로세스) + 읽는 스레드 + 표시 타이머.</summary>
         private sealed class Playback : IDisposable
         {
             private readonly PreviewPlayer _owner;
@@ -203,14 +210,11 @@ namespace VideoEditor.Ui
             private readonly int _width;
             private readonly int _height;
             private readonly FrameRate _rate;
-            private readonly Process _video;
-            private readonly Process _audio;
-            private readonly System.Collections.Generic.List<string> _videoFiles;
-            private readonly string _audioScript;
+            private readonly PlaybackStream _video;
+            private readonly PlaybackStream _audio;
             private readonly BlockingCollection<(long Index, byte[] Pixels)> _frames = new BlockingCollection<(long, byte[])>(8);
             private readonly CancellationTokenSource _stop = new CancellationTokenSource();
             private readonly DispatcherTimer _timer;
-            private readonly ConcurrentQueue<string> _errors = new ConcurrentQueue<string>();
             private readonly Stopwatch _clock = new Stopwatch();
             private WaveOutEvent _waveOut;
             private BufferedWaveProvider _buffer;
@@ -221,7 +225,8 @@ namespace VideoEditor.Ui
             private (long Index, byte[] Pixels) _pending = (-1, null);
             private int _disposed;
 
-            public Playback(PreviewPlayer owner, FfmpegTool tool, Project project, long from, long to, int width, int height, bool muted, ITextRasterizer rasterizer)
+            public Playback(PreviewPlayer owner, FfmpegTool tool, PreviewHelper helper, Project project, long from, long to, int width, int height, bool muted,
+                ITextRasterizer rasterizer, Action<HelperException> helperFailed)
             {
                 _owner = owner;
                 _from = from;
@@ -231,8 +236,7 @@ namespace VideoEditor.Ui
                 _rate = project.Rate;
                 try
                 {
-                    _video = PreviewRenderer.StartVideo(tool, project, from, to, width, height, out _videoFiles, rasterizer);
-                    Drain(_video, _errors);
+                    _video = PreviewRenderer.OpenVideo(tool, helper, project, from, to, width, height, rasterizer, helperFailed);
                     new Thread(ReadVideo) { IsBackground = true, Name = "preview-video" }.Start();
                     if (!muted)
                     {
@@ -241,15 +245,14 @@ namespace VideoEditor.Ui
                             _buffer = new BufferedWaveProvider(new WaveFormat(project.SampleRate, 16, 2)) { BufferDuration = TimeSpan.FromSeconds(4), DiscardOnBufferOverflow = false };
                             _waveOut = new WaveOutEvent { DesiredLatency = 150 };
                             _waveOut.Init(_buffer);
-                            _audio = PreviewRenderer.StartAudio(tool, project, from, to, out _audioScript);
-                            Drain(_audio, null);
+                            _audio = PreviewRenderer.OpenAudio(tool, helper, project, from, to, helperFailed);
                             new Thread(ReadAudio) { IsBackground = true, Name = "preview-audio" }.Start();
                         }
                         catch (Exception)
                         {
-                            // 소리 장치가 없으면 소리 없이 재생한다(시계는 Stopwatch). 띄운 소리 프로세스는 끝낸다
-                            if (_audio != null)
-                                FfmpegRunner.Kill(_audio);
+                            // 소리 장치가 없으면 소리 없이 재생한다(시계는 Stopwatch). 띄운 소리 흐름은 끝낸다
+                            _audio?.Dispose();
+                            _audio = null;
                             _waveOut?.Dispose();
                             _waveOut = null;
                             _buffer = null;
@@ -261,24 +264,10 @@ namespace VideoEditor.Ui
                 }
                 catch (Exception)
                 {
-                    // 중간에 실패하면 이미 띄운 FFmpeg를 끝낸다
+                    // 중간에 실패하면 이미 띄운 흐름을 끝낸다
                     Dispose();
                     throw;
                 }
-            }
-
-            /// <summary>FFmpeg 오류 출력을 읽어 둔다(파이프가 차서 멈추지 않게, 실패하면 마지막 몇 줄을 알리게).</summary>
-            private static void Drain(Process process, ConcurrentQueue<string> errors)
-            {
-                process.ErrorDataReceived += (s, e) =>
-                {
-                    if (errors == null || string.IsNullOrWhiteSpace(e.Data))
-                        return;
-                    errors.Enqueue(e.Data.Trim());
-                    while (errors.Count > 4)
-                        errors.TryDequeue(out _);
-                };
-                process.BeginErrorReadLine();
             }
 
             private void ReadVideo()
@@ -287,7 +276,7 @@ namespace VideoEditor.Ui
                 long index = 0;
                 try
                 {
-                    var stream = _video.StandardOutput.BaseStream;
+                    var stream = _video.Input;
                     while (!_stop.IsCancellationRequested)
                     {
                         var pixels = new byte[size];
@@ -316,7 +305,7 @@ namespace VideoEditor.Ui
                 var chunk = new byte[16384];
                 try
                 {
-                    var stream = _audio.StandardOutput.BaseStream;
+                    var stream = _audio.Input;
                     while (!_stop.IsCancellationRequested)
                     {
                         // 버퍼가 넉넉하면 기다린다(앞서 읽어 두는 양 ≈ 2초)
@@ -369,10 +358,10 @@ namespace VideoEditor.Ui
             {
                 if (_disposed != 0)
                     return;
-                // 화면 프로세스가 한 장도 못 내고 끝남(파일 없음·그래프 오류): 멈추고 이유를 알린다
+                // 화면 흐름이 한 장도 못 내고 끝남(파일 없음·그래프 오류): 멈추고 이유를 알린다
                 if (_videoDone && _frames.Count == 0 && _lastShown < 0)
                 {
-                    var error = string.Join(" ", _errors);
+                    var error = _video?.Error ?? "";
                     _owner.Message?.Invoke("재생하지 못했습니다" + (error.Length > 0 ? ": " + error : "."));
                     _owner.Stop();
                     return;
@@ -429,10 +418,9 @@ namespace VideoEditor.Ui
                     return;
                 _timer?.Stop();
                 _stop.Cancel();
-                if (_video != null)
-                    FfmpegRunner.Kill(_video);
-                if (_audio != null)
-                    FfmpegRunner.Kill(_audio);
+                // 흐름을 먼저 끝내 읽는 스레드가 풀리게 한다(프로세스는 끝내고, 도우미는 멈추라고 알리고 파이프를 닫는다)
+                _video?.Dispose();
+                _audio?.Dispose();
                 try
                 {
                     _waveOut?.Stop();
@@ -442,11 +430,6 @@ namespace VideoEditor.Ui
                 {
                     // 장치 정리 실패는 무시
                 }
-                _video?.Dispose();
-                _audio?.Dispose();
-                foreach (var file in _videoFiles ?? new System.Collections.Generic.List<string>())
-                    RenderCommand.TryDelete(file);
-                RenderCommand.TryDelete(_audioScript);
             }
         }
     }

@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.IO;
+using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -27,6 +28,8 @@ namespace VideoEditor.Ui
         private readonly TextBlock _info = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 8, 0) };
         private readonly Button _ffmpegButton;
         private readonly EventHandler _toolChanged;
+        private readonly EventHandler _helperChanged;
+        private int _helperReleased;
         private Window _window;
         private Window _host;
         private bool _setupOffered;
@@ -158,14 +161,21 @@ namespace VideoEditor.Ui
                 _commands.RefreshPreview();
             }));
             services.ToolChanged += _toolChanged;
+            // 미리 보기 도우미: 편집 창이 있는 동안 띄워 둔다. 상태가 바뀌면 FFmpeg 단추에 보인다
+            _helperChanged = (s, e) => Dispatcher.BeginInvoke(new Action(UpdateInfo));
+            services.HelperChanged += _helperChanged;
+            services.AcquireHelper();
             PreviewKeyDown += OnPreviewKeyDown;
             Loaded += OnLoaded;
             // 창을 닫으면 함께 쓰는 EditorServices에서 떼어 낸다(닫은 창이 남아 미리 보기를 그리지 않게)
             Unloaded += (s, e) =>
             {
                 _services.ToolChanged -= _toolChanged;
+                _services.HelperChanged -= _helperChanged;
                 _commands.EffectHover.Dispose();
                 _player.Dispose();
+                if (Interlocked.Exchange(ref _helperReleased, 1) == 0)
+                    _services.ReleaseHelper();
                 _autosave.Stop();
                 if (_host != null)
                     _host.Closing -= OnHostClosing;
@@ -308,8 +318,11 @@ namespace VideoEditor.Ui
             var project = _session.Project;
             _info.Text = project.Width + "×" + project.Height + " · " + project.Rate + " fps · " + project.Rate.Timecode(project.Duration);
             var tool = _services.Tool;
-            ((TextBlock)_ffmpegButton.Content).Text = tool == null ? "FFmpeg 없음 — 설치" : "FFmpeg " + (tool.MajorVersion >= 99 ? "개발판" : tool.MajorVersion.ToString());
-            _ffmpegButton.ToolTip = tool == null ? "FFmpeg를 설치하거나 지정합니다" : tool.VersionLine + "\n" + tool.Folder;
+            // 도우미가 살아 있으면 "· 도우미" — 재생 헤드 이동·재생이 ffmpeg.exe를 띄우지 않고 그려진다
+            var helper = _services.Helper;
+            ((TextBlock)_ffmpegButton.Content).Text = tool == null ? "FFmpeg 없음 — 설치"
+                : "FFmpeg " + (tool.MajorVersion >= 99 ? "개발판" : tool.MajorVersion.ToString()) + (helper != null ? " · 도우미" : "");
+            _ffmpegButton.ToolTip = tool == null ? "FFmpeg를 설치하거나 지정합니다" : tool.VersionLine + "\n" + tool.Folder + "\n" + _services.HelperStatus;
             var window = _window ?? Window.GetWindow(this);
             if (window != null)
             {

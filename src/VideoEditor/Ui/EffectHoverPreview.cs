@@ -179,22 +179,20 @@ namespace VideoEditor.Ui
                 .ContinueWith(t => _dispatcher.BeginInvoke(new Action(() => Finished(job))), TaskScheduler.Default);
         }
 
-        /// <summary>UI 스레드 밖: FFmpeg 하나로 [from, to)를 BGRA로 흘려 받아 step장마다 하나를 얼린 그림으로 넘긴다(취소하면 FFmpeg를 끝낸다).</summary>
+        /// <summary>UI 스레드 밖: 흐름 하나(도우미 또는 FFmpeg)로 [from, to)를 BGRA로 흘려 받아 step장마다 하나를 얼린 그림으로 넘긴다(취소하면 흐름을 끝낸다).</summary>
         private void Render(Job job, FfmpegTool tool, Project copy, long from, long to, int width, int height, int step, ITextRasterizer rasterizer)
         {
-            List<string> temp = null;
-            Process process = null;
+            PlaybackStream playback = null;
             try
             {
                 if (job.Cancel.IsCancellationRequested)
                     return;
-                process = PreviewRenderer.StartVideo(tool, copy, from, to, width, height, out temp, rasterizer);
-                var started = process;
-                using (job.Cancel.Token.Register(() => FfmpegRunner.Kill(started)))
+                var helper = _services.HelperFor(tool);
+                playback = PreviewRenderer.OpenVideo(tool, helper, copy, from, to, width, height, rasterizer, ex => _services.ReportHelperFailure(helper, ex));
+                var started = playback;
+                using (job.Cancel.Token.Register(() => started.Dispose()))
                 {
-                    // 오류 출력은 읽어 버린다(파이프가 차서 멈추지 않게)
-                    process.BeginErrorReadLine();
-                    var stream = process.StandardOutput.BaseStream;
+                    var stream = playback.Input;
                     var buffer = new byte[width * height * 4];
                     var kept = 0;
                     for (var index = 0; kept < MaxFrames && !job.Cancel.IsCancellationRequested; index++)
@@ -216,13 +214,7 @@ namespace VideoEditor.Ui
             }
             finally
             {
-                if (process != null)
-                {
-                    FfmpegRunner.Kill(process);
-                    process.Dispose();
-                }
-                foreach (var file in temp ?? new List<string>())
-                    RenderCommand.TryDelete(file);
+                playback?.Dispose();
             }
         }
 

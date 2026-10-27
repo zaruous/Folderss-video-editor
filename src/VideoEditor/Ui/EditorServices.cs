@@ -270,7 +270,19 @@ namespace VideoEditor.Ui
             Tool = tool;
             if (tool != null && remember)
                 SaveSetting(FfmpegPathKey, tool.Folder);
-            var handlers = ToolChanged;
+            // FFmpeg가 바뀌면 도우미도 그 FFmpeg의 DLL로 다시 띄운다(거듭 실패해 꺼 둔 것도 다시)
+            lock (_helperGate)
+            {
+                _helperRetryAt = DateTime.MinValue;
+                _helperCrashes = 0;
+                _helperFailures = 0;
+            }
+            EnsureHelper();
+            Raise(ToolChanged);
+        }
+
+        private void Raise(EventHandler handlers)
+        {
             if (handlers == null)
                 return;
             foreach (EventHandler handler in handlers.GetInvocationList())
@@ -284,6 +296,194 @@ namespace VideoEditor.Ui
                     // 창 하나의 처리 오류가 다른 창·FFmpeg 찾기를 막지 않게
                 }
             }
+        }
+
+        // ---------- 미리 보기 도우미 ----------
+
+        private readonly object _helperGate = new object();
+        private PreviewHelper _helper;
+        private Task _helperStarting;
+        private int _helperUsers;
+        private int _helperFailures;
+        private int _helperCrashes;
+        private DateTime _helperRetryAt = DateTime.MinValue;
+        /// <summary>도우미가 이만큼 잇달아 그리지 못하면(ffmpeg.exe는 되는데) 끈다 — 요청마다 두 번 그리지 않게.</summary>
+        private const int MaxHelperFailures = 5;
+        /// <summary>도우미가 이만큼 잇달아 죽으면 FFmpeg를 바꿀 때까지 다시 띄우지 않는다.</summary>
+        private const int MaxHelperCrashes = 3;
+
+        /// <summary>살아 있는 미리 보기 도우미(없으면 null). 상태가 바뀌면 <see cref="HelperChanged"/>.</summary>
+        public PreviewHelper Helper
+        {
+            get
+            {
+                var helper = _helper;
+                return helper != null && helper.IsAlive ? helper : null;
+            }
+        }
+
+        public event EventHandler HelperChanged;
+
+        /// <summary>도우미 상태 글(FFmpeg 단추 도움말): 쓰는 중인지, 아니면 왜 ffmpeg.exe로 그리는지.</summary>
+        public string HelperStatus { get; private set; } = "미리 보기 도우미: 아직 시작하지 않음";
+
+        /// <summary>편집 창이 열림 — 도우미를 띄워 둔다. 창이 다 닫히면(<see cref="ReleaseHelper"/>) 끝낸다.</summary>
+        public void AcquireHelper()
+        {
+            Interlocked.Increment(ref _helperUsers);
+            EnsureHelper();
+        }
+
+        public void ReleaseHelper()
+        {
+            if (Interlocked.Decrement(ref _helperUsers) > 0)
+                return;
+            PreviewHelper helper;
+            lock (_helperGate)
+            {
+                helper = _helper;
+                _helper = null;
+            }
+            if (helper == null)
+                return;
+            SetHelperStatus("미리 보기 도우미: 편집 창을 닫아 끝냄");
+            Task.Run(() => helper.Dispose());
+        }
+
+        /// <summary>지금 FFmpeg에 맞는 살아 있는 도우미. 없거나 죽었거나 다른 FFmpeg의 것이면 null을 주고 뒤에서 (다시) 띄운다.</summary>
+        public PreviewHelper HelperFor(FfmpegTool tool)
+        {
+            var helper = Helper;
+            if (helper != null && tool != null && string.Equals(helper.Folder, tool.Folder, StringComparison.OrdinalIgnoreCase))
+                return helper;
+            EnsureHelper();
+            return null;
+        }
+
+        /// <summary>도우미로 그리는 데 성공함 — 잇단 실패 수를 되돌린다.</summary>
+        public void ReportHelperSuccess()
+        {
+            _helperFailures = 0;
+            _helperCrashes = 0;
+        }
+
+        /// <summary>도우미 작업이 실패해 ffmpeg.exe로 그렸음: 도우미가 죽었으면 다시 띄우고, 그 작업만 거듭 실패하면 도우미를 끈다.</summary>
+        public void ReportHelperFailure(PreviewHelper helper, HelperException error)
+        {
+            if (helper == null || error == null)
+                return;
+            if (error.HelperDied)
+            {
+                // 죽은 것은 Died에서 다룬다(아직 알림이 안 왔으면 다음 요청이 다시 띄운다)
+                return;
+            }
+            if (Interlocked.Increment(ref _helperFailures) < MaxHelperFailures)
+            {
+                SetHelperStatus("미리 보기 도우미: 그리지 못해 ffmpeg.exe로 그림 — " + error.Message);
+                return;
+            }
+            lock (_helperGate)
+            {
+                if (_helper != helper)
+                    return;
+                _helper = null;
+                _helperRetryAt = DateTime.MaxValue;
+            }
+            SetHelperStatus("미리 보기 도우미: 거듭 그리지 못해 껐습니다(ffmpeg.exe로 그림) — " + error.Message);
+            Task.Run(() => helper.Dispose());
+        }
+
+        /// <summary>
+        /// 필요하면 도우미를 띄운다: 편집 창이 있고, FFmpeg를 찾았고 그 폴더에 공유 DLL이 있고, 도우미가 없거나 죽었거나 다른 FFmpeg의 것일 때. 뒤에서 돈다.
+        /// </summary>
+        public void EnsureHelper()
+        {
+            var tool = Tool;
+            lock (_helperGate)
+            {
+                if (_helperUsers <= 0 || tool == null)
+                    return;
+                var current = _helper;
+                if (current != null && current.IsAlive && string.Equals(current.Folder, tool.Folder, StringComparison.OrdinalIgnoreCase))
+                    return;
+                if (_helperStarting != null && !_helperStarting.IsCompleted)
+                    return;
+                if (DateTime.UtcNow < _helperRetryAt)
+                    return;
+                var exe = PreviewHelper.FindExecutable(Manager.PluginDirectory);
+                if (exe == null)
+                {
+                    SetHelperStatus("미리 보기 도우미: 실행 파일(helper\\" + PreviewHelper.ExeName + ")이 없어 ffmpeg.exe로 그림");
+                    _helperRetryAt = DateTime.MaxValue;
+                    return;
+                }
+                if (!PreviewHelper.HasLibraries(tool.Folder))
+                {
+                    SetHelperStatus("미리 보기 도우미: 이 FFmpeg에 공유 DLL(shared 빌드)이 없어 ffmpeg.exe로 그림");
+                    _helperRetryAt = DateTime.MaxValue;
+                    return;
+                }
+                _helperRetryAt = DateTime.UtcNow.AddSeconds(5);
+                _helperStarting = Task.Run(() => StartHelper(exe, tool.Folder));
+            }
+        }
+
+        private async Task StartHelper(string exe, string folder)
+        {
+            SetHelperStatus("미리 보기 도우미: 시작하는 중");
+            PreviewHelper helper;
+            try
+            {
+                helper = await PreviewHelper.StartAsync(exe, folder, TimeSpan.FromSeconds(60), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                lock (_helperGate)
+                {
+                    _helperCrashes++;
+                    _helperRetryAt = _helperCrashes >= MaxHelperCrashes ? DateTime.MaxValue : DateTime.UtcNow.AddSeconds(15);
+                }
+                SetHelperStatus("미리 보기 도우미: 띄우지 못해 ffmpeg.exe로 그림 — " + ex.Message);
+                return;
+            }
+            helper.Died += reason => OnHelperDied(helper, reason);
+            PreviewHelper stale;
+            lock (_helperGate)
+            {
+                stale = _helper;
+                _helper = _helperUsers > 0 ? helper : null;
+                _helperFailures = 0;
+            }
+            if (_helper == null)
+            {
+                // 띄우는 동안 편집 창이 다 닫힘
+                helper.Dispose();
+                return;
+            }
+            if (stale != null)
+                _ = Task.Run(() => stale.Dispose());
+            SetHelperStatus("미리 보기 도우미: 쓰는 중 — FFmpeg " + helper.Version + " (" + folder + ")");
+        }
+
+        private void OnHelperDied(PreviewHelper helper, string reason)
+        {
+            int crashes;
+            lock (_helperGate)
+            {
+                if (_helper != helper)
+                    return;
+                _helper = null;
+                crashes = ++_helperCrashes;
+                _helperRetryAt = crashes >= MaxHelperCrashes ? DateTime.MaxValue : DateTime.UtcNow.AddSeconds(5);
+            }
+            SetHelperStatus("미리 보기 도우미: 끝남 — " + reason + (crashes >= MaxHelperCrashes ? " (거듭 끝나 다시 띄우지 않음)" : " (다음 미리 보기 때 다시 띄움)"));
+            Task.Run(() => helper.Dispose());
+        }
+
+        private void SetHelperStatus(string text)
+        {
+            HelperStatus = text;
+            Raise(HelperChanged);
         }
 
         /// <summary>미디어 썸네일(캐시). FFmpeg가 없거나 실패하면 null.</summary>

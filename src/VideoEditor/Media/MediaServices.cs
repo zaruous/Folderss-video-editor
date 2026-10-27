@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -139,10 +140,7 @@ namespace VideoEditor.Media
             // 자막은 libass로 입힌다 — 없으면 FFmpeg의 "No such filter" 대신 무엇을 할지 알린다
             if (plan.UsesLibass && !tool.HasFilter("ass"))
                 throw new FfmpegException("이 FFmpeg에는 자막을 입히는 기능(libass)이 없습니다. [FFmpeg 설정]에서 내려받은 FFmpeg나 libass가 든 빌드를 쓰세요.", null);
-            // 그리다 실패하면 아무 임시 파일도 남기지 않도록 먼저 그린다
-            DrawTextImages(plan, cancellation);
-            foreach (var file in plan.TextFiles)
-                File.WriteAllText(file.Key, file.Value, new UTF8Encoding(false));
+            Prepare(plan, cancellation);
             script = Path.Combine(RenderEnvironment.TempFolder(), "graph-" + Guid.NewGuid().ToString("N") + ".txt");
             File.WriteAllText(script, plan.Filter, new UTF8Encoding(false));
             var args = new List<string> { "-hide_banner", "-nostdin", "-loglevel", "error", "-y" };
@@ -162,11 +160,36 @@ namespace VideoEditor.Media
             return args;
         }
 
+        /// <summary>실행 전 준비: 꾸민 글자 PNG를 캐시에 그려 두고(그리다 실패하면 아무 임시 파일도 남기지 않도록 먼저), 글자·자막 파일을 쓴다.</summary>
+        public static void Prepare(RenderPlan plan, CancellationToken cancellation)
+        {
+            DrawTextImages(plan, cancellation);
+            foreach (var file in plan.TextFiles)
+                File.WriteAllText(file.Key, file.Value, new UTF8Encoding(false));
+        }
+
         /// <summary>계획의 꾸민 글자 PNG를 캐시에 그려 둔다(있으면 그대로).</summary>
         public static void DrawTextImages(RenderPlan plan, CancellationToken cancellation)
         {
             foreach (var image in plan.TextImages)
                 TextImageCache.Ensure(plan.TextRasterizer, image.Key, image.Value, cancellation);
+        }
+
+        /// <summary>도우미에 보낼 계획(같은 입력·필터 그래프에 출력 조건을 더한 것). 먼저 <see cref="Prepare"/>로 파일을 써 둔다.</summary>
+        public static HelperPlan ToHelperPlan(RenderPlan plan, bool video, int width, int height, int sampleRate, int maxFrames)
+        {
+            var helperPlan = new HelperPlan
+            {
+                Filter = plan.Filter,
+                Video = video,
+                Width = width,
+                Height = height,
+                SampleRate = sampleRate,
+                MaxFrames = maxFrames
+            };
+            foreach (var input in plan.Inputs)
+                helperPlan.Inputs.Add(new List<string>(input));
+            return helperPlan;
         }
 
         public static void TryDelete(string path)
@@ -306,12 +329,81 @@ namespace VideoEditor.Media
         }
     }
 
-    /// <summary>미리 보기: 한 프레임(BGRA)·재생용 화면 스트림·소리 스트림.</summary>
+    /// <summary>
+    /// 재생 흐름 하나(화면 BGRA 연속 또는 소리 PCM): ffmpeg.exe의 표준 출력이거나 미리 보기 도우미의 파이프. Dispose하면 멈추고 임시 파일을 지운다.
+    /// </summary>
+    public sealed class PlaybackStream : IDisposable
+    {
+        private readonly Process _process;
+        private readonly HelperStream _helper;
+        private readonly List<string> _files;
+        private readonly ConcurrentQueue<string> _errors = new ConcurrentQueue<string>();
+        private int _disposed;
+
+        private PlaybackStream(Process process, HelperStream helper, List<string> files)
+        {
+            _process = process;
+            _helper = helper;
+            _files = files ?? new List<string>();
+            if (process == null)
+                return;
+            // FFmpeg 오류 출력을 읽어 둔다(파이프가 차서 멈추지 않게, 실패하면 마지막 몇 줄을 알리게)
+            process.ErrorDataReceived += (s, e) =>
+            {
+                if (string.IsNullOrWhiteSpace(e.Data))
+                    return;
+                _errors.Enqueue(e.Data.Trim());
+                while (_errors.Count > 4)
+                    _errors.TryDequeue(out _);
+            };
+            process.BeginErrorReadLine();
+        }
+
+        public static PlaybackStream FromProcess(Process process, List<string> files)
+        {
+            return new PlaybackStream(process, null, files);
+        }
+
+        public static PlaybackStream FromHelper(HelperStream helper, List<string> files)
+        {
+            return new PlaybackStream(null, helper, files);
+        }
+
+        /// <summary>읽을 흐름.</summary>
+        public Stream Input { get { return _process != null ? _process.StandardOutput.BaseStream : _helper.Input; } }
+
+        /// <summary>도우미가 그리는 흐름인지(아니면 ffmpeg.exe).</summary>
+        public bool UsesHelper { get { return _helper != null; } }
+
+        /// <summary>실패했을 때 보일 마지막 오류(없으면 빈 글).</summary>
+        public string Error { get { return _helper != null ? (_helper.Error ?? "") : string.Join(" ", _errors); } }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            if (_process != null)
+            {
+                FfmpegRunner.Kill(_process);
+                _process.Dispose();
+            }
+            _helper?.Dispose();
+            foreach (var file in _files)
+                RenderCommand.TryDelete(file);
+        }
+    }
+
+    /// <summary>
+    /// 미리 보기: 한 프레임(BGRA)·재생용 화면 스트림·소리 스트림. 미리 보기 도우미(<see cref="PreviewHelper"/>)가 있으면 그것으로(프로세스를 새로 띄우지 않음),
+    /// 없거나 실패하면 ffmpeg.exe로 그린다 — 두 길이 같은 렌더 그래프를 쓴다.
+    /// </summary>
     public static class PreviewRenderer
     {
-        /// <summary>frame 위치의 화면을 BGRA 바이트(width×height×4)로.</summary>
+        /// <summary>
+        /// frame 위치의 화면을 BGRA 바이트(width×height×4)로. helper가 살아 있으면 도우미로 그리고, 도우미가 실패하면 helperFailed에 알린 뒤 ffmpeg.exe로 그린다.
+        /// </summary>
         public static async Task<byte[]> Frame(FfmpegTool tool, Project project, long frame, int width, int height, CancellationToken cancellation,
-            ITextRasterizer textRasterizer = null)
+            ITextRasterizer textRasterizer = null, PreviewHelper helper = null, Action<HelperException> helperFailed = null)
         {
             var plan = RenderGraph.Build(project, new RenderOptions
             {
@@ -327,16 +419,35 @@ namespace VideoEditor.Media
                 TextRasterizer = textRasterizer,
                 PersonMasks = RenderEnvironment.PersonMasks
             });
-            string script;
-            var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script, cancellation);
             try
             {
-                var bytes = await FfmpegRunner.RunBytes(tool.FfmpegPath, args, TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false);
-                return bytes.Length >= (long)width * height * 4 ? bytes : null;
+                if (helper != null && helper.IsAlive)
+                {
+                    try
+                    {
+                        RenderCommand.Prepare(plan, cancellation);
+                        return await helper.Frame(RenderCommand.ToHelperPlan(plan, true, width, height, project.SampleRate, 1), cancellation).ConfigureAwait(false);
+                    }
+                    catch (HelperException ex)
+                    {
+                        cancellation.ThrowIfCancellationRequested();
+                        helperFailed?.Invoke(ex);
+                    }
+                }
+                string script;
+                var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script, cancellation);
+                try
+                {
+                    var bytes = await FfmpegRunner.RunBytes(tool.FfmpegPath, args, TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false);
+                    return bytes.Length >= (long)width * height * 4 ? bytes : null;
+                }
+                finally
+                {
+                    RenderCommand.TryDelete(script);
+                }
             }
             finally
             {
-                RenderCommand.TryDelete(script);
                 foreach (var file in plan.TextFiles.Keys)
                     RenderCommand.TryDelete(file);
             }
@@ -365,7 +476,36 @@ namespace VideoEditor.Media
             RenderCommand.DrawTextImages(plan, cancellation);
         }
 
-        /// <summary>재생: from부터 끝까지 화면을 BGRA 원시 프레임으로 내보내는 FFmpeg를 시작한다(표준 출력에서 읽는다).</summary>
+        /// <summary>
+        /// 재생: from부터 to까지 화면을 BGRA 원시 프레임 흐름으로. 도우미가 있으면 도우미의 파이프, 아니면 ffmpeg.exe의 표준 출력.
+        /// 도우미가 실패하면 helperFailed에 알리고 ffmpeg.exe로 간다.
+        /// </summary>
+        public static PlaybackStream OpenVideo(FfmpegTool tool, PreviewHelper helper, Project project, long from, long to, int width, int height,
+            ITextRasterizer textRasterizer = null, Action<HelperException> helperFailed = null)
+        {
+            var plan = RenderGraph.Build(project, new RenderOptions
+            {
+                From = from,
+                To = to,
+                Width = width,
+                Height = height,
+                Audio = false,
+                Preview = true,
+                Playback = true,
+                FontFile = RenderEnvironment.DefaultFont(),
+                TempFolder = RenderEnvironment.TempFolder(),
+                FfmpegMajor = tool.MajorVersion,
+                TextRasterizer = textRasterizer,
+                PersonMasks = RenderEnvironment.PersonMasks
+            });
+            var stream = TryHelper(helper, plan, RenderCommand.ToHelperPlan(plan, true, width, height, project.SampleRate, 0), helperFailed);
+            if (stream != null)
+                return stream;
+            List<string> files;
+            return PlaybackStream.FromProcess(StartVideo(tool, plan, out files), files);
+        }
+
+        /// <summary>재생(ffmpeg.exe): from부터 to까지 화면을 BGRA 원시 프레임으로 내보내는 FFmpeg를 시작한다(표준 출력에서 읽는다). 끝나면 tempFiles를 지운다.</summary>
         public static Process StartVideo(FfmpegTool tool, Project project, long from, long to, int width, int height, out List<string> tempFiles,
             ITextRasterizer textRasterizer = null)
         {
@@ -384,16 +524,32 @@ namespace VideoEditor.Media
                 TextRasterizer = textRasterizer,
                 PersonMasks = RenderEnvironment.PersonMasks
             });
+            return StartVideo(tool, plan, out tempFiles);
+        }
+
+        private static Process StartVideo(FfmpegTool tool, RenderPlan plan, out List<string> tempFiles)
+        {
             string script;
             var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" }, out script);
             tempFiles = new List<string>(plan.TextFiles.Keys) { script };
             return FfmpegRunner.Start(tool.FfmpegPath, args, true);
         }
 
-        /// <summary>재생: from부터 끝까지 소리를 48kHz 16비트 스테레오 PCM으로.</summary>
+        /// <summary>재생(ffmpeg.exe): from부터 to까지 소리를 프로젝트 샘플 레이트의 16비트 스테레오 PCM으로. 끝나면 script를 지운다.</summary>
         public static Process StartAudio(FfmpegTool tool, Project project, long from, long to, out string script)
         {
-            var plan = RenderGraph.Build(project, new RenderOptions
+            return StartAudio(tool, AudioPlan(project, from, to), project.SampleRate, out script);
+        }
+
+        private static Process StartAudio(FfmpegTool tool, RenderPlan plan, int sampleRate, out string script)
+        {
+            var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[aout]", "-f", "s16le", "-ac", "2", "-ar", sampleRate.ToString(CultureInfo.InvariantCulture), "pipe:1" }, out script);
+            return FfmpegRunner.Start(tool.FfmpegPath, args, true);
+        }
+
+        private static RenderPlan AudioPlan(Project project, long from, long to)
+        {
+            return RenderGraph.Build(project, new RenderOptions
             {
                 From = from,
                 To = to,
@@ -402,8 +558,36 @@ namespace VideoEditor.Media
                 Video = false,
                 Preview = true
             });
-            var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[aout]", "-f", "s16le", "-ac", "2", "-ar", project.SampleRate.ToString(CultureInfo.InvariantCulture), "pipe:1" }, out script);
-            return FfmpegRunner.Start(tool.FfmpegPath, args, true);
+        }
+
+        /// <summary>재생: from부터 to까지 소리를 프로젝트 샘플 레이트의 16비트 스테레오 PCM 흐름으로(화면과 같은 방식).</summary>
+        public static PlaybackStream OpenAudio(FfmpegTool tool, PreviewHelper helper, Project project, long from, long to, Action<HelperException> helperFailed = null)
+        {
+            var plan = AudioPlan(project, from, to);
+            var stream = TryHelper(helper, plan, RenderCommand.ToHelperPlan(plan, false, 0, 0, project.SampleRate, 0), helperFailed);
+            if (stream != null)
+                return stream;
+            string script;
+            var process = StartAudio(tool, plan, project.SampleRate, out script);
+            return PlaybackStream.FromProcess(process, new List<string> { script });
+        }
+
+        /// <summary>도우미로 흐름을 시작해 본다. 도우미가 없거나 실패하면 null(실패는 helperFailed에).</summary>
+        private static PlaybackStream TryHelper(PreviewHelper helper, RenderPlan plan, HelperPlan helperPlan, Action<HelperException> helperFailed)
+        {
+            if (helper == null || !helper.IsAlive)
+                return null;
+            try
+            {
+                RenderCommand.Prepare(plan, CancellationToken.None);
+                var stream = helper.Stream(helperPlan, CancellationToken.None).GetAwaiter().GetResult();
+                return PlaybackStream.FromHelper(stream, new List<string>(plan.TextFiles.Keys));
+            }
+            catch (HelperException ex)
+            {
+                helperFailed?.Invoke(ex);
+                return null;
+            }
         }
     }
 
