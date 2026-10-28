@@ -1561,6 +1561,7 @@ namespace VideoEditor.Ui
             {
                 _player.Stop();
                 _session.Open(path);
+                RecentProjectsMenu.Remember(_services, path);
                 var missing = Project.Media.Count(m => !File.Exists(m.Path));
                 Status("열었습니다: " + path + (missing > 0 ? " — 찾을 수 없는 미디어 " + missing + "개" : ""));
                 _ = RefreshMediaAsync();
@@ -1623,6 +1624,7 @@ namespace VideoEditor.Ui
             try
             {
                 _session.Save(path);
+                RecentProjectsMenu.Remember(_services, path);
                 Status("저장했습니다: " + path);
                 return true;
             }

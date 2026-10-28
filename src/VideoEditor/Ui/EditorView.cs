@@ -348,6 +348,7 @@ namespace VideoEditor.Ui
             menu.Items.Add(Top("파일",
                 Item("새 프로젝트", "Ctrl+N", _commands.New),
                 Item("프로젝트 열기…", "Ctrl+O", _commands.Open),
+                new RecentProjectsMenu(_services, _commands, this).Item,
                 Item("저장", "Ctrl+S", () => _commands.Save()),
                 Item("다른 이름으로 저장…", "Ctrl+Shift+S", () => _commands.SaveAs()),
                 null,
