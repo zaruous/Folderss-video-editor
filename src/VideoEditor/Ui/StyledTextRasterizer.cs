@@ -499,6 +499,119 @@ namespace VideoEditor.Ui
             return MeasureBox(text, clip.Style ?? TextStyle.FromLegacy(clip), clip.FontSize, boxed ? ClipLayout.TextBoxLength(boxWidth) : 0, boxed ? ClipLayout.TextBoxLength(boxHeight) : 0);
         }
 
+        private static readonly Dictionary<string, (double Width, double Height)> Estimated = new Dictionary<string, (double, double)>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// 그릴 PNG 크기를 캔버스 상한 없이 어림한다(<see cref="ITextRasterizer.Measure"/> — 렌더 그래프가 그리개 범위보다 큰 글을 알아보는 데 쓴다).
+        /// 윤곽을 만들지 않고 그리기와 같은 배치(<see cref="Arrange"/>)와 글자 먹 크기(FormattedText의 넘침 값)로 잰다 — 어느 스레드에서나 되고(UI 스레드의 그래프 만들기도) 빠르다.
+        /// 휘기는 먹 상자의 둘레를 <see cref="TextWarp.Map"/>으로 옮긴 경계로(휘기는 접히지 않으므로 안쪽은 그 안에 든다), 그 위에 효과 여백(<see cref="StyledTextLayout.Fit"/>)을 둔다.
+        /// 같은 요청은 기억해 둔다. 못 재면 (0, 0).
+        /// </summary>
+        public (double Width, double Height) Measure(TextImageRequest request)
+        {
+            if (request == null)
+                return (0, 0);
+            var key = request.Key(Version);
+            lock (MeasureGate)
+            {
+                if (Estimated.TryGetValue(key, out var known))
+                    return known;
+            }
+            (double Width, double Height) result;
+            try
+            {
+                result = Estimate(request);
+            }
+            catch (Exception e) when (e is ArgumentException || e is InvalidOperationException || e is NotSupportedException)
+            {
+                return (0, 0);
+            }
+            lock (MeasureGate)
+            {
+                if (Estimated.Count >= 256)
+                    Estimated.Clear();
+                Estimated[key] = result;
+            }
+            return result;
+        }
+
+        private static (double Width, double Height) Estimate(TextImageRequest request)
+        {
+            var style = request.Style?.Clone() ?? new TextStyle();
+            style.Normalize();
+            double boxWidth, boxHeight;
+            double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
+            void Include(double x0, double y0, double x1, double y1)
+            {
+                left = Math.Min(left, x0);
+                top = Math.Min(top, y0);
+                right = Math.Max(right, x1);
+                bottom = Math.Max(bottom, y1);
+            }
+            if (request.Art != null)
+            {
+                var art = request.Art.Clone();
+                art.Normalize();
+                var scale = Clamp(request.EffectScale, 0.001, 100, 1);
+                boxWidth = art.Width * scale;
+                boxHeight = art.Height * scale;
+                foreach (var polygon in ArtGeometry.Outline(art, scale))
+                {
+                    foreach (var (x, y) in polygon)
+                        Include(x, y, x, y);
+                }
+            }
+            else
+            {
+                var size = Clamp(request.FontPixelSize, 0.5, 4000, 1);
+                var arranged = Arrange(request.Text, style, size, request.WrapWidth, request.BoxHeight, request.VerticalAlign);
+                boxWidth = arranged.BoxWidth;
+                boxHeight = arranged.BoxHeight;
+                foreach (var line in arranged.Lines)
+                {
+                    foreach (var piece in line.Pieces)
+                    {
+                        // 먹 상자: 왼쪽·오른쪽 넘침과 아래 넘침·먹 높이(그리기와 같은 자리 — 기준선 맞춤)
+                        var text = piece.Text;
+                        if (text.Extent <= 0)
+                            continue;
+                        var x = line.X + piece.Offset;
+                        var y = line.Top + line.Baseline - text.Baseline;
+                        var inkBottom = y + text.Height + text.OverhangAfter;
+                        Include(x + text.OverhangLeading, inkBottom - text.Extent, x + text.Width - text.OverhangTrailing, inkBottom);
+                    }
+                }
+                var block = arranged.Block;
+                if (left <= right && style.Warp.Kind != WarpKind.None && style.Warp.Amount != 0 && block.Width > 0 && block.Height > 0)
+                {
+                    // 먹 상자 둘레를 휜다(그리기와 같은 정규화 — 글 덩어리 기준)
+                    var (inkLeft, inkTop, inkRight, inkBottom) = (left, top, right, bottom);
+                    left = top = double.MaxValue;
+                    right = bottom = double.MinValue;
+                    const int Steps = 64;
+                    for (var i = 0; i <= Steps; i++)
+                    {
+                        var t = (double)i / Steps;
+                        foreach (var (px, py) in new[] { (inkLeft + (inkRight - inkLeft) * t, inkTop), (inkLeft + (inkRight - inkLeft) * t, inkBottom), (inkLeft, inkTop + (inkBottom - inkTop) * t), (inkRight, inkTop + (inkBottom - inkTop) * t) })
+                        {
+                            var (u, v) = TextWarp.Map(style.Warp.Kind, style.Warp.Amount, (px - block.Left) / block.Width, (py - block.Top) / block.Height, block.Height / block.Width);
+                            var mappedX = block.Left + u * block.Width;
+                            var mappedY = block.Top + v * block.Height;
+                            Include(mappedX, mappedY, mappedX, mappedY);
+                        }
+                    }
+                }
+            }
+            // 그리기와 같이: PNG 가운데 = 배치 상자 가운데, 먹이 상자 밖으로 나간 만큼 대칭으로 넓힌다
+            var centerX = boxWidth / 2;
+            var centerY = boxHeight / 2;
+            var ink = left <= right;
+            var halfWidth = Math.Max(centerX, ink ? Math.Max(centerX - left, right - centerX) : 0);
+            var halfHeight = Math.Max(centerY, ink ? Math.Max(centerY - top, bottom - centerY) : 0);
+            var layout = StyledTextLayout.Fit(halfWidth * 2, halfHeight * 2, style, request.EffectScale, int.MaxValue, int.MaxValue);
+            return (layout.Width, layout.Height);
+        }
+
         /// <summary>
         /// 본문을 그린다: 윤곽선을 먼저, 채우기를 위에 — 펜 두께의 바깥 절반(= 윤곽선 두께)만 보인다.
         /// paint가 있으면 윤곽선·채우기 색 대신 모두 그 붓으로 칠한다 — 그림자처럼 본문이 칠하는 모양만 필요할 때(채우기가 없으면 윤곽선 고리만).

@@ -19,6 +19,15 @@ namespace VideoEditor.Core
         /// 글자 상자(WrapWidth·BoxHeight)를 정했으면 그 상자, 아니면 글을 감싼 상자.
         /// </summary>
         void Render(TextImageRequest request, string pngPath, CancellationToken cancellation);
+
+        /// <summary>
+        /// request를 그리면 나올 PNG 크기(픽셀)를 캔버스 상한 없이 어림한다 — 그리지 않고, 어느 스레드에서나 빨리(같은 요청은 기억해 둔다).
+        /// 렌더 그래프가 그리개 범위보다 큰 글을 알아보는 데 쓴다(<see cref="RenderGraph"/> — 넘치면 해상도를 낮춰 그린다). 모르면 (0, 0): 예전처럼 그린다.
+        /// </summary>
+        (double Width, double Height) Measure(TextImageRequest request)
+        {
+            return (0, 0);
+        }
     }
 
     /// <summary>꾸민 글자 PNG 한 장을 그릴 값. 같은 키면 같은 픽셀이다.</summary>

@@ -209,8 +209,8 @@ namespace VideoEditor.Core
                     if (UsesRasterizer(clip, options))
                     {
                         // 꾸민 글자 PNG는 가운데 = 글자 상자 가운데이고 크기는 그림 따라 다르다(화면보다 클 수도) — 화면 크기로 맞추지 않고
-                        // 크기 배율로 한 번만 줄여 가운데에 얹는다(그리개 화소 배율·재생 축소도 같은 scale에 접는다 — scale을 잇지 않게)
-                        var factor = scale / (shrink * StyledCanvas(options).Shrink);
+                        // 크기 배율로 한 번만 줄여 가운데에 얹는다(그리개 해상도·재생 축소도 같은 scale에 접는다 — scale을 잇지 않게)
+                        var factor = scale / (shrink * StyledResolution(project, options, clip));
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",scale=w='max(1,iw*{0})':h='max(1,ih*{0})',format=rgba", N(factor));
                     }
                     else if (fit == ClipFit.Blur)
@@ -515,29 +515,82 @@ namespace VideoEditor.Core
         /// </summary>
         private static string StyledText(Project project, RenderOptions options, RenderPlan plan, Clip clip, long segFrames)
         {
-            var rate = project.Rate;
+            var (canvasWidth, canvasHeight, _) = StyledCanvas(options);
+            return Overlay(options, plan, project.Rate, segFrames, StyledRequest(project, options, clip, StyledResolution(project, options, clip), canvasWidth, canvasHeight));
+        }
+
+        /// <summary>
+        /// 꾸민 글자·아트 요소의 그리기 요청. resolution = 그리개 픽셀 / 출력 픽셀(<see cref="StyledResolution"/>) — 글자 크기·효과·상자 길이에 출력 배율과 함께 곱한다.
+        /// </summary>
+        private static TextImageRequest StyledRequest(Project project, RenderOptions options, Clip clip, double resolution, int canvasWidth, int canvasHeight)
+        {
             var k = (double)options.Width / project.Width;
-            var (canvasWidth, canvasHeight, shrink) = StyledCanvas(options);
             var style = (clip.Style ?? TextStyle.FromLegacy(clip)).Clone();
             style.Normalize();
             if (clip.Kind == ClipKind.Art)
-                return Overlay(options, plan, rate, segFrames, ArtRequest(clip, style, k * shrink, canvasWidth, canvasHeight));
+                return ArtRequest(clip, style, k * resolution, canvasWidth, canvasHeight);
             var boxWidth = ClipLayout.TextBoxLength(clip.TextBoxWidth);
             var boxHeight = ClipLayout.TextBoxLength(clip.TextBoxHeight);
-            var request = new TextImageRequest
+            return new TextImageRequest
             {
                 Text = clip.Text ?? "",
                 Style = style,
-                FontPixelSize = clip.FontSize * k * shrink,
-                EffectScale = k * shrink,
+                FontPixelSize = clip.FontSize * k * resolution,
+                EffectScale = k * resolution,
                 CanvasWidth = canvasWidth,
                 CanvasHeight = canvasHeight,
-                WrapWidth = boxWidth * k * shrink,
-                BoxHeight = boxHeight * k * shrink,
+                WrapWidth = boxWidth * k * resolution,
+                BoxHeight = boxHeight * k * resolution,
                 // 높이가 자동이면 세로 자리는 그림에 영향이 없다 — 같은 그림이 다른 캐시 파일이 되지 않게 기본값으로
                 VerticalAlign = boxHeight > 0 && Enum.IsDefined(clip.TextVerticalAlign) ? clip.TextVerticalAlign : TextVerticalAlign.Middle
             };
-            return Overlay(options, plan, rate, segFrames, request);
+        }
+
+        /// <summary>그리개 범위보다 큰 글을 줄여 그리는 한도(해상도 1/64).</summary>
+        internal const double MinStyledResolution = 1.0 / 64;
+
+        /// <summary>
+        /// 꾸민 글자·아트 그림의 해상도(그리개 픽셀 / 출력 픽셀). 보통은 캔버스 화소 배율(<see cref="StyledCanvas"/> — 대개 1, 8K 등은 1보다 작음) 그대로라
+        /// 위치·크기·회전을 바꿔도 다시 그리지 않는다. 그리개가 잰 그림(<see cref="ITextRasterizer.Measure"/>)이 그리개 범위보다 크면, 그 가운데 화면에 보일 수 있는 부분
+        /// (<see cref="VisibleHalf"/>)이 범위 안에 들 때까지 해상도를 반씩 낮춘다(<see cref="MinStyledResolution"/>까지) — 범위 밖이 잘리지 않게(#34).
+        /// 크기 배율로 줄여 쓴 큰 글은 줄인 만큼만 낮아져 화면에서는 그대로 선명하고, 크게 둔 채 멀리 옮긴 글은 흐려질 수 있다(그때는 옮기면 다시 그린다).
+        /// </summary>
+        private static double StyledResolution(Project project, RenderOptions options, Clip clip)
+        {
+            var (canvasWidth, canvasHeight, shrink) = StyledCanvas(options);
+            var size = options.TextRasterizer.Measure(StyledRequest(project, options, clip, shrink, canvasWidth, canvasHeight));
+            if (!(size.Width > canvasWidth || size.Height > canvasHeight))
+                return shrink;
+            // 그리개 픽셀로: 잰 그림의 반과 화면에 보일 수 있는 범위의 반 가운데 작은 것이 범위의 반 안에 들게
+            var (visibleWidth, visibleHeight) = VisibleHalf(project, options, clip);
+            var needWidth = Math.Min(size.Width / 2, visibleWidth * shrink);
+            var needHeight = Math.Min(size.Height / 2, visibleHeight * shrink);
+            var resolution = 1.0;
+            while (resolution > MinStyledResolution && (needWidth * resolution > canvasWidth / 2.0 || needHeight * resolution > canvasHeight / 2.0))
+                resolution /= 2;
+            return shrink * resolution;
+        }
+
+        /// <summary>
+        /// 화면(출력 크기)의 네 모서리를 클립의 글 좌표(가운데 = 상자 가운데, 크기 배율·회전 전, 출력 픽셀)로 되돌렸을 때 가운데에서 가장 먼 가로·세로 거리 —
+        /// 글 그림 가운데 화면에 보일 수 있는 범위의 반. 공통 체인과 같은 놓기(크기 배율 → 시계 방향 회전 → 가운데 + X/Y)를 거꾸로 한다.
+        /// </summary>
+        internal static (double Width, double Height) VisibleHalf(Project project, RenderOptions options, Clip clip)
+        {
+            var k = (double)options.Width / project.Width;
+            var scale = double.IsFinite(clip.Scale) ? Math.Max(0.01, clip.Scale) : 1;
+            var radians = (double.IsFinite(clip.Rotation) ? clip.Rotation : 0) * Math.PI / 180;
+            var (cos, sin) = (Math.Cos(radians), Math.Sin(radians));
+            var (centerX, centerY) = (double.IsFinite(clip.X) ? clip.X * k : 0, double.IsFinite(clip.Y) ? clip.Y * k : 0);
+            double width = 0, height = 0;
+            foreach (var (cornerX, cornerY) in new[] { (-1, -1), (1, -1), (1, 1), (-1, 1) })
+            {
+                var dx = cornerX * options.Width / 2.0 - centerX;
+                var dy = cornerY * options.Height / 2.0 - centerY;
+                width = Math.Max(width, Math.Abs(dx * cos + dy * sin) / scale);
+                height = Math.Max(height, Math.Abs(-dx * sin + dy * cos) / scale);
+            }
+            return (width, height);
         }
 
         /// <summary>
@@ -593,6 +646,7 @@ namespace VideoEditor.Core
         /// 화면보다 큰 글(큰 상자를 줄여 쓰거나 옮긴 글)도 크기를 바꾸기 전에 잘리지 않게 화면의 몇 배까지 둔다 — 화소 상한 안에서 2의 거듭제곱 배(최대 4배,
         /// 1080p는 2배, 4K는 1배). 클립의 위치·크기·회전과 상관없는 값이라 옮기거나 줄여도 다시 그리지 않는다. 그림은 글만큼만 크다(빈 범위는 쓰지 않음).
         /// 화면이 화소 상한보다 크면(8K 등) 줄여서 그리게 하고(화소 배율 &lt; 1) 공통 체인이 크기 배율과 함께 다시 키운다.
+        /// 이 범위보다 큰 글은 해상도를 낮춰 담는다(<see cref="StyledResolution"/>).
         /// </summary>
         private static (int Width, int Height, double Shrink) StyledCanvas(RenderOptions options)
         {
