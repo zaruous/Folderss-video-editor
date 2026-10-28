@@ -9,7 +9,8 @@ using VideoEditor.Core;
 namespace VideoEditor.Ui
 {
     /// <summary>
-    /// 속성 패널 [애니메이션] 탭(#4): 나타나기·강조·사라지기 분류별 썸네일(마우스를 올리면 움직임), 넣은 효과의 설정(방향·단위·글자 사이 지연·길이·지연·반복·이징·정도)과 [빼기],
+    /// 속성 패널 [애니메이션] 탭(#4): 나타나기·강조·사라지기·이동 경로 분류별 썸네일(마우스를 올리면 움직임), 넣은 효과의 설정(방향·단위·글자 사이 지연·길이·지연·반복·이징·정도,
+    /// 이동 경로는 되돌아오기 — 점은 미리 보기에서 고친다(TransformOverlay.Path.cs))과 [빼기],
     /// [미리 보기](이 클립 구간만 재생). 효과를 넣고 빼면 줄을 다시 만들고, 값만 바뀌면 값만 갱신한다(끄는 슬라이더가 사라지지 않게). 모두 실행 취소 한 단계씩.
     /// </summary>
     internal sealed partial class PropertyPanel
@@ -20,12 +21,13 @@ namespace VideoEditor.Ui
             var text = _session.Project.FindClip(id)?.Kind == ClipKind.Text;
             var tiles = new List<(AnimationTile Tile, AnimationKind Kind, AnimationEffect Effect)>();
             var rows = new Dictionary<AnimationKind, StackPanel>();
-            foreach (var kind in new[] { AnimationKind.In, AnimationKind.Emphasis, AnimationKind.Out })
+            foreach (var kind in new[] { AnimationKind.In, AnimationKind.Emphasis, AnimationKind.Out, AnimationKind.Path })
             {
                 panel.Children.Add(Section(ClipAnimations.KindName(kind)));
                 var wrap = new WrapPanel();
                 AutomationProperties.SetAutomationId(wrap, "AnimationTiles" + kind);
-                foreach (var def in ClipAnimations.All.Where(d => d.Emphasis == (kind == AnimationKind.Emphasis) && (text || !d.TextOnly)))
+                var defs = kind == AnimationKind.Path ? ClipAnimations.Paths : ClipAnimations.All.Where(d => d.Emphasis == (kind == AnimationKind.Emphasis) && (text || !d.TextOnly));
+                foreach (var def in defs)
                 {
                     var tile = new AnimationTile(def, kind, text && def.TextOnly, "Anim" + kind + "_" + def.Effect);
                     var chosen = def;
@@ -43,9 +45,10 @@ namespace VideoEditor.Ui
             preview.Margin = new Thickness(0, 2, 0, 4);
             preview.ToolTip = "이 클립 구간만 재생합니다.";
             panel.Children.Add(preview);
-            var hint = UiKit.Label(text
+            var hint = UiKit.Label((text
                 ? "효과는 위치·크기·회전 위에 더해 움직입니다. 글자는 단어·글자별로도 움직입니다(한글은 음절). 타임라인 클립 위쪽 띠의 끝을 끌어 나타나기·사라지기 길이를 바꿉니다."
-                : "효과는 위치·크기·회전 위에 더해 움직입니다. 타임라인 클립 위쪽 띠의 끝을 끌어 나타나기·사라지기 길이를 바꿉니다.", true);
+                : "효과는 위치·크기·회전 위에 더해 움직입니다. 타임라인 클립 위쪽 띠의 끝을 끌어 나타나기·사라지기 길이를 바꿉니다.")
+                + " 이동 경로는 미리 보기에 점선과 점으로 보이고, 점을 끌어 고칩니다(클립을 옮기면 경로도 함께).", true);
             hint.TextWrapping = TextWrapping.Wrap;
             panel.Children.Add(hint);
 
@@ -97,7 +100,7 @@ namespace VideoEditor.Ui
             return panel;
         }
 
-        /// <summary>썸네일을 눌렀다: 나타나기·사라지기는 바꾸고(같은 효과면 그대로), 강조는 하나 더한다.</summary>
+        /// <summary>썸네일을 눌렀다: 나타나기·사라지기·이동 경로는 바꾸고(같은 효과면 그대로), 강조는 하나 더한다. 경로의 기본 점은 화면 높이에 맞춘다(1080 기준).</summary>
         private void AddAnimation(string id, AnimationKind kind, AnimationEffectDef def)
         {
             Edit(id, c =>
@@ -110,7 +113,9 @@ namespace VideoEditor.Ui
                     ClipAnimations.AddEmphasis(c, animation);
                     return;
                 }
-                var current = kind == AnimationKind.In ? ClipAnimations.In(c) : ClipAnimations.Out(c);
+                if (kind == AnimationKind.Path)
+                    animation.Points = MotionPaths.DefaultPoints(def.Effect, _session.Project.Height / 1080.0);
+                var current = kind == AnimationKind.In ? ClipAnimations.In(c) : kind == AnimationKind.Out ? ClipAnimations.Out(c) : ClipAnimations.PathOf(c);
                 if (current != null && current.Effect == def.Effect)
                     return;
                 // 길이·지연은 바꾸기 전 값을 이어받는다(효과만 바꿔 보기 쉽게)
@@ -132,7 +137,8 @@ namespace VideoEditor.Ui
             var prefix = "Anim" + kind + (kind == AnimationKind.Emphasis ? index.ToString(System.Globalization.CultureInfo.InvariantCulture) : "") + "_";
             ClipAnimation Find(Clip c)
             {
-                var animation = kind == AnimationKind.In ? ClipAnimations.In(c) : kind == AnimationKind.Out ? ClipAnimations.Out(c) : ClipAnimations.Emphases(c).ElementAtOrDefault(index);
+                var animation = kind == AnimationKind.In ? ClipAnimations.In(c) : kind == AnimationKind.Out ? ClipAnimations.Out(c)
+                    : kind == AnimationKind.Path ? ClipAnimations.PathOf(c) : ClipAnimations.Emphases(c).ElementAtOrDefault(index);
                 return animation != null && animation.Effect == effect ? animation : null;
             }
             void Change(Action<ClipAnimation> change, string mergeKey = null)
@@ -194,7 +200,7 @@ namespace VideoEditor.Ui
             if (def.Directions.Count > 0)
                 Choice("방향", "Direction", def.Directions, d => ClipAnimations.DirectionName(effect, d), a => a.Direction, (a, v) => a.Direction = v);
             var current0 = Find(_session.Project.FindClip(id));
-            if (text && kind != AnimationKind.Emphasis)
+            if (text && kind != AnimationKind.Emphasis && kind != AnimationKind.Path)
             {
                 var units = def.TextOnly ? new[] { AnimationUnit.Word, AnimationUnit.Character } : new[] { AnimationUnit.All, AnimationUnit.Word, AnimationUnit.Character };
                 Choice("단위", "Unit", units, ClipAnimations.UnitName, a => a.Unit, (a, v) =>
@@ -211,7 +217,7 @@ namespace VideoEditor.Ui
                             a.Stagger = Math.Max(0, Math.Min(100, v));
                     }));
             }
-            box.Children.Add(NumberRow(kind == AnimationKind.Emphasis ? "한 번 길이" : "길이", prefix + "Duration", 0.1, 10, "초", id,
+            box.Children.Add(NumberRow(kind == AnimationKind.Emphasis || kind == AnimationKind.Path ? "한 번 길이" : "길이", prefix + "Duration", 0.1, 10, "초", id,
                 c => rate.ToSeconds(Find(c)?.Duration ?? 0), (c, v) =>
                 {
                     var a = Find(c);
@@ -252,7 +258,37 @@ namespace VideoEditor.Ui
                         a.Amount = Math.Max(amount.Min, Math.Min(amount.Max, v));
                 }));
             }
+            if (kind == AnimationKind.Path)
+                AddPathRows(box, id, prefix, effect, Find, Change, local);
             return box;
+        }
+
+        /// <summary>이동 경로 줄: 되돌아오기(한 번 안에서 갔다가 시작 자리로)와 미리 보기에서 고치는 법.</summary>
+        private void AddPathRows(StackPanel box, string id, string prefix, AnimationEffect effect, Func<Clip, ClipAnimation> find, Action<Action<ClipAnimation>, string> change, List<Action> local)
+        {
+            var roundTrip = new CheckBox { Content = "갔다가 돌아옴", VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetAutomationId(roundTrip, prefix + "RoundTrip");
+            roundTrip.ToolTip = "한 번 길이 안에서 앞 절반은 경로를 따라 가고, 뒤 절반은 같은 길로 돌아옵니다(시작 자리에 남음).";
+            roundTrip.Click += (s, e) =>
+            {
+                if (_updating)
+                    return;
+                var value = roundTrip.IsChecked == true;
+                change(a => a.RoundTrip = value, null);
+            };
+            local.Add(() =>
+            {
+                var current = find(_session.Project.FindClip(id));
+                if (current != null)
+                    roundTrip.IsChecked = current.RoundTrip;
+            });
+            box.Children.Add(Row("되돌아오기", roundTrip));
+            var how = UiKit.Label(MotionPaths.CanAddPoints(effect)
+                ? "미리 보기에서 점을 끌어 고칩니다. Shift+누르기는 끝에 점을 더하고, 선을 두 번 누르면 사이에 더하고, 점을 두 번 누르면 뺍니다."
+                : "미리 보기에서 점을 끌어 고칩니다(첫 점은 클립 자리 — 클립을 옮기면 경로도 함께).", true);
+            how.TextWrapping = TextWrapping.Wrap;
+            how.Margin = new Thickness(0, 2, 0, 0);
+            box.Children.Add(how);
         }
     }
 }
