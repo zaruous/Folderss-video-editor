@@ -14,7 +14,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 namespace VideoEditor.UiTests
 {
     /// <summary>
-    /// 미리 보기 틀(#34): Ctrl+누르기로 여러 클립을 고르고 함께 옮기기(실행 취소 한 단계).
+    /// 미리 보기 틀(#34): Ctrl+누르기로 여러 클립을 고르고 함께 옮기기(실행 취소 한 단계), 끄는 동안 커서가 회전한 틀을 따르기.
     /// 포인터는 TransformOverlayTests처럼 리플렉션으로 PointerDown/Move/Up(그리고 Ctrl+누르기는 PointerToggle)을 부른다.
     /// </summary>
     public class PreviewGroupTests
@@ -100,14 +100,16 @@ namespace VideoEditor.UiTests
                     Ui.Snap(window, plugin.ShotFolder, "preview-group-selected");
                 });
 
-                // 사진만 보이는 자리를 눌러 끌면 둘 다 같은 거리만큼(놓기 전에는 그대로)
+                // 사진만 보이는 자리를 눌러 끌면 둘 다 같은 거리만큼(놓기 전에는 그대로, 끄는 동안 커서는 옮기기)
                 ui.Run(() =>
                 {
                     Assert.True((bool)Invoke(overlay, "PointerDown", photoOnly));
+                    Assert.Equal(Cursors.SizeAll, overlay.Cursor);
                     Invoke(overlay, "PointerMove", new Point(photoOnly.X + 60, photoOnly.Y + 3));
                     Assert.Equal(0.0, (double)Get(Photo(window), "X"));
                     Assert.Equal(0.0, (double)Get(Text(window, title), "X"));
                     Assert.StartsWith("2개 클립 함께 옮기기", Status(window));
+                    Assert.Equal(Cursors.SizeAll, overlay.Cursor);
                     Assert.True((bool)Invoke(overlay, "PointerUp"));
                 });
                 var expected = Math.Round(60 / zoom);
@@ -138,6 +140,70 @@ namespace VideoEditor.UiTests
                 ui.Run(() => Assert.True((bool)Invoke(overlay, "PointerToggle", titleCenter)));
                 await ui.WaitUntil(() => (bool)Get(overlay, "HasFrame") && (int)Member(overlay, "GroupCount") == 0, Wait, "하나로");
                 Assert.StartsWith("고르기에서 뺐습니다: " + title, ui.Run(() => Status(window)));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        [EditorFact]
+        public async Task Preview_DragCursor_FollowsTheRotatedFrame()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                const string title = "회전한 틀";
+                await AddText(ui, window, title);
+                var overlay = ui.Run(() => Ui.ById<Canvas>(window, "TransformOverlay"));
+                await ui.WaitUntil(() => (bool)Get(overlay, "HasFrame") && overlay.ActualWidth > 0, Wait, "글자 틀");
+                // 90° 돌린다(Ctrl+Alt+→)
+                ui.Run(() => Key(window, System.Windows.Input.Key.Right, ModifierKeys.Control | ModifierKeys.Alt));
+                await ui.WaitUntil(() => (double)Get(Text(window, title), "Rotation") == 90 && (bool)Get(overlay, "HasFrame"), Wait, "90° 회전");
+
+                ui.Run(() =>
+                {
+                    var edges = (Point[])Invoke(overlay, "EdgePoints");
+                    var corners = (Point[])Invoke(overlay, "HandlePoints");
+                    var center = new Point((corners[0].X + corners[2].X) / 2, (corners[0].Y + corners[2].Y) / 2);
+
+                    // 오른쪽 옆(상자 너비)은 돌린 틀에서 세로 축 — 누를 때도, 끄는 동안 어디로 가도 ↕
+                    Invoke(overlay, "PointerMove", edges[1]);
+                    Assert.Equal(Cursors.SizeNS, overlay.Cursor);
+                    Assert.True((bool)Invoke(overlay, "PointerDown", edges[1]));
+                    Assert.Equal(Cursors.SizeNS, overlay.Cursor);
+                    Invoke(overlay, "PointerMove", new Point(edges[1].X + 80, edges[1].Y + 5));
+                    Assert.Equal(Cursors.SizeNS, overlay.Cursor);
+                    Invoke(overlay, "Cancel");
+
+                    // 모서리(크기): 왼쪽 위 모서리는 90° 돌아 오른쪽 위라 누를 때 ⤢(손잡이 커서와 같음), 포인터가 틀 가운데를 도는 만큼 커서도 돈다
+                    corners = (Point[])Invoke(overlay, "HandlePoints");
+                    Invoke(overlay, "PointerMove", corners[0]);
+                    Assert.Equal(Cursors.SizeNESW, overlay.Cursor);
+                    Assert.True((bool)Invoke(overlay, "PointerDown", corners[0]));
+                    Assert.Equal(Cursors.SizeNESW, overlay.Cursor);
+                    var start = Math.Atan2(corners[0].Y - center.Y, corners[0].X - center.X);
+                    Point Around(double degrees) => new Point(center.X + 150 * Math.Cos(start + degrees * Math.PI / 180), center.Y + 150 * Math.Sin(start + degrees * Math.PI / 180));
+                    foreach (var (turn, cursor) in new[] { (0, Cursors.SizeNESW), (45, Cursors.SizeWE), (90, Cursors.SizeNWSE), (135, Cursors.SizeNS), (180, Cursors.SizeNESW), (-45, Cursors.SizeNS) })
+                    {
+                        Invoke(overlay, "PointerMove", Around(turn));
+                        Assert.True(cursor == overlay.Cursor, "모서리를 " + turn + "° 돌림: " + overlay.Cursor);
+                    }
+                    Invoke(overlay, "Cancel");
+
+                    // 안쪽은 옮기기
+                    Assert.True((bool)Invoke(overlay, "PointerDown", center));
+                    Assert.Equal(Cursors.SizeAll, overlay.Cursor);
+                    Invoke(overlay, "PointerMove", new Point(center.X + 30, center.Y + 30));
+                    Assert.Equal(Cursors.SizeAll, overlay.Cursor);
+                    Invoke(overlay, "Cancel");
+                    // 취소한 끌기는 편집이 아니다
+                    Assert.Equal(0.0, (double)Get(Text(window, title), "X"));
+                    Assert.Equal(1.0, (double)Get(Text(window, title), "Scale"));
+                });
                 Assert.Empty(ui.TakeErrors());
             }
             finally

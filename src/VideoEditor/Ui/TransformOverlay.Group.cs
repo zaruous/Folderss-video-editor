@@ -10,10 +10,11 @@ using VideoEditor.Core;
 namespace VideoEditor.Ui
 {
     /// <summary>
-    /// 미리 보기 틀 — 여러 클립 고르기·함께 옮기기(#34).
+    /// 미리 보기 틀 — 여러 클립 고르기·함께 옮기기와 끄는 동안의 커서(#34).
     /// Ctrl+누르기는 그 자리에 보이는 맨 위 클립을 고르기에 더하거나 뺀다(타임라인의 Ctrl+누르기와 같음).
     /// 둘 이상 고르면 고른 클립마다 점선 틀만 그리고(손잡이 없음), 그 가운데 하나의 안쪽을 끌면 모두 같은 거리만큼 옮긴다 — 놓을 때 편집 한 번(실행 취소 한 단계).
     /// 화면 가운데 붙기는 누른 클립을 기준으로 하고, 화살표도 모두 함께 옮긴다.
+    /// 끄는 동안 커서는 지금 하는 일을 따른다: 옮기기는 ✥, 옆(상자)은 클립의 회전한 축, 모서리(크기)는 그 모서리 커서에서 포인터가 틀 가운데를 도는 만큼.
     /// </summary>
     internal sealed partial class TransformOverlay
     {
@@ -183,6 +184,47 @@ namespace VideoEditor.Ui
                 return null;
             var picked = Pick(point);
             return picked != null && _group.Any(c => c.Id == picked.Id) ? Cursors.SizeAll : null;
+        }
+
+        /// <summary>끌기를 시작했다(<see cref="PointerDown"/> 끝): 누른 손잡이를 기억하고 커서를 그 일에 맞춘다(눌러서 고른 클립을 끌 때도 ✥).</summary>
+        private void StartDragCursor(int hit, Point point)
+        {
+            _dragHandle = hit;
+            Cursor = DragCursor(point);
+        }
+
+        // 누른 손잡이(0~3 모서리, 4 안, 5~8 옆 — Hit의 번호)
+        private int _dragHandle;
+
+        /// <summary>
+        /// 끄는 동안의 커서(45° 단위, 회전한 틀을 따름): 옮기기는 ✥, 옆(상자)은 클립의 회전한 축, 모서리(크기 — 틀 가운데에서 멀어지는 만큼 커짐)는
+        /// 누를 때 그 모서리의 커서이고 포인터가 틀 가운데를 도는 만큼 함께 돈다. 모르는 끌기는 지금 커서 그대로.
+        /// </summary>
+        private Cursor DragCursor(Point point)
+        {
+            var rotation = _clip != null && double.IsFinite(_clip.Rotation) ? _clip.Rotation : 0;
+            switch (_drag)
+            {
+                case 1:
+                    return Cursors.SizeAll;
+                case 2:
+                    var center = Frame().Center;
+                    var now = point - center;
+                    var then = _dragFrom - center;
+                    var turn = now.Length < 1 || then.Length < 1 ? 0 : (Math.Atan2(now.Y, now.X) - Math.Atan2(then.Y, then.X)) * 180 / Math.PI;
+                    return CursorAt(HandleAngles[Math.Max(0, Math.Min(3, _dragHandle))] + rotation + turn);
+                case 3:
+                    return CursorAt(HandleAngles[FirstEdge + (int)_edge] + rotation);
+                default:
+                    return Cursor;
+            }
+        }
+
+        /// <summary>방향(도, 0 = 오른쪽, 시계 방향)의 크기 커서: 45° 단위로 가로 ↔, 대각선 ⤡, 세로 ↕, 대각선 ⤢.</summary>
+        private static Cursor CursorAt(double angle)
+        {
+            var step = (int)Math.Round(((angle % 180) + 180) % 180 / 45) % 4;
+            return step == 0 ? Cursors.SizeWE : step == 1 ? Cursors.SizeNWSE : step == 2 ? Cursors.SizeNS : Cursors.SizeNESW;
         }
     }
 }

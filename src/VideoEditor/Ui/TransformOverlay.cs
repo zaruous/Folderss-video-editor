@@ -329,6 +329,7 @@ namespace VideoEditor.Ui
             _window = Window.GetWindow(this);
             if (_window != null)
                 _window.PreviewKeyDown += OnWindowKey;
+            StartDragCursor(hit, point);
             return true;
         }
 
@@ -379,6 +380,8 @@ namespace VideoEditor.Ui
                     _boxHeight = moved.Height;
             }
             Layout();
+            // 끄는 동안 커서는 지금 하는 일을 따른다(옆은 회전한 틀의 축, 모서리는 포인터가 틀 가운데를 도는 만큼 — TransformOverlay.Group.cs)
+            Cursor = DragCursor(point);
             _commands.Status(_groupMoving ? GroupStatus() : _drag == 1 ? "위치 X " + Math.Round(_x) + " · Y " + Math.Round(_y) + " (놓으면 바뀝니다, Esc는 취소)"
                 : _drag == 2 ? "크기 " + Math.Round(_scale * 100) + "% (놓으면 바뀝니다, Esc는 취소)"
                 : (_edge == BoxEdge.Left || _edge == BoxEdge.Right ? "상자 너비 " + Math.Round(_boxWidth) : "상자 높이 " + Math.Round(_boxHeight)) + "px (놓으면 바뀝니다, Esc는 취소)");
