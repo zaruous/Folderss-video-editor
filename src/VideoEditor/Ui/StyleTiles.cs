@@ -86,6 +86,23 @@ namespace VideoEditor.Ui
             }, TaskScheduler.Default);
         }
 
+        /// <summary>
+        /// 내 스타일 줄(속성 패널 [꾸미기]·미디어 패널 [글자]): 내 스타일이 바뀌면(이 창이든 다른 편집 창이든 — <see cref="EditorServices.TextStylesChanged"/>)
+        /// owner의 Dispatcher에서 rebuild로 다시 읽는다(#34). owner가 화면에 붙어 있는 동안만 듣는다(떼어 낸 패널이 남아 불리지 않게).
+        /// </summary>
+        public static void ListenToMine(EditorServices services, FrameworkElement owner, Action rebuild)
+        {
+            if (services == null)
+                return;
+            EventHandler changed = (s, e) => owner.Dispatcher.BeginInvoke(rebuild);
+            owner.Loaded += (s, e) =>
+            {
+                services.TextStylesChanged -= changed;
+                services.TextStylesChanged += changed;
+            };
+            owner.Unloaded += (s, e) => services.TextStylesChanged -= changed;
+        }
+
         /// <summary>썸네일에서 알파가 <see cref="ThumbnailInkAlpha"/>를 넘는 픽셀의 경계(픽셀 단위). 그런 픽셀이 없으면 그림 전체.</summary>
         // 썸네일마다 칠한 곳은 한 번만 잰다(탭을 볼 때마다 UI 스레드에서 다시 재지 않게) — 썸네일 그림이 캐시에서 빠지면 함께 사라진다
         private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BitmapSource, object> InkCache =

@@ -185,6 +185,12 @@ namespace VideoEditor.Ui
             }, null, mergeKey);
         }
 
+        /// <summary>여러 클립을 한 번에 고친다(실행 취소 한 단계 — 미리 보기에서 함께 옮기기). 없어진 클립은 건너뛴다. 거부되면 까닭을 상태 줄에 알리고 false.</summary>
+        public bool EditClips(IReadOnlyList<string> ids, Action<Project, List<Clip>> change, string mergeKey)
+        {
+            return Run(p => change(p, ids.Select(p.FindClip).Where(c => c != null).ToList()), null, mergeKey);
+        }
+
         public void SetSpeed(string id, double speed)
         {
             Run(p => TimelineEdits.SetSpeed(p, p.FindClip(id), speed), "속도 ×" + UiKit.Number(speed));
@@ -294,10 +300,86 @@ namespace VideoEditor.Ui
             Run(p => ClipLinks.Sync(p, ids.Select(p.FindClip).ToList()), "싱크를 맞췄습니다(사운드를 영상에 맞춰 옮김).");
         }
 
-        /// <summary>[사운드를 파일로 저장…] 미디어 패널: 파일 전체의 소리를 다시 인코딩하지 않고 꺼낸다(안 되면 WAV).</summary>
+        /// <summary>[사운드를 파일로 저장…] 미디어 패널(하나): 파일 전체의 소리를 다시 인코딩하지 않고 꺼낸다(안 되면 WAV).</summary>
         public Task SaveSound(MediaInfo media)
         {
-            return SaveSound(media.Path, media.AudioCodec, 0, 0, 1, Path.GetFileNameWithoutExtension(media.Path) + " 사운드");
+            return SaveSounds(new[] { media });
+        }
+
+        /// <summary>
+        /// [사운드를 파일로 저장…] 미디어 패널: 고른 동영상·오디오 파일마다 파일 전체의 소리를 다시 인코딩하지 않고 꺼낸다(안 되면 WAV — #34).
+        /// 하나면 저장 창, 여럿이면 폴더를 골라 "원본 이름 사운드.확장자"로(있는 파일은 덮지 않고 " (2)"…). 소리가 없는 것(사진·소리 없는 동영상)은 건너뛴다.
+        /// 진행 창에서 진행률을 보이고 취소할 수 있다(<see cref="SoundSaveDialog"/>). 저장한 파일은 미디어에 더한다.
+        /// </summary>
+        public async Task SaveSounds(IReadOnlyList<MediaInfo> media)
+        {
+            var sounds = media.Where(SoundExtract.HasSound).ToList();
+            if (sounds.Count == 0)
+            {
+                Status("소리가 있는 동영상·오디오 파일을 고르세요.");
+                return;
+            }
+            if (sounds.Count == 1)
+            {
+                var one = sounds[0];
+                await SaveSound(one.Path, one.AudioCodec, 0, 0, 1, Path.GetFileNameWithoutExtension(one.Path) + " 사운드", null, one.DurationSeconds);
+                return;
+            }
+            try
+            {
+                _player.Stop();
+                var tool = await NeedTool();
+                if (tool == null)
+                    return;
+                var start = _session.FilePath != null ? Path.GetDirectoryName(_session.FilePath) : Path.GetDirectoryName(sounds[0].Path);
+                var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "사운드 " + sounds.Count + "개를 저장할 폴더", InitialDirectory = SafeFolder(start, Environment.SpecialFolder.MyMusic) };
+                if (dialog.ShowDialog(UiKit.OwnerOf(_owner)) != true)
+                    return;
+                var folder = dialog.FolderName;
+                // 이름이 겹치지 않게(있는 파일·이번에 쓸 이름 — 그대로 담지 못하면 쓰는 .wav 이름까지)
+                var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                bool Taken(string name) => used.Contains(name) || used.Contains(Path.ChangeExtension(name, ".wav"))
+                                           || File.Exists(Path.Combine(folder, name)) || File.Exists(Path.Combine(folder, Path.ChangeExtension(name, ".wav")));
+                var jobs = new List<SoundSaveDialog.Job>();
+                foreach (var item in sounds)
+                {
+                    var name = SoundExtract.Unique(SoundExtract.FileName(item.Path, item.AudioCodec), Taken);
+                    used.Add(name);
+                    used.Add(Path.ChangeExtension(name, ".wav"));
+                    var output = Path.Combine(folder, name);
+                    jobs.Add(new SoundSaveDialog.Job(name, (progress, cancellation) =>
+                        SoundExtractor.Extract(tool, item.Path, item.AudioCodec, output, 0, 0, 1, cancellation, null, progress, item.DurationSeconds)));
+                }
+                var skipped = media.Count - sounds.Count;
+                await SaveSoundJobs(jobs, folder, saved => "사운드 " + saved.Count + "개를 저장하고 미디어에 더했습니다: " + folder
+                                                           + (skipped > 0 ? " (소리가 없는 " + skipped + "개는 건너뜀)" : ""));
+            }
+            catch (Exception ex)
+            {
+                Status("사운드를 저장하지 못했습니다: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 저장 진행 창(<see cref="SoundSaveDialog"/>)으로 jobs를 차례로 저장하고(진행률·취소), 저장한 파일을 미디어에 더해 상태 줄에 알린다.
+        /// 취소해도 그 전에 다 저장한 파일은 미디어에 더한다. done은 모두 저장했을 때의 알림 글.
+        /// </summary>
+        private async Task SaveSoundJobs(IReadOnlyList<SoundSaveDialog.Job> jobs, string folder, Func<IReadOnlyList<string>, string> done)
+        {
+            var dialog = new SoundSaveDialog(jobs, folder);
+            var owner = UiKit.OwnerOf(_owner);
+            if (owner != null && owner.IsLoaded)
+                dialog.Owner = owner;
+            dialog.ShowDialog();
+            if (dialog.Saved.Count > 0)
+                await ImportPaths(dialog.Saved.ToArray(), null, -1);
+            // 시작하기 전에 닫은 창도 취소
+            if (dialog.Cancelled || dialog.Saved.Count == 0 && dialog.Errors.Count == 0)
+                Status("사운드 저장을 취소했습니다." + (dialog.Saved.Count > 0 ? " 먼저 저장한 " + dialog.Saved.Count + "개는 미디어에 더했습니다." : ""));
+            else if (dialog.Errors.Count > 0)
+                Status("사운드를 저장하지 못했습니다: " + string.Join(" / ", dialog.Errors));
+            else
+                Status(done(dialog.Saved));
         }
 
         /// <summary>[사운드를 파일로 저장…] 타임라인: 그 클립 구간(In~Out)만, 속도를 바꿨으면 속도대로(WAV). 음량·페이드가 있으면 넣을지 묻는다(넣으면 WAV).</summary>
@@ -317,7 +399,8 @@ namespace VideoEditor.Ui
             return SaveSound(clip.Path, Project.FindMedia(clip.Path)?.AudioCodec, rate.ToSeconds(clip.SourceIn), rate.ToSeconds(clip.SourceOut - clip.SourceIn), clip.Speed, name, volume);
         }
 
-        private async Task SaveSound(string source, string codec, double from, double seconds, double speed, string name, string volume = null)
+        /// <summary>사운드 하나를 저장 창에서 고른 파일로(진행 창 — 진행률·취소). sourceSeconds는 끝까지 꺼낼 때 진행률의 분모(원본 길이).</summary>
+        private async Task SaveSound(string source, string codec, double from, double seconds, double speed, string name, string volume = null, double sourceSeconds = 0)
         {
             try
             {
@@ -340,12 +423,15 @@ namespace VideoEditor.Ui
                 };
                 if (dialog.ShowDialog(UiKit.OwnerOf(_owner)) != true)
                     return;
-                Status("사운드를 꺼내는 중… " + Path.GetFileName(dialog.FileName));
-                var saved = await SoundExtractor.Extract(tool, source, codec, dialog.FileName, from, seconds, speed, CancellationToken.None, volume);
-                var fallback = !string.Equals(saved, dialog.FileName, StringComparison.OrdinalIgnoreCase);
-                await ImportPaths(new[] { saved }, null, -1);
-                Status("사운드를 저장하고 미디어에 더했습니다: " + saved
-                       + (fallback ? " (원본 그대로 담을 수 없어 WAV로 저장)" : copy && !saved.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ? " (원본 그대로)" : ""));
+                var chosen = dialog.FileName;
+                var job = new SoundSaveDialog.Job(Path.GetFileName(chosen), (progress, cancellation) =>
+                    SoundExtractor.Extract(tool, source, codec, chosen, from, seconds, speed, cancellation, volume, progress, sourceSeconds));
+                await SaveSoundJobs(new[] { job }, Path.GetDirectoryName(chosen), saved =>
+                {
+                    var fallback = !string.Equals(saved[0], chosen, StringComparison.OrdinalIgnoreCase);
+                    return "사운드를 저장하고 미디어에 더했습니다: " + saved[0]
+                           + (fallback ? " (원본 그대로 담을 수 없어 WAV로 저장)" : copy && !saved[0].EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ? " (원본 그대로)" : "");
+                });
             }
             catch (Exception ex)
             {

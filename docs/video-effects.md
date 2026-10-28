@@ -517,6 +517,8 @@ color(1 × 줄 수) → geq(줄마다 밀기, 빨강·파랑 번짐) → scale(�
   - 자동화 id: `EffectsTab`(탭)·`EffectsTabScroll`, `VideoEffectGroup`(묶음), `VideoEffectList`·`VideoEffect_<id>`, `VideoEffectApplyButton`,
     새 효과 `VideoEffectNew_<id>`("새로")·`VideoEffectNewNotice`·`VideoEffectNewText`·`VideoEffectNewShow`([보기])·`VideoEffectNewDismiss`([확인])·`EffectsTabNewMark`(머리글 점),
     칸 미리 보기 `EffectHoverPreview`(미리 보기 화면의 이름표). [전환] 탭은 `TransitionsTab`·`TransitionsTabScroll`(그 안의 전환 효과 id는 [전환 효과](transitions.md)와 같다).
+- **타임라인 클립**(#34): 효과가 든 동영상·사진 클립의 오른쪽 위(어긋남 배지가 있으면 그 왼쪽)에 어두운 반투명 바탕의 흰 **"✦"** 배지(둘 이상이면 "✦3" — 모르는 효과도 셈). 클립이 좁아 이름 자리(왼쪽 30px)까지 덮어야 하면 그리지 않는다.
+  화면 낭독 이름 끝에 "· 효과 스캔 라인, RGB 분할"(그리는 차례 — 모르는 효과는 "알 수 없는 효과"). 글은 Core `VideoEffectLabels`(`Badge`·`Spoken`), 그리기는 `TimelineCanvas.Effects.cs`.
 - 속성 패널 **[효과]** 탭(동영상·사진 클립만): 효과마다 이름과 그 옆에 작게 묶음(`EffectGroup<n>`), [위로]·[아래로](`EffectMoveUp<n>`·`EffectMoveDown<n>` — 그리는 순서, 뒤 효과가 위에 그림, 실행 취소 한 단계, 맨 위·맨 아래에서는 꺼짐), [빼기], 매개변수 줄(숫자는 슬라이더, 고르기는 콤보 `Effect<n>_<키>`), [사람에게만](사람에게만이 있는 효과만). 사람에게만을 켠 효과가 있으면 인물 마스크 상태와 [인물 마스크 만들기].
 
 ### 새 효과 표시
@@ -591,6 +593,8 @@ color(1 × 줄 수) → geq(줄마다 밀기, 빨강·파랑 번짐) → scale(�
 - `ShakeZoomRenderTests`(FFmpeg): 표지(흰 네모)의 자리·크기가 움직임 계산과 맞음(흔들림 ±0.6~0.8px, 줌 배율 ±0.025), 지진이 홱홱 뛰고 흐림이 가장자리를 번지게 함,
   테두리 사진으로 빈·늘인 가장자리 없음, 맞춤의 빈 곳은 아래 트랙 그대로·그림 자리는 꽉 참, 한 장 그리기 = 이어 그리기, xfade·재생(수식 전환 묶음)에서 멈추지 않음, 썸네일 띠, 1080p 걸리는 시간.
 - `VideoEffectsTests`(화면)의 흔들림 시험: 카메라 흔들림에는 매개변수 줄만 있고 [사람에게만]은 없음.
+- 타임라인 배지(#34): Core `VideoEffectLabelsTests`(효과가 없으면 없음, "✦"·"✦3", 이름은 그리는 차례·모르는 효과 포함·순서를 바꾸면 따라감, 효과를 넣을 수 없는 클립은 없음),
+  화면 `EffectBadgeTests.TimelineClip_ShowsEffectBadge_AndSpeaksEffectNames`(스캔 라인을 넣으면 클립 오른쪽 위에 배지·이름 끝에 "· 효과 스캔 라인", 하나 더 넣으면 배지가 넓어지고 이름 둘, 실행 취소로 다 빼면 사라짐 — 캡처 `timeline-effect-badge`, 작성만 함).
 
 ### 쇼크웨이브 방향 지도: 칸 크기와 늘이기 (#29 실측, 4코어 리눅스·FFmpeg 9.0)
 

@@ -675,6 +675,7 @@ namespace VideoEditor.Ui
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             panel.Children.Add(ContentBox(id, "PropText", "글자 내용"));
+            panel.Children.Add(LongTextNotice(id, "PropTextLongNotice"));
             panel.Children.Add(NumberRow("글자 크기", "PropFontSize", 8, 400, "px", id, c => c.FontSize, (c, v) => c.FontSize = Math.Max(4, v)));
             var colors = new ComboBox { Margin = new Thickness(0, 4, 0, 4) };
             AutomationProperties.SetAutomationId(colors, "PropTextColor");
@@ -778,6 +779,27 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
+        /// 긴 글 안내([글자]·[꾸미기] 탭 위): 글이 2,000자를 넘어 drawtext 대체 경로로 그릴 때만 보이고, 이 클립이 쓰는 꾸밈 가운데 그리지 못하는 것을 적는다(<see cref="StyledTextFallback"/>).
+        /// 나눠 그리지 않고 알리는 까닭은 <see cref="StyledTextFallback"/>에 있다.
+        /// </summary>
+        private UIElement LongTextNotice(string id, string automationId)
+        {
+            var notice = UiKit.Label("", true);
+            notice.TextWrapping = TextWrapping.Wrap;
+            notice.Margin = new Thickness(0, 0, 0, 6);
+            notice.Visibility = Visibility.Collapsed;
+            AutomationProperties.SetAutomationId(notice, automationId);
+            _refreshers.Add(() =>
+            {
+                var text = StyledTextFallback.Notice(_session.Project.FindClip(id));
+                notice.Text = text ?? "";
+                AutomationProperties.SetName(notice, text ?? "");
+                notice.Visibility = text == null ? Visibility.Collapsed : Visibility.Visible;
+            });
+            return notice;
+        }
+
+        /// <summary>
         /// [꾸미기] 꾸민 글자 스타일 — 맨 위 스타일 모음(미리 만든 스타일 단추)과 내 스타일(저장한 스타일 단추·[내 스타일로 저장]), 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬),
         /// 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도), 윤곽선 묶음(켜기·색·두께·이음), 그림자 묶음(켜기·색·거리·방향·흐림·불투명도),
         /// 광선 묶음(켜기·색·크기·불투명도), 반사 묶음(켜기·크기·간격·불투명도), 맨 끝에 휘기 묶음(종류·정도).
@@ -786,6 +808,8 @@ namespace VideoEditor.Ui
         private UIElement StyleTab(string id, bool art = false)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
+            if (!art)
+                panel.Children.Add(LongTextNotice(id, "StyleLongTextNotice"));
             panel.Children.Add(Section("스타일 모음"));
             panel.Children.Add(PresetGallery(id));
             panel.Children.Add(MyStyles(id));
@@ -1269,7 +1293,7 @@ namespace VideoEditor.Ui
         /// <summary>
         /// 내 스타일(스타일 모음 아래): 저장한 스타일 단추(설정 textStyles — <see cref="TextStyleLibrary"/>)와 [내 스타일로 저장]. 단추는 스타일 모음과 같은 틀·썸네일이고
         /// 누르면 스타일 모음처럼 글자 내용·크기는 그대로 두고 스타일을 통째로 바꾼다(실행 취소 한 단계). 오른쪽 클릭 [지우기]로 지운다 —
-        /// 저장·지우기는 프로젝트가 아닌 플러그인 설정이라 실행 취소에 남지 않는다. 탭이 보일 때마다 설정을 다시 읽는다(다른 편집 창에서 저장·지운 것도 보이게).
+        /// 저장·지우기는 프로젝트가 아닌 플러그인 설정이라 실행 취소에 남지 않는다. 탭이 보일 때마다, 그리고 어느 편집 창에서든 내 스타일이 바뀌면 곧바로 설정을 다시 읽는다.
         /// </summary>
         private UIElement MyStyles(string id)
         {
@@ -1331,6 +1355,7 @@ namespace VideoEditor.Ui
                 shown = _services != null;
                 Rebuild();
             };
+            StyleTiles.ListenToMine(_services, box, Rebuild);
             Rebuild();
             var save = UiKit.TextButton("내 스타일로 저장", "StyleSaveMine", () => SaveMine(id, Rebuild));
             save.Margin = new Thickness(0, 0, 0, 6);
