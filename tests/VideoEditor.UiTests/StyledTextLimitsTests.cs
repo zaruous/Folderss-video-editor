@@ -192,5 +192,98 @@ namespace VideoEditor.UiTests
             var wide = await Task.Run(() => ((double Width, double Height))measure.Invoke(rasterizer, new[] { cases[cases.Length - 1].Request }));
             Assert.True(wide.Width > 1920 * 4, "넓은 글 " + wide.Width);
         }
+
+        // ---------- 상자 0/0 기준 그림 ----------
+
+        /// <summary>기준 그림 요청: 이름, 글, 스타일(JSON 조각). 글자 80px, 캔버스 1280×720, 효과 배율 1.</summary>
+        private static readonly (string Name, string Text, string Style)[] Baseline =
+        {
+            ("plain", "가나다 ABC\n두 번째 줄  ", null),
+            ("effects", "가나다 ABC\n두 번째 줄  ", "\"Outline\":{\"Enabled\":true,\"Width\":6,\"Join\":\"Miter\"},\"Shadow\":{\"Enabled\":true,\"Distance\":10,\"Angle\":45,\"Blur\":6,\"Opacity\":0.6},\"Align\":\"Right\""),
+            ("warp", "가나다 ABC\n두 번째 줄  ", "\"Warp\":{\"Kind\":\"ArchUp\",\"Amount\":60}"),
+            ("spaced", "가나다 ABC\n두 번째 줄  ", "\"LetterSpacing\":300"),
+            ("glow-gradient", "빛나는 Glow", "\"Bold\":true,\"Fill\":{\"Kind\":\"Linear\",\"Colors\":[\"#FF0000\",\"#0000FF\"],\"Angle\":30},\"Glow\":{\"Enabled\":true,\"Size\":20,\"Opacity\":0.8}"),
+            ("reflection-italic", "비친 글 Ref", "\"Italic\":true,\"Reflection\":{\"Enabled\":true,\"Size\":60,\"Gap\":8,\"Opacity\":0.5}"),
+            ("hollow-wave", "속 빈 물결", "\"Fill\":{\"Kind\":\"None\",\"Colors\":[\"#FFFFFF\"]},\"Outline\":{\"Enabled\":true,\"Width\":4},\"Warp\":{\"Kind\":\"Wave\",\"Amount\":-50}"),
+            ("lines", "첫 줄\n\n셋째 줄 길게 Qg", "\"LineSpacing\":0.7,\"Align\":\"Left\""),
+        };
+
+        /// <summary>
+        /// 기준 그림의 픽셀 요약(글꼴 판 → 이름 → "폭x높이 SHA-256"). 글자 상자가 생기기 전 그리개(Version 7, 커밋 9bc67f2)로 그린 것 —
+        /// 지금 그리개(Version 10)와 바이트까지 같은 것을 확인한 뒤 적었다(Windows 11, 맑은 고딕 6.69, WPF 8.0.3226). 픽셀은 글꼴 파일에 따라 다르므로 판마다 적는다.
+        /// </summary>
+        private static readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, string>> BaselineDigests =
+            new System.Collections.Generic.Dictionary<string, System.Collections.Generic.Dictionary<string, string>>
+            {
+                ["6.69"] = new System.Collections.Generic.Dictionary<string, string>
+                {
+                    ["plain"] = "436x194 7d8f8c80327c1bdeef43e2581bcad80d68f7fbe28b65c39147d100dc4f04331b",
+                    ["effects"] = "486x246 c1a03c2c5273cc183f4f40ac42d14f991e796fbd975f334e75c7947bac20b3e3",
+                    ["warp"] = "436x282 50340baedd968d9bfde36a4330542caffba39f305914dc7e0413079c7f0e0e0f",
+                    ["spaced"] = "604x194 b467d5a041dcf773858634e962e8a29da921a4d375f141bf3a6387a8deda34df",
+                    ["glow-gradient"] = "524x158 6506b5bb277ba07fb797b53baac4cb8f075a2ed59a3a183a9e55775026642394",
+                    ["reflection-italic"] = "460x230 c931d4d4f4616c9c3b46b19abcac079bb4a0af41cb8b4aa93969276fdc28ab36",
+                    ["hollow-wave"] = "388x116 851c63812f12ea07deacd793b021ddc6bf94d0973d1fc1eb91988f64bce3229d",
+                    ["lines"] = "598x222 2eef2de9dbf8d1f36700feed33ad56787a3d40cb6f441cba7735bfad8624cc27"
+                }
+            };
+
+        /// <summary>그린 PNG의 픽셀 요약: "폭x높이 " + SHA-256(폭·높이(int32 리틀 엔디언) + BGRA(알파를 곱하지 않은 값)).</summary>
+        private static async Task<string> RenderDigest(object rasterizer, object request, string name)
+        {
+            var folder = System.IO.Path.Combine(PluginUnderTest.Load(UiThread.Instance).Root, "styled-text-limits");
+            System.IO.Directory.CreateDirectory(folder);
+            var path = System.IO.Path.Combine(folder, name + ".png");
+            await Task.Run(() =>
+            {
+                try
+                {
+                    rasterizer.GetType().GetMethod("Render").Invoke(rasterizer, new[] { request, path, (object)System.Threading.CancellationToken.None });
+                }
+                catch (System.Reflection.TargetInvocationException e)
+                {
+                    throw e.InnerException;
+                }
+            });
+            return UiThread.Instance.Run(() =>
+            {
+                using (var stream = System.IO.File.OpenRead(path))
+                {
+                    var frame = new System.Windows.Media.Imaging.PngBitmapDecoder(stream, System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
+                        System.Windows.Media.Imaging.BitmapCacheOption.OnLoad).Frames[0];
+                    var bgra = new System.Windows.Media.Imaging.FormatConvertedBitmap(frame, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+                    var data = new byte[8 + bgra.PixelWidth * bgra.PixelHeight * 4];
+                    BitConverter.GetBytes(bgra.PixelWidth).CopyTo(data, 0);
+                    BitConverter.GetBytes(bgra.PixelHeight).CopyTo(data, 4);
+                    bgra.CopyPixels(new Int32Rect(0, 0, bgra.PixelWidth, bgra.PixelHeight), data, bgra.PixelWidth * 4, 8);
+                    return bgra.PixelWidth + "x" + bgra.PixelHeight + " " + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data)).ToLowerInvariant();
+                }
+            });
+        }
+
+        /// <summary>
+        /// 상자 0/0이면 예전과 같다(#34 시험 보강): 상자 0/0인 요청이 세로 정렬(가운데·아래)과 상관없이 같은 그림이고, 그 그림이 글자 상자가 생기기 전 그리개로 그린
+        /// 기준 그림의 요약과 같다 — 새 코드끼리만 견주면 상자를 다루는 배치가 두 요청을 함께 바꿔도 알아채지 못했다.
+        /// 기준이 없는 글꼴 판(다른 PC)이면 요약을 출력만 한다(그 판의 기준으로 더하려면 이 값을 확인한 뒤 BaselineDigests에).
+        /// 그리는 방식을 일부러 바꿨으면(그리개 Version을 올림) 기준도 새 그림으로 바꾼다.
+        /// </summary>
+        [UiFact]
+        public async Task Rasterizer_ZeroBox_MatchesThePreBoxBaselineDigest()
+        {
+            var rasterizer = NewRasterizer();
+            var font = UiThread.Instance.Run(() => new System.Windows.Media.GlyphTypeface(new Uri(System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "malgun.ttf"))).Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            BaselineDigests.TryGetValue(font, out var expected);
+            _out.WriteLine("맑은 고딕 " + font + (expected == null ? " — 기준 없음(요약만 출력)" : ""));
+            foreach (var (name, text, style) in Baseline)
+            {
+                var plain = await RenderDigest(rasterizer, Request(rasterizer, text, style, canvasWidth: 1280, canvasHeight: 720), "baseline-" + name);
+                var zero = await RenderDigest(rasterizer, Request(rasterizer, text, style, 0, 0, "Bottom", 1280, 720), "baseline-zero-" + name);
+                _out.WriteLine(name + " " + plain);
+                Assert.Equal(plain, zero);
+                if (expected != null)
+                    Assert.True(expected[name] == plain, name + ": 기준 그림과 다르다 — 기준 " + expected[name] + " · 지금 " + plain);
+            }
+        }
     }
 }
