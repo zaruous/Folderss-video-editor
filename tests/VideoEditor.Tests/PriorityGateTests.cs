@@ -88,9 +88,13 @@ namespace VideoEditor.Tests
             var order = new List<string>();
             Task Draw(string name, bool urgent)
             {
-                return Task.Run(async () =>
+                // 줄은 부르는 순간 선다 — Task.Run 안에서 서면 다른 시험이 스레드 풀을 붙잡고 있을 때 줄 서는 차례 자체가 늦어진다
+                var entered = gate.WaitAsync(urgent);
+                return Run();
+
+                async Task Run()
                 {
-                    await gate.WaitAsync(urgent);
+                    await entered;
                     try
                     {
                         lock (order)
@@ -101,17 +105,16 @@ namespace VideoEditor.Tests
                     {
                         gate.Release();
                     }
-                });
+                }
             }
             var builtIns = Enumerable.Range(0, 64).Select(i => Draw("builtin" + i, false)).ToList();
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (gate.Waiting < 61 && DateTime.UtcNow < deadline)
-                await Task.Delay(1);
+            Assert.Equal(61, gate.Waiting);
             var user = Draw("user", true);
             await Task.WhenAll(builtIns.Append(user));
             var position = order.IndexOf("user");
             _out.WriteLine("사용자 효과를 그린 차례: " + (position + 1) + "번째(모두 " + order.Count + ")");
-            Assert.InRange(position, 3, 6);
+            // 처음 셋 다음 — 이어지는 일은 스레드 풀에서 돌아, 같은 때 자리를 내놓은 다른 둘이 먼저 적힐 수 있다(줄 선 61개보다는 한참 앞)
+            Assert.InRange(position, 3, 9);
         }
     }
 }

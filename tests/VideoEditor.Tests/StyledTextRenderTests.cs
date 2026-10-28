@@ -323,11 +323,15 @@ namespace VideoEditor.Tests
         [Fact]
         public void Key_CoversEveryProperty()
         {
-            // 요청·스타일에 필드를 더하고 키에 넣기를 잊으면 여기서 걸린다(예전 PNG를 잘못 다시 쓰게 됨). 아트 모양·애니메이션 장도 채워 그 필드까지 본다
-            TextImageRequest WithArt()
+            // 요청·스타일에 필드를 더하고 키에 넣기를 잊으면 여기서 걸린다(예전 PNG를 잘못 다시 쓰게 됨). 아트 모양·애니메이션 장도 채워 그 필드까지 본다.
+            // 아트의 2·3단계 값은 그 값을 쓰는 모양에서만 키에 적으므로(1단계 모양의 키·이미 그린 PNG를 지키려고) 그 모양에서 본다 — 꼬리는 말풍선, 그림 글은 스티커.
+            // 스티커 이름은 그림에 영향이 없어 키에 없다
+            var kindFor = new Dictionary<string, ArtKind> { { "Art.TailX", ArtKind.Bubble }, { "Art.TailY", ArtKind.Bubble }, { "Art.StickerSvg", ArtKind.Sticker } };
+            var notDrawn = new HashSet<string> { "Art.StickerName" };
+            TextImageRequest WithArt(ArtKind kind = ArtKind.Rectangle)
             {
                 var r = Request();
-                r.Art = new ArtShape();
+                r.Art = new ArtShape { Kind = kind };
                 r.Animation = new TextAnimationFrame
                 {
                     In = new ClipAnimation { Kind = AnimationKind.In, Effect = AnimationEffect.Typewriter, Unit = AnimationUnit.Character, Duration = 10 },
@@ -338,12 +342,16 @@ namespace VideoEditor.Tests
                 };
                 return r;
             }
-            var baseline = WithArt().Key(1);
             var paths = PropertyPaths(typeof(TextImageRequest), new List<PropertyInfo>()).ToList();
             Assert.True(paths.Count >= 43, "속성 " + paths.Count + "개");
             foreach (var path in paths)
             {
-                var request = WithArt();
+                var name = string.Join(".", path.Select(p => p.Name));
+                if (notDrawn.Contains(name))
+                    continue;
+                var kind = kindFor.TryGetValue(name, out var used) ? used : ArtKind.Rectangle;
+                var baseline = WithArt(kind).Key(1);
+                var request = WithArt(kind);
                 object owner = request;
                 foreach (var property in path.Take(path.Count - 1))
                     owner = property.GetValue(owner);
