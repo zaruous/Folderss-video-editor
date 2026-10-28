@@ -307,7 +307,10 @@ namespace VideoEditor.Ui
             try
             {
                 var token = _cancel.Token;
-                await Task.Run(() => Exporter.Export(tool, _project, settings, progress, token, _services.TextRasterizer), token);
+                // 애니메이션 장을 그리는 동안(FFmpeg를 띄우기 전)은 그린 수를 보인다
+                void Drawing(int done, int total) => Dispatcher.BeginInvoke(new Action(() =>
+                    _status.Text = string.Format("애니메이션을 그리는 중… {0}/{1} ({2:0}초)", done, total, watch.Elapsed.TotalSeconds)));
+                await Task.Run(() => Exporter.Export(tool, _project, settings, progress, token, _services.TextRasterizer, Drawing), token);
                 ExportedPath = path;
                 _status.Text = "내보냈습니다: " + path + string.Format(" ({0:0.0}MB, {1:0.0}초)", new FileInfo(path).Length / 1048576.0, watch.Elapsed.TotalSeconds);
                 _openFolder.Visibility = Visibility.Visible;

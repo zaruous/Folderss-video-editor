@@ -1292,6 +1292,22 @@ namespace VideoEditor.Ui
             _player.Play(Project, _session.Playhead >= Project.Duration ? 0 : _session.Playhead);
         }
 
+        /// <summary>클립 구간만 재생한다(속성 [애니메이션] 탭의 [미리 보기]) — 재생 헤드를 클립 시작으로 옮기고 클립 끝에서 멈춘다.</summary>
+        public void PlayClip(string id)
+        {
+            var clip = Project.FindClip(id);
+            if (clip == null)
+                return;
+            if (_services.Tool == null)
+            {
+                FfmpegSetup();
+                return;
+            }
+            _player.Stop();
+            _session.Playhead = clip.Start;
+            _player.Play(Project, clip.Start, clip.End);
+        }
+
         public void StopPlayback()
         {
             _player.Stop();
