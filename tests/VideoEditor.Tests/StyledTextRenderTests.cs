@@ -347,7 +347,8 @@ namespace VideoEditor.Tests
             foreach (var path in paths)
             {
                 var name = string.Join(".", path.Select(p => p.Name));
-                if (notDrawn.Contains(name))
+                // 이동 경로의 점·되돌아오기(overlay)와 색 바꾸기·광선의 색(FFmpeg 체인)은 글자별 장(그리개 PNG)에 영향이 없어 키에 없다
+                if (notDrawn.Contains(name) || name.StartsWith("Animation.", StringComparison.Ordinal) && (name.EndsWith(".Points", StringComparison.Ordinal) || name.EndsWith(".RoundTrip", StringComparison.Ordinal) || name.EndsWith(".Color", StringComparison.Ordinal)))
                     continue;
                 var kind = kindFor.TryGetValue(name, out var used) ? used : ArtKind.Rectangle;
                 var baseline = WithArt(kind).Key(1);
@@ -394,6 +395,15 @@ namespace VideoEditor.Tests
                 return ((string)value ?? "").StartsWith("#", StringComparison.Ordinal) ? "#123456" : "다른 값";
             if (type == typeof(List<string>))
                 return new List<string>((List<string>)value) { "#123456" };
+            // 다른 목록(글자 전용 강조 등)은 원소를 하나 더한다 — 원소가 늘면 키가 달라져야 한다
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>))
+            {
+                var list = (System.Collections.IList)Activator.CreateInstance(type);
+                foreach (var item in (System.Collections.IEnumerable)value ?? Array.Empty<object>())
+                    list.Add(item);
+                list.Add(Activator.CreateInstance(type.GetGenericArguments()[0]));
+                return list;
+            }
             if (type.IsEnum)
             {
                 var values = Enum.GetValues(type);

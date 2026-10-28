@@ -1041,7 +1041,7 @@ namespace VideoEditor.UiTests
             var art = request.GetType().GetProperty("Art").GetValue(request);
             var scale = (double)request.GetType().GetProperty("EffectScale").GetValue(request);
             var geometry = art.GetType().Assembly.GetType("VideoEditor.Core.ArtGeometry", true);
-            var outline = (System.Collections.IEnumerable)geometry.GetMethod("Outline").Invoke(null, new[] { art, (object)scale });
+            var outline = (System.Collections.IEnumerable)geometry.GetMethod("Outline", new[] { art.GetType(), typeof(double) }).Invoke(null, new[] { art, (object)scale });
             double area = 0, perimeter = 0;
             foreach (System.Collections.IEnumerable polygon in outline)
             {

@@ -37,6 +37,22 @@ namespace VideoEditor.UiTests
         }
 
         /// <summary>사진(red.png)을 넣고 크기 50%로 해 고른다 — 틀 위쪽 회전 손잡이가 미리 보기 안에 보이게.</summary>
+        /// <summary>
+        /// 속성 [화면] 탭의 칸을 고르고 화면에 붙어 보일 때까지 기다린다 — 클립을 고른 뒤 패널을 다시 만드는 동안 먼저 찾은 칸은 화면에서 떨어져
+        /// 키를 누를 수 없다(PresentationSource 없음). 글자 클립은 [글자] 탭이 먼저 열린다.
+        /// </summary>
+        private static Task<TextBox> VisualField(UiThread ui, Window window, string id)
+        {
+            return ui.WaitFor(() =>
+            {
+                var visual = Ui.ById<TabControl>(window, "PropertyTabs")?.Items.OfType<TabItem>().FirstOrDefault(t => t.Header as string == "화면");
+                if (visual != null && !visual.IsSelected)
+                    visual.IsSelected = true;
+                var box = Ui.ById<TextBox>(window, id);
+                return box != null && box.IsVisible && PresentationSource.FromVisual(box) != null ? box : null;
+            }, Wait, id + " 칸");
+        }
+
         private static async Task<(Window Window, Canvas Overlay)> PhotoAtHalf(UiThread ui, PluginUnderTest plugin)
         {
             var window = await Open(ui, plugin);
@@ -50,10 +66,9 @@ namespace VideoEditor.UiTests
             });
             await ui.WaitUntil(() => Clips(window).Count == 1, Wait, "클립 추가");
             ui.Run(() => SelectClip(window, n => n.Contains("red.png")));
-            await ui.WaitFor(() => Ui.ById<TextBox>(window, "PropScale"), Wait, "크기 칸");
+            var box = await VisualField(ui, window, "PropScale");
             ui.Run(() =>
             {
-                var box = Ui.ById<TextBox>(window, "PropScale");
                 Ui.Focus(box);
                 box.Text = "50";
                 Ui.Press(box, System.Windows.Input.Key.Enter);
@@ -168,10 +183,10 @@ namespace VideoEditor.UiTests
                 });
                 await ui.WaitUntil(() => Clips(window).Any(n => n.Contains(text)), Wait, "글자 클립");
                 ui.Run(() => SelectClip(window, n => n.Contains(text)));
-                await ui.WaitUntil(() => (string)Get(Get(Session(window), "PrimaryClip"), "Text") == text && Ui.ById<TextBox>(window, "PropX") is TextBox box && box.IsVisible, Wait, "글자 고름");
+                await ui.WaitUntil(() => (string)Get(Get(Session(window), "PrimaryClip"), "Text") == text, Wait, "글자 고름");
+                var box = await VisualField(ui, window, "PropX");
                 ui.Run(() =>
                 {
-                    var box = Ui.ById<TextBox>(window, "PropX");
                     Ui.Focus(box);
                     box.Text = "600";
                     Ui.Press(box, System.Windows.Input.Key.Enter);

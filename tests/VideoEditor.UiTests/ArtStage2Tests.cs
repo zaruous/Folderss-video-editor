@@ -65,7 +65,7 @@ namespace VideoEditor.UiTests
         private static Point TailInside(object art)
         {
             var geometry = art.GetType().Assembly.GetType("VideoEditor.Core.ArtGeometry", true);
-            var outline = (IList)geometry.GetMethod("Outline").Invoke(null, new[] { art, (object)1.0 });
+            var outline = (IList)geometry.GetMethod("Outline", new[] { art.GetType(), typeof(double) }).Invoke(null, new[] { art, (object)1.0 });
             var tail = ((IEnumerable)outline[1]).Cast<ValueTuple<double, double>>().ToList();
             var tip = (ValueTuple<double, double>)geometry.GetMethod("TailTip").Invoke(null, new[] { art, (object)1.0 });
             var at = tail.IndexOf(tip);

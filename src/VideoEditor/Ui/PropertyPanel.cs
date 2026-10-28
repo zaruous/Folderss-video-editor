@@ -1693,7 +1693,9 @@ namespace VideoEditor.Ui
             if (tabs.Tag is double current && current == padding)
                 return;
             tabs.Tag = padding;
-            UiKit.StyleTabs(tabs, padding);
+            // 스타일을 다시 지정하면 탭 머리·내용을 다시 만들어 그 사이 칸이 화면에서 떨어진다 — 여백만 바꾼다(템플릿이 Padding을 따름)
+            foreach (var item in tabs.Items.OfType<TabItem>())
+                item.Padding = new Thickness(padding, 5, padding, 4);
         }
 
         /// <summary>글이 잘리지 않고 다 보이는 폭(지금 글꼴로 잰 글 폭 + 바깥 여백).</summary>

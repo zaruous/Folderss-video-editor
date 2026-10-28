@@ -127,7 +127,8 @@ namespace VideoEditor.Ui
             tabs.Padding = new Thickness(0);
             var template = new ControlTemplate(typeof(TabItem));
             var border = new FrameworkElementFactory(typeof(Border), "Bd");
-            border.SetValue(Border.PaddingProperty, new Thickness(padding, 5, padding, 4));
+            // 여백은 탭의 Padding을 따른다 — 좁은 패널에서 여백만 바꿀 때(PropertyPanel.FitTabHeaders) 스타일·템플릿을 다시 만들지 않게
+            border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
             border.SetValue(Border.MarginProperty, new Thickness(0, 0, 2, 0));
             border.SetValue(Border.BorderThicknessProperty, new Thickness(0, 0, 0, 2));
             border.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
@@ -146,6 +147,7 @@ namespace VideoEditor.Ui
             template.Triggers.Add(hover);
             var style = new Style(typeof(TabItem));
             style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(padding, 5, padding, 4)));
             style.Setters.Add(new Setter(Control.ForegroundProperty, new DynamicResourceExtension("PrimaryText")));
             tabs.ItemContainerStyle = style;
         }
