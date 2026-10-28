@@ -675,6 +675,7 @@ namespace VideoEditor.Ui
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             panel.Children.Add(ContentBox(id, "PropText", "글자 내용"));
+            panel.Children.Add(LongTextNotice(id, "PropTextLongNotice"));
             panel.Children.Add(NumberRow("글자 크기", "PropFontSize", 8, 400, "px", id, c => c.FontSize, (c, v) => c.FontSize = Math.Max(4, v)));
             var colors = new ComboBox { Margin = new Thickness(0, 4, 0, 4) };
             AutomationProperties.SetAutomationId(colors, "PropTextColor");
@@ -778,6 +779,27 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
+        /// 긴 글 안내([글자]·[꾸미기] 탭 위): 글이 2,000자를 넘어 drawtext 대체 경로로 그릴 때만 보이고, 이 클립이 쓰는 꾸밈 가운데 그리지 못하는 것을 적는다(<see cref="StyledTextFallback"/>).
+        /// 나눠 그리지 않고 알리는 까닭은 <see cref="StyledTextFallback"/>에 있다.
+        /// </summary>
+        private UIElement LongTextNotice(string id, string automationId)
+        {
+            var notice = UiKit.Label("", true);
+            notice.TextWrapping = TextWrapping.Wrap;
+            notice.Margin = new Thickness(0, 0, 0, 6);
+            notice.Visibility = Visibility.Collapsed;
+            AutomationProperties.SetAutomationId(notice, automationId);
+            _refreshers.Add(() =>
+            {
+                var text = StyledTextFallback.Notice(_session.Project.FindClip(id));
+                notice.Text = text ?? "";
+                AutomationProperties.SetName(notice, text ?? "");
+                notice.Visibility = text == null ? Visibility.Collapsed : Visibility.Visible;
+            });
+            return notice;
+        }
+
+        /// <summary>
         /// [꾸미기] 꾸민 글자 스타일 — 맨 위 스타일 모음(미리 만든 스타일 단추)과 내 스타일(저장한 스타일 단추·[내 스타일로 저장]), 글꼴 묶음(글꼴·굵게·기울임·자간·행간·정렬),
         /// 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도), 윤곽선 묶음(켜기·색·두께·이음), 그림자 묶음(켜기·색·거리·방향·흐림·불투명도),
         /// 광선 묶음(켜기·색·크기·불투명도), 반사 묶음(켜기·크기·간격·불투명도), 맨 끝에 휘기 묶음(종류·정도).
@@ -786,6 +808,8 @@ namespace VideoEditor.Ui
         private UIElement StyleTab(string id, bool art = false)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
+            if (!art)
+                panel.Children.Add(LongTextNotice(id, "StyleLongTextNotice"));
             panel.Children.Add(Section("스타일 모음"));
             panel.Children.Add(PresetGallery(id));
             panel.Children.Add(MyStyles(id));
