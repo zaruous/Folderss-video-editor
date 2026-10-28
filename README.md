@@ -124,6 +124,7 @@ scripts\run-host.bat                           # Folderss 없이 이 플러그�
 - `scripts\run-host.bat --headless [--shot 파일.png] [--settle 초] [--timeout 초]`는 사용자 화면에 띄우지 않고 숨은 데스크톱(화면 시험과 같은 방식)에서 불러 그려 본 뒤 스스로 끝납니다. 기록과 결과는 콘솔에 나오고, 종료 코드는 0 성공 · 1 플러그인 UI 오류 · 2 불러오기 실패 · 3 시간 초과(사람이 닫아야 하는 창에서 멈춤)입니다. 화면을 눌러 보는 흐름까지 확인하려면 `scripts/ui-test.ps1`(화면 시험)을 씁니다.
 
 - `tests/VideoEditor.Tests`는 Core·Media를 net8.0으로 링크해 CI(Ubuntu, 배포판 FFmpeg)에서도 돕니다.
+- 미리 보기 도우미 시험(`PreviewHelperTests` — 도우미의 화면·소리가 ffmpeg.exe와 같은지, 1080p 재생 헤드 이동·재생 시작 시간, 끝났을 때 ffmpeg.exe로 돌아가기)은 Windows에서 `FOLDERSS_VE_FFMPEG`가 공유 DLL이 든 빌드(BtbN win64 gpl-shared의 `bin`)일 때만 돕니다. 화면 시험도 같은 폴더로 도우미가 있는 경로를, 공유 DLL이 없는 빌드면 없는 경로를 봅니다.
 - `tests/VideoEditor.UiTests`는 [플러그인 템플릿](https://github.com/zaruous/FolderssPLuginTemplate)의 헤드리스 시험 호스트입니다. 사용자 화면에 창을 띄우지 않고, 캡처는 실행 끝에 나오는 `shots` 폴더에 남습니다. Visual Studio 테스트 탐색기에서 `SmokeHeadlessTests.OpenView`를 **디버그**로 실행하면 편집 창이 화면에 떠서 중단점을 쓸 수 있습니다.
 - 계획 문서: [PRD](docs/PRD.md) · [구현 계획](docs/plan.md) · [꾸민 글자 구현 계획(#3)](docs/styled-text.md) · [전환 효과 데이터](docs/transitions.md) · [음성 인식 자막](docs/speech-to-text.md) · [사운드 분리](docs/sound-split.md) · [인물 마스크](docs/person-mask.md)
 

@@ -191,12 +191,7 @@ namespace VideoEditor.Helper
             if (_index < 0)
                 throw new InvalidOperationException((Type == AVMediaType.AVMEDIA_TYPE_VIDEO ? "화면" : "소리") + " 스트림이 없습니다: " + System.IO.Path.GetFileName(spec.Path));
             _stream = _format->streams[_index];
-            // 쓰지 않는 스트림은 읽지 않는다(ffmpeg도 같다)
-            for (var i = 0; i < _format->nb_streams; i++)
-            {
-                if (i != _index)
-                    _format->streams[i]->discard = AVDiscard.AVDISCARD_ALL;
-            }
+            DiscardOthers();
             var codec = ffmpeg.avcodec_find_decoder(_stream->codecpar->codec_id);
             if (codec == null)
                 throw new InvalidOperationException("디코더가 없습니다: " + _stream->codecpar->codec_id);
@@ -267,9 +262,7 @@ namespace VideoEditor.Helper
             }
             if (seekSeconds.HasValue || _used)
             {
-                var seconds = StartSeconds + Math.Max(0, seekSeconds ?? 0);
-                var target = (long)Math.Round(seconds * ffmpeg.AV_TIME_BASE);
-                var result = ffmpeg.avformat_seek_file(_format, -1, long.MinValue, target, target, 0);
+                var result = Seek(Math.Max(0, seekSeconds ?? 0));
                 if (result < 0 && _used)
                 {
                     // 되감지 못하는 파일(파이프 등) — 다시 열게 한다
@@ -279,6 +272,43 @@ namespace VideoEditor.Helper
                 ffmpeg.avcodec_flush_buffers(_codec);
             }
             _used = true;
+        }
+
+        /// <summary>
+        /// ffmpeg.exe의 -ss와 같게 옮긴다(파일 시작 시각 + seconds): 쓰지 않는 스트림도 잠시 살려 기본 스트림(보통 화면)의 키프레임 기준으로,
+        /// 지연 프레임(B 프레임)이 있는 파일이면 3/23초 앞에서. 소리 스트림만 보고 옮기면 AAC 프라이밍 보정 때문에 목표를 지나쳐 앞부분이 빠지고,
+        /// 앞 프레임 없이 풀어 첫 프레임이 작게 시작한다.
+        /// </summary>
+        private int Seek(double seconds)
+        {
+            var target = (long)Math.Round(seconds * ffmpeg.AV_TIME_BASE);
+            if (_format->start_time != ffmpeg.AV_NOPTS_VALUE)
+                target += _format->start_time;
+            var delayed = false;
+            for (var i = 0; i < _format->nb_streams; i++)
+                delayed |= _format->streams[i]->codecpar->video_delay > 0;
+            if (delayed && (_format->iformat->flags & ffmpeg.AVFMT_SEEK_TO_PTS) == 0)
+                target -= 3 * ffmpeg.AV_TIME_BASE / 23;
+            for (var i = 0; i < _format->nb_streams; i++)
+                _format->streams[i]->discard = AVDiscard.AVDISCARD_DEFAULT;
+            try
+            {
+                return ffmpeg.avformat_seek_file(_format, -1, long.MinValue, target, target, 0);
+            }
+            finally
+            {
+                DiscardOthers();
+            }
+        }
+
+        /// <summary>쓰지 않는 스트림은 읽지 않는다(ffmpeg도 같다).</summary>
+        private void DiscardOthers()
+        {
+            for (var i = 0; i < _format->nb_streams; i++)
+            {
+                if (i != _index)
+                    _format->streams[i]->discard = AVDiscard.AVDISCARD_ALL;
+            }
         }
 
         /// <summary>첫 프레임을 풀어 들고 있는다(버퍼 소스 설정용). 하나도 없으면 null.</summary>
@@ -471,6 +501,7 @@ namespace VideoEditor.Helper
 
     /// <summary>
     /// 열어 둔 입력들: 같은 파일·스트림을 다음 요청이 다시 쓴다(열기·스트림 정보 읽기를 건너뜀). 같은 파일을 한 계획에서 두 번 쓰면(화면 + 소리) 따로 연다.
+    /// 소리는 다시 쓰지 않고 요청마다 새로 연다 — 되감은 AAC 디코더는 새로 연 것과 첫 프레임(프라이밍·건너뛸 표본)이 달라 ffmpeg.exe와 어긋난다(재생 시작에만 쓰여 비용이 작다).
     /// 쓰지 않은 지 오래된 것은 닫아 파일을 잡아 두지 않는다(사용자가 파일을 바꾸거나 지울 수 있게).
     /// </summary>
     internal sealed class InputPool
@@ -484,7 +515,7 @@ namespace VideoEditor.Helper
             var key = spec.PoolKey(type);
             lock (_gate)
             {
-                foreach (var source in _sources.Where(s => !s.Busy && s.Key == key).ToList())
+                foreach (var source in _sources.Where(s => !s.Busy && s.Key == key && Reusable(s)).ToList())
                 {
                     if (source.Broken || source.FileChanged())
                     {
@@ -519,12 +550,17 @@ namespace VideoEditor.Helper
             {
                 source.Busy = false;
                 source.LastUsed = DateTime.UtcNow;
-                if (source.Broken)
+                if (source.Broken || !Reusable(source))
                 {
                     _sources.Remove(source);
                     source.Dispose();
                 }
             }
+        }
+
+        private static bool Reusable(InputSource source)
+        {
+            return source.Type != AVMediaType.AVMEDIA_TYPE_AUDIO;
         }
 
         /// <summary>idle보다 오래 안 쓴 것을 닫는다.</summary>

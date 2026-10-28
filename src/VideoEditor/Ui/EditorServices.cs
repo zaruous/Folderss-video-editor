@@ -343,6 +343,10 @@ namespace VideoEditor.Ui
             {
                 helper = _helper;
                 _helper = null;
+                // 일부러 끝낸 것이라 실패가 아니다 — 곧 다시 열어도 바로 띄운다(띄울 때 걸어 둔 5초 대기가 남아 있으면 첫 미리 보기까지 안 뜬다).
+                // 거듭 실패하거나 DLL이 없어 꺼 둔 것(MaxValue)은 그대로
+                if (_helperRetryAt != DateTime.MaxValue)
+                    _helperRetryAt = DateTime.MinValue;
             }
             if (helper == null)
                 return;

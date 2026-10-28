@@ -38,6 +38,12 @@ namespace VideoEditor.Helper
                 Console.Error.WriteLine("사용: VideoEditor.Helper.exe --ffmpeg <FFmpeg DLL 폴더> [--parent <pid>]");
                 return 2;
             }
+            // 부모는 FFmpeg를 불러오기 전에 붙든다 — 준비 응답 뒤에 찾으면 그 사이에 끝난 부모를 놓쳐 혼자 남는다
+            if (parent > 0 && !WatchParent(parent))
+            {
+                Console.Error.WriteLine("부모 프로세스(" + parent + ")가 이미 끝났습니다.");
+                return 0;
+            }
             var input = Console.OpenStandardInput();
             _output = Console.OpenStandardOutput();
             try
@@ -60,8 +66,6 @@ namespace VideoEditor.Helper
                 Console.Error.WriteLine("FFmpeg를 불러오지 못했습니다: " + ex);
                 return 3;
             }
-            if (parent > 0)
-                WatchParent(parent);
             // 쓰지 않은 지 오래된 파일은 닫아 둔다(파일을 잡아 두지 않게)
             using (new Timer(_ => Pool.EvictIdle(TimeSpan.FromSeconds(10)), null, 5000, 5000))
             {
@@ -134,14 +138,17 @@ namespace VideoEditor.Helper
                 }
                 if (string.IsNullOrEmpty(request.Pipe))
                     throw new InvalidOperationException("파이프 이름이 없습니다.");
-                using (var pipe = new NamedPipeClientStream(".", request.Pipe, PipeDirection.Out, PipeOptions.None))
+                using (var run = new PlanRun(Pool, request.Plan))
                 {
-                    pipe.Connect(5000);
-                    using (var run = new PlanRun(Pool, request.Plan))
+                    // 그래프를 먼저 맞춘다 — 여기서 실패하면 파이프에 붙기 전에 오류로 알려 플러그인이 ffmpeg.exe로 그린다
+                    // (붙은 뒤에 실패하면 플러그인은 빈 흐름을 받는다)
+                    run.Configure();
+                    using (var pipe = new NamedPipeClientStream(".", request.Pipe, PipeDirection.Out, PipeOptions.None))
                     {
+                        pipe.Connect(5000);
                         try
                         {
-                            run.Execute(bytes => pipe.Write(bytes, 0, bytes.Length), cancellation);
+                            run.Run(bytes => pipe.Write(bytes, 0, bytes.Length), cancellation);
                             pipe.Flush();
                         }
                         catch (IOException)
@@ -180,30 +187,39 @@ namespace VideoEditor.Helper
                 HelperProtocol.WriteResponse(_output, id, kind, text);
         }
 
-        /// <summary>부모 프로세스가 끝나면 같이 끝난다(작업 개체가 없을 때의 보조).</summary>
-        private static void WatchParent(int pid)
+        /// <summary>부모 프로세스가 끝나면 같이 끝난다(작업 개체가 없을 때의 보조). 부모가 이미 없으면 false.</summary>
+        private static bool WatchParent(int pid)
         {
+            Process process;
             try
             {
-                var process = Process.GetProcessById(pid);
-                var thread = new Thread(() =>
-                {
-                    try
-                    {
-                        process.WaitForExit();
-                    }
-                    catch (Exception)
-                    {
-                        // 기다리지 못하면 표준 입력이 닫힐 때 끝난다
-                    }
-                    Environment.Exit(0);
-                }) { IsBackground = true, Name = "watch-parent" };
-                thread.Start();
+                process = Process.GetProcessById(pid);
+            }
+            catch (ArgumentException)
+            {
+                // 그 번호의 프로세스가 없다 — 이미 끝남
+                return false;
             }
             catch (Exception)
             {
-                // 부모를 못 찾으면 표준 입력이 닫힐 때 끝난다
+                // 권한 등으로 못 붙들면 표준 입력이 닫힐 때 끝난다
+                return true;
             }
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    process.WaitForExit();
+                }
+                catch (Exception)
+                {
+                    // 기다리지 못하면 표준 입력이 닫힐 때 끝난다
+                    return;
+                }
+                Environment.Exit(0);
+            }) { IsBackground = true, Name = "watch-parent" };
+            thread.Start();
+            return true;
         }
     }
 }

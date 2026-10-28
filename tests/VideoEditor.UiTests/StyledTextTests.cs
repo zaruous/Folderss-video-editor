@@ -2513,7 +2513,10 @@ namespace VideoEditor.UiTests
                 var rasterizer = NewRasterizer();
 
                 var frame = assembly.GetType("VideoEditor.Media.PreviewRenderer", true).GetMethod("Frame");
-                var preview = await (Task<byte[]>)frame.Invoke(null, new[] { tool, copy, (object)15L, 320, 180, CancellationToken.None, rasterizer });
+                // 뒤의 선택 인수(미리 보기 도우미 등)는 기본값으로 — 리플렉션은 선택 인수도 다 넘겨야 해서, 인수가 늘면 개수가 어긋난다
+                var arguments = new[] { tool, copy, (object)15L, 320, 180, CancellationToken.None, rasterizer };
+                arguments = arguments.Concat(Enumerable.Repeat(Type.Missing, frame.GetParameters().Length - arguments.Length)).ToArray();
+                var preview = await (Task<byte[]>)frame.Invoke(null, arguments);
                 Assert.NotNull(preview);
                 var bright = 0;
                 for (var i = 0; i < preview.Length; i += 4)

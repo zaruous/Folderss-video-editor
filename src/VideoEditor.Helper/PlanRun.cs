@@ -40,6 +40,13 @@ namespace VideoEditor.Helper
 
         public void Execute(Action<byte[]> write, CancellationToken cancellation)
         {
+            Configure();
+            Run(write, cancellation);
+        }
+
+        /// <summary>그래프를 짓고 맞춘다(입력 열기·첫 프레임 풀기 포함). 흐름은 이것이 된 뒤에 파이프에 붙는다 — 여기서 실패하면 플러그인이 ffmpeg.exe로 돌아간다.</summary>
+        public void Configure()
+        {
             if (string.IsNullOrWhiteSpace(_plan.Filter))
                 throw new InvalidOperationException("필터 그래프가 비어 있습니다.");
             _graph = ffmpeg.avfilter_graph_alloc();
@@ -73,6 +80,13 @@ namespace VideoEditor.Helper
                 if (Width <= 0 || Height <= 0)
                     throw new InvalidOperationException("출력 크기를 모릅니다.");
             }
+        }
+
+        /// <summary>맞춘 그래프를 돌려 프레임을 write에 넘긴다.</summary>
+        public void Run(Action<byte[]> write, CancellationToken cancellation)
+        {
+            if (_sink == null)
+                throw new InvalidOperationException("그래프를 맞추지 않았습니다.");
             Pump(write, cancellation);
         }
 
@@ -251,7 +265,8 @@ namespace VideoEditor.Helper
                 var s16 = (int)AVSampleFormat.AV_SAMPLE_FMT_S16;
                 var rate = _plan.SampleRate > 0 ? _plan.SampleRate : 48000;
                 Native.SetList(_sink, "sample_formats", "s16", "sample_fmts", &s16, sizeof(int));
-                Native.SetList(_sink, "sample_rates", rate.ToString(CultureInfo.InvariantCulture), "sample_rates", &rate, sizeof(int));
+                // 새 이름은 밑줄 없는 samplerates(옛 이진 옵션 sample_rates는 FFmpeg 9에서 없어짐)
+                Native.SetList(_sink, "samplerates", rate.ToString(CultureInfo.InvariantCulture), "sample_rates", &rate, sizeof(int));
                 Native.SetText(_sink, "channel_layouts", "stereo", "ch_layouts");
             }
             Native.Check(ffmpeg.avfilter_init_str(_sink, null), "버퍼 싱크");
