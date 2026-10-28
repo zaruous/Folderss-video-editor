@@ -58,10 +58,35 @@ namespace VideoEditor.Core
         public string ArtTextColor { get; set; }
 
         /// <summary>
+        /// 단어·글자별 애니메이션의 한 장(<see cref="TextAnimationFrame"/>). 있으면 그 장의 단위 모습으로 그리고, 한 클립의 모든 장을 같은 크기로 그린다.
+        /// 정지 그림은 null(키가 예전과 같다).
+        /// </summary>
+        public TextAnimationFrame Animation { get; set; }
+
+        /// <summary>애니메이션 한 장의 요청(나머지 값은 같이 쓴다).</summary>
+        public TextImageRequest WithAnimation(TextAnimationFrame animation)
+        {
+            var copy = (TextImageRequest)MemberwiseClone();
+            copy.Animation = animation;
+            return copy;
+        }
+
+        /// <summary>애니메이션 묶음의 키: 장 번호만 빼고 <see cref="Key"/>와 같다 — 한 클립의 장들이 같은 이름 앞부분을 쓴다(그림 묶음 입력).</summary>
+        public string JobKey(int rasterizerVersion)
+        {
+            return Key(rasterizerVersion, false);
+        }
+
+        /// <summary>
         /// 캐시 키: 픽셀에 영향을 주는 값을 정해진 순서의 JSON으로 적고 SHA-256(소문자 16진 64자)으로.
         /// 실수는 InvariantCulture "R"(문화권과 무관), 글은 UTF-16 단위를 그대로 \u로 적는다(짝 없는 대리 문자도 구별).
         /// </summary>
         public string Key(int rasterizerVersion)
+        {
+            return Key(rasterizerVersion, true);
+        }
+
+        private string Key(int rasterizerVersion, bool frame)
         {
             var style = Style?.Clone() ?? new TextStyle();
             style.Normalize();
@@ -130,6 +155,7 @@ namespace VideoEditor.Core
                 if (art.Kind == ArtKind.Sticker)
                     Quoted(json, "art.sticker", StickerSvg.Hash(art.StickerSvg ?? ""));
             }
+            Animation?.AppendKey(json, frame);
             json.Length--;
             json.Append('}');
             var hash = SHA256.HashData(Encoding.UTF8.GetBytes(json.ToString()));
@@ -141,19 +167,19 @@ namespace VideoEditor.Core
             json.Append('"').Append(name).Append("\":");
         }
 
-        private static void Number(StringBuilder json, string name, double value)
+        internal static void Number(StringBuilder json, string name, double value)
         {
             Name(json, name);
             json.Append(value.ToString("R", CultureInfo.InvariantCulture)).Append(',');
         }
 
-        private static void Flag(StringBuilder json, string name, bool value)
+        internal static void Flag(StringBuilder json, string name, bool value)
         {
             Name(json, name);
             json.Append(value ? "true" : "false").Append(',');
         }
 
-        private static void Quoted(StringBuilder json, string name, string value)
+        internal static void Quoted(StringBuilder json, string name, string value)
         {
             Name(json, name);
             json.Append('"');

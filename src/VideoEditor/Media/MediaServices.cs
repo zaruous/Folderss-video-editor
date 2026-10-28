@@ -171,11 +171,21 @@ namespace VideoEditor.Media
                 File.WriteAllText(file.Key, file.Value, new UTF8Encoding(false));
         }
 
-        /// <summary>계획의 꾸민 글자 PNG를 캐시에 그려 둔다(있으면 그대로).</summary>
-        public static void DrawTextImages(RenderPlan plan, CancellationToken cancellation)
+        /// <summary>
+        /// 계획의 꾸민 글자 PNG를 캐시에 그려 둔다(있으면 그대로). progress가 있으면 새로 그린 장마다 (그린 수, 새로 그릴 수)를 알린다 —
+        /// 애니메이션은 장이 많아 설정을 바꾼 뒤 처음 재생·내보내기 전에 시간이 걸린다.
+        /// </summary>
+        public static void DrawTextImages(RenderPlan plan, CancellationToken cancellation, Action<int, int> progress = null)
         {
+            var missing = progress == null ? 0 : plan.TextImages.Keys.Count(path => !File.Exists(path));
+            var done = 0;
             foreach (var image in plan.TextImages)
+            {
+                var drawn = missing > 0 && !File.Exists(image.Key);
                 TextImageCache.Ensure(plan.TextRasterizer, image.Key, image.Value, cancellation);
+                if (drawn)
+                    progress(Math.Min(++done, missing), missing);
+            }
         }
 
         /// <summary>도우미에 보낼 계획(같은 입력·필터 그래프에 출력 조건을 더한 것). 먼저 <see cref="Prepare"/>로 파일을 써 둔다.</summary>
@@ -278,8 +288,9 @@ namespace VideoEditor.Media
             return args;
         }
 
+        /// <summary>내보낸다. drawing이 있으면 애니메이션 장을 그리는 동안 (그린 수, 그릴 수)를 알린다(FFmpeg를 띄우기 전).</summary>
         public static async Task Export(FfmpegTool tool, Project project, ExportSettings settings, IProgress<double> progress, CancellationToken cancellation,
-            ITextRasterizer textRasterizer = null)
+            ITextRasterizer textRasterizer = null, Action<int, int> drawing = null)
         {
             if (settings.To <= settings.From)
                 throw new InvalidOperationException("내보낼 구간이 비어 있습니다. 타임라인에 클립을 놓으세요.");
@@ -296,6 +307,8 @@ namespace VideoEditor.Media
                 PersonMasks = RenderEnvironment.PersonMasks
             });
             string script;
+            if (drawing != null)
+                RenderCommand.DrawTextImages(plan, cancellation, drawing);
             // 만드는 동안은 옆의 .part에 쓰고 다 되면 바꿔 넣는다 — 실패·취소해도 원래 있던 파일(덮어쓰기로 고른 것)이 남는다
             var part = settings.OutputPath + ".part";
             var args = RenderCommand.Arguments(tool, plan, OutputArgs(tool, settings, plan.HasAudio, part), out script, cancellation);
@@ -463,7 +476,8 @@ namespace VideoEditor.Media
         /// 재생 전에 [from, to) 구간의 꾸민 글자 PNG를 캐시에 그려 둔다 — UI 스레드가 아닌 곳에서 부른다.
         /// 그 뒤 같은 크기로 <see cref="StartVideo"/>를 부르면 캐시만 읽어 바로 시작한다.
         /// </summary>
-        public static void PrepareTextImages(Project project, long from, long to, int width, int height, ITextRasterizer textRasterizer, CancellationToken cancellation)
+        public static void PrepareTextImages(Project project, long from, long to, int width, int height, ITextRasterizer textRasterizer, CancellationToken cancellation,
+            Action<int, int> progress = null)
         {
             if (textRasterizer == null || to <= from)
                 return;
@@ -479,7 +493,7 @@ namespace VideoEditor.Media
                 TextRasterizer = textRasterizer,
                 PersonMasks = RenderEnvironment.PersonMasks
             });
-            RenderCommand.DrawTextImages(plan, cancellation);
+            RenderCommand.DrawTextImages(plan, cancellation, progress);
         }
 
         /// <summary>

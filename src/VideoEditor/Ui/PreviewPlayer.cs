@@ -142,15 +142,15 @@ namespace VideoEditor.Ui
             }, TaskScheduler.Default);
         }
 
-        /// <summary>from부터 재생한다(끝나면 멈춤). UI 스레드에서 부른다.</summary>
-        public void Play(Project project, long from)
+        /// <summary>from부터 재생한다(끝나면 멈춤 — until을 주면 거기까지). UI 스레드에서 부른다.</summary>
+        public void Play(Project project, long from, long until = -1)
         {
             Stop();
             var tool = _services.Tool;
             if (_disposed || tool == null)
                 return;
             var copy = ProjectFile.FromSnapshot(ProjectFile.Snapshot(project));
-            var to = copy.Duration;
+            var to = until > 0 ? Math.Min(until, copy.Duration) : copy.Duration;
             if (from >= to)
                 from = 0;
             if (to <= 0)
@@ -169,10 +169,20 @@ namespace VideoEditor.Ui
             }
             // 꾸민 글자 PNG는 UI 스레드 밖에서 먼저 그려 둔다 — 재생 FFmpeg는 캐시만 읽어 화면이 멈추지 않는다
             var prepare = _prepareCancel = new CancellationTokenSource();
+            // 애니메이션 장은 많아 설정을 바꾼 뒤 처음 재생할 때 시간이 걸린다 — 상태 줄에 진행을 알린다
+            void Drawing(int done, int total)
+            {
+                if (total >= 5 && (done == total || done % 5 == 0))
+                    _dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (prepare == _prepareCancel)
+                            Message?.Invoke(done < total ? "애니메이션을 그리는 중… " + done + "/" + total : "애니메이션을 다 그렸습니다(" + total + "장).");
+                    }));
+            }
             Task.Run(() =>
             {
                 if (texts)
-                    PreviewRenderer.PrepareTextImages(copy, from, to, size.Width, size.Height, rasterizer, prepare.Token);
+                    PreviewRenderer.PrepareTextImages(copy, from, to, size.Width, size.Height, rasterizer, prepare.Token, Drawing);
                 return heavy ? SurveyPrerender(tool, copy, from, to, size.Width, size.Height, rasterizer) : null;
             }, prepare.Token)
                 .ContinueWith(t => _dispatcher.BeginInvoke(new Action(() =>

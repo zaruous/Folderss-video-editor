@@ -89,7 +89,7 @@ namespace VideoEditor.Tests
         public void NewerVersion_IsRejected()
         {
             var (project, _) = TextProject();
-            Assert.Throws<InvalidDataException>(() => LoadEdited(project, json => json["Version"] = Project.ArtVersion + 1));
+            Assert.Throws<InvalidDataException>(() => LoadEdited(project, json => json["Version"] = Project.AnimationVersion + 1));
         }
 
         private static TextStyle AllFieldsChanged()

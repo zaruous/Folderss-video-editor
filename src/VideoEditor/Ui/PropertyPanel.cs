@@ -14,7 +14,7 @@ namespace VideoEditor.Ui
     /// 아무것도 고르지 않으면 안내(프로젝트 설정은 왼쪽 프로젝트 트리). 값을 바꾸면 바로 편집(실행 취소 가능 — 슬라이더를 끄는 동안은 한 단계로 합침).
     /// 편집 때마다 다시 만들지 않고 값만 갱신한다(끄는 슬라이더가 사라지지 않게).
     /// </summary>
-    internal sealed class PropertyPanel : DockPanel
+    internal sealed partial class PropertyPanel : DockPanel
     {
         private readonly EditorSession _session;
         private readonly EditorServices _services;
@@ -159,10 +159,20 @@ namespace VideoEditor.Ui
                     AutomationProperties.SetAutomationId(_effectsTab, "ClipEffectsTab");
                     tabs.Items.Add(_effectsTab);
                 }
+                // 애니메이션(#4): 화면 클립 모두(PropertyPanel.Animation.cs)
+                if (ClipAnimations.CanHave(clip))
+                {
+                    var animationTab = new TabItem { Header = "애니메이션", Content = AnimationTab(id) };
+                    AutomationProperties.SetAutomationId(animationTab, "AnimationTab");
+                    tabs.Items.Add(animationTab);
+                }
             }
             if (clip.Kind == ClipKind.Media && clip.HasAudio)
                 tabs.Items.Add(new TabItem { Header = "소리", Content = AudioTab(id) });
             tabs.Items.Add(new TabItem { Header = clip.HasSourceLimit ? "속도" : "길이", Content = TimeTab(id, clip.HasSourceLimit) });
+            // 탭이 다섯 이상이면 머리글 여백을 줄여 좁은 패널에서도 한 줄에(두 줄이면 고를 때마다 줄이 자리를 바꾼다 — 미디어 패널과 같은 5)
+            if (tabs.Items.Count >= 5)
+                UiKit.StyleTabs(tabs, 5);
             tabs.SelectedIndex = 0;
             panel.Children.Add(tabs);
             // 처음 값을 채우는 것은 편집이 아니다 — 콤보의 SelectionChanged 등이 Edit를 부르지 않게(고르기만 해도 실행 취소 단계·덮어쓰기가 생기지 않게)

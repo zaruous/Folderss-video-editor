@@ -315,9 +315,9 @@ namespace VideoEditor.Tests
                 ProjectFile.Save(loaded, path);
                 Assert.Equal(2, (int)JsonNode.Parse(File.ReadAllText(path))["Version"]);
 
-                // 더 새 형식은 거부
+                // 더 새 형식은 거부(4는 애니메이션 형식 — #4)
                 var json = JsonNode.Parse(File.ReadAllText(path));
-                json["Version"] = 4;
+                json["Version"] = Project.AnimationVersion + 1;
                 File.WriteAllText(path, json.ToJsonString());
                 Assert.Contains("더 새 버전", Assert.Throws<InvalidDataException>(() => ProjectFile.Load(path)).Message);
             }

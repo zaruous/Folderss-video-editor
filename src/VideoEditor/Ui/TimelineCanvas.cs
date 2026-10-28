@@ -112,7 +112,7 @@ namespace VideoEditor.Ui
         private double _scrollY;
 
         // 끌기 상태
-        private enum DragKind { None, Scrub, Move, TrimStart, TrimEnd }
+        private enum DragKind { None, Scrub, Move, TrimStart, TrimEnd, Animation }
         private DragKind _drag;
         private bool _dragStarted;
         private Point _downPoint;
@@ -390,6 +390,9 @@ namespace VideoEditor.Ui
                 PointerMove(point, Keyboard.Modifiers);
                 return;
             }
+            // 애니메이션 띠 손잡이(TimelineCanvas.Animation.cs)
+            if (AnimationHover(point))
+                return;
             // 전환 배지: 효과 이름·길이를 알려 주고 누르면 그 클립을 고른다
             var transition = HitTransition(point);
             if (transition != null)
@@ -453,6 +456,9 @@ namespace VideoEditor.Ui
                 _session.Playhead = XToFrame(point.X);
                 return;
             }
+            // 애니메이션 띠 손잡이를 누르면 그 길이를 끈다
+            if (AnimationPointerDown(point))
+                return;
             // 전환 배지를 누르면 전환이 든 클립을 고른다(끌기는 하지 않음 — 배지는 두 클립에 걸쳐 있다)
             var transition = HitTransition(point);
             if (transition != null)
@@ -500,6 +506,11 @@ namespace VideoEditor.Ui
             if (_drag == DragKind.Scrub)
             {
                 _session.Playhead = XToFrame(point.X);
+                return;
+            }
+            if (_drag == DragKind.Animation)
+            {
+                AnimationPointerMove(point);
                 return;
             }
             if (!_dragStarted)
@@ -563,6 +574,11 @@ namespace VideoEditor.Ui
 
         internal void PointerUp(Point point, ModifierKeys modifiers)
         {
+            if (_drag == DragKind.Animation)
+            {
+                AnimationPointerUp();
+                return;
+            }
             var drag = _drag;
             var started = _dragStarted;
             var clipId = _dragClipId;
@@ -595,6 +611,7 @@ namespace VideoEditor.Ui
             _ghostTrack = null;
             _dragPartnerId = null;
             _dragIndependent = false;
+            _animationLength = -1;
             InvalidateVisual();
         }
 
@@ -764,7 +781,7 @@ namespace VideoEditor.Ui
                     dc.DrawRectangle(ShadeBrush, null, new Rect(0, row.Top, width, row.Height));
             }
             // 끄는 중인 클립의 자리
-            if (_drag != DragKind.None && _drag != DragKind.Scrub && _dragStarted && _ghostTrack != null)
+            if (_drag != DragKind.None && _drag != DragKind.Scrub && _drag != DragKind.Animation && _dragStarted && _ghostTrack != null)
             {
                 var row = rows.FirstOrDefault(r => r.Track == _ghostTrack);
                 if (row != null)
@@ -932,6 +949,7 @@ namespace VideoEditor.Ui
                 dc.DrawLine(TransitionPen, new Point(rect.Left, rect.Bottom - 1), new Point(rect.Left + Math.Min(rect.Width, clip.FadeIn * _pixelsPerFrame), rect.Bottom - 8));
             if (clip.FadeOut > 0)
                 dc.DrawLine(TransitionPen, new Point(rect.Right - Math.Min(rect.Width, clip.FadeOut * _pixelsPerFrame), rect.Bottom - 8), new Point(rect.Right, rect.Bottom - 1));
+            DrawAnimationBands(dc, clip, rect);
         }
 
         /// <summary>줄에서 전환이 있는 화면 클립(자막 트랙 제외).</summary>
@@ -1160,6 +1178,7 @@ namespace VideoEditor.Ui
                 var effects = VideoEffectLabels.Spoken(_clip);
                 if (effects != null)
                     name += " · " + effects;
+                name += AnimationLabel(_clip, rate);
                 // 사운드 분리: 링크 상태와 어긋남
                 var partner = ClipLinks.Partner(_canvas.Session.Project, _clip);
                 if (partner != null)

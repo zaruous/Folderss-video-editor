@@ -70,7 +70,7 @@ namespace VideoEditor.Core
     /// 동영상: 검은 바탕 위에 동영상 트랙 1(주 트랙)부터 위 트랙 순서로 클립을 덮는다(같은 트랙은 시간 순 — 크로스페이드는 뒤 클립이 위).
     /// 오디오: 무음 바탕에 소리 나는 클립을 모두 섞는다(정규화 없이 더함).
     /// </summary>
-    public static class RenderGraph
+    public static partial class RenderGraph
     {
         /// <summary>이보다 긴 글은 꾸민 경로 대신 drawtext로 그린다(글자 상자의 줄 나눔·높이도 무시).</summary>
         public const int MaxStyledTextLength = 2000;
@@ -245,23 +245,38 @@ namespace VideoEditor.Core
                     // 동영상 효과: 틀 크기에서(맞춤 뒤, 회전 앞) — 클립과 함께 옮기고 돌고 흐려지고 전환된다
                     if (effects.Count > 0)
                         chain.Append(EffectChain(project, options, plan, filters, clip, effects, fit, segStart, segEnd, boxWidth, boxHeight, k * scale / shrink, n));
-                    if (Math.Abs(clip.Rotation) > 0.01)
+                    // 애니메이션(#4): 시간식은 이 흐름의 시각(0 = 그리기 시작)에 클립 안 시각을 더해 쓴다. 없으면 아래는 예전 그대로
+                    var motion = Motion(project, clip, options);
+                    var local = TimeText(rate, segStart - clip.Start);
+                    if (motion != null)
+                        chain.Append(WipeChain(motion, local));
+                    if (motion?.Rotation != null)
+                    {
+                        chain.Append(RotateChain(motion, clip.Rotation, local));
+                    }
+                    else if (Math.Abs(clip.Rotation) > 0.01)
                     {
                         var radians = N(clip.Rotation * Math.PI / 180);
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",rotate={0}:c=none:ow='rotw({0})':oh='roth({0})'", radians);
                     }
-                    if (clip.Opacity < 0.999)
+                    if (motion?.Opacity != null)
+                        chain.Append(OpacityChain(motion, clip.Opacity, rate, segStart - clip.Start, segEnd - segStart, n));
+                    else if (clip.Opacity < 0.999)
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",colorchannelmixer=aa={0}", N(Math.Max(0, clip.Opacity)));
                     // 디졸브: 앞 클립(밑에 더 그려짐) 위로 이 클립이 서서히 나타난다
                     if (transition > 0 && segStart == clip.Start && effect.IsDissolve)
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",fade=t=in:st=0:d={0}:alpha=1", N(rate.ToSeconds(transition)));
+                    if (motion?.Scale != null)
+                        chain.Append(ScaleChain(motion, local));
                     if (!xfadeIn && !xfadeOut)
                     {
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",setpts=PTS-STARTPTS+round({0}/TB)[c{1}]", N(rate.ToSeconds(segStart - options.From)), n);
                         filters.Add(chain.ToString());
+                        // overlay의 시각은 바탕 흐름(0 = 그리는 구간 시작)
+                        var (x, y) = OverlayPosition(motion, clip.X * k, clip.Y * k, k, TimeText(rate, options.From - clip.Start));
                         filters.Add(string.Format(CultureInfo.InvariantCulture,
-                            "[{0}][c{1}]overlay=x='(main_w-overlay_w)/2+{2}':y='(main_h-overlay_h)/2+{3}':eof_action=pass[o{1}]",
-                            layer, n, N(clip.X * k), N(clip.Y * k)));
+                            "[{0}][c{1}]overlay=x='{2}':y='{3}':eof_action=pass[o{1}]",
+                            layer, n, x, y));
                         layer = "o" + n;
                         n++;
                         continue;
@@ -274,9 +289,10 @@ namespace VideoEditor.Core
                     filters.Add(chain.ToString());
                     filters.Add(string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba[g{4}]",
                         canvasWidth, canvasHeight, fps, N(rate.ToSeconds(segEnd - segStart)), n));
+                    var (gx, gy) = OverlayPosition(motion, clip.X * k / shrink, clip.Y * k / shrink, k / shrink, local);
                     filters.Add(string.Format(CultureInfo.InvariantCulture,
-                        "[g{0}][s{0}]overlay=x='(main_w-overlay_w)/2+{1}':y='(main_h-overlay_h)/2+{2}':eof_action=pass,format=gbrap,premultiply=inplace=1[k{0}]",
-                        n, N(clip.X * k / shrink), N(clip.Y * k / shrink)));
+                        "[g{0}][s{0}]overlay=x='{1}':y='{2}':eof_action=pass,format=gbrap,premultiply=inplace=1[k{0}]",
+                        n, gx, gy));
                     var piece = "k" + n;
                     if (xfadeIn)
                     {
@@ -344,7 +360,7 @@ namespace VideoEditor.Core
                 // 꾸민 글자, 또는 글자 상자를 정한 글자(줄 나눔·상자는 그리개만 할 수 있다 — 스타일이 없으면 처음 꾸밀 때와 같은 스타일로).
                 // 긴 글(drawtext 대체 경로)은 상자를 무시한다
                 if (UsesRasterizer(clip, options))
-                    return StyledText(project, options, plan, clip, segFrames);
+                    return DrawsUnits(clip, options) ? AnimatedText(project, options, plan, clip, segStart, segEnd) : StyledText(project, options, plan, clip, segFrames);
                 // 파일 이름에 클립 Id(프로젝트 파일 값)를 쓰지 않는다 — 조작된 Id로 다른 폴더의 파일을 덮어쓰지 못하게
                 var textFile = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "fv-text-" + Guid.NewGuid().ToString("N") + ".txt");
                 plan.TextFiles[textFile] = clip.Text ?? "";
@@ -644,10 +660,10 @@ namespace VideoEditor.Core
             return string.Format(CultureInfo.InvariantCulture, "[{0}:v]setpts=PTS-STARTPTS,format=rgba", index);
         }
 
-        /// <summary>그리개가 그리는 PNG가 필요한 클립인지: 꾸민 글자·글자 상자를 정한 글자, 아트 요소(미리 보기가 재생 전에 그려 둘지 정한다).</summary>
+        /// <summary>그리개가 그리는 PNG가 필요한 클립인지: 꾸민 글자·글자 상자를 정한 글자·단어·글자별 애니메이션이 든 글자, 아트 요소(미리 보기가 재생 전에 그려 둘지 정한다).</summary>
         public static bool NeedsTextImage(Clip clip)
         {
-            return clip != null && (clip.Kind == ClipKind.Art || clip.Kind == ClipKind.Text && (clip.Style != null || ClipLayout.HasTextBox(clip)));
+            return clip != null && (clip.Kind == ClipKind.Art || clip.Kind == ClipKind.Text && (clip.Style != null || ClipLayout.HasTextBox(clip) || AnimationMotion.HasPerUnit(clip)));
         }
 
         /// <summary>그리개로 그리는지: 아트 요소(그리개가 있으면), 또는 꾸민 글자이거나 글자 상자를 정했고, 그리개가 있고, 긴 글(drawtext 대체 경로)이 아닐 때.</summary>
@@ -655,7 +671,7 @@ namespace VideoEditor.Core
         {
             if (clip.Kind == ClipKind.Art)
                 return options.TextRasterizer != null;
-            return clip.Kind == ClipKind.Text && (clip.Style != null || ClipLayout.HasTextBox(clip)) && options.TextRasterizer != null
+            return clip.Kind == ClipKind.Text && (clip.Style != null || ClipLayout.HasTextBox(clip) || AnimationMotion.HasPerUnit(clip)) && options.TextRasterizer != null
                 && (clip.Text ?? "").Length <= MaxStyledTextLength;
         }
 
