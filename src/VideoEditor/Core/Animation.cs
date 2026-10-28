@@ -5,16 +5,21 @@ using System.Text.Json.Serialization;
 
 namespace VideoEditor.Core
 {
-    /// <summary>애니메이션 분류: 나타나기(클립 시작 기준)·강조(시작 시각 기준, 반복)·사라지기(클립 끝 기준 — 나타나기를 거꾸로 돌린 움직임).</summary>
+    /// <summary>
+    /// 애니메이션 분류: 나타나기(클립 시작 기준)·강조(시작 시각 기준, 반복)·사라지기(클립 끝 기준 — 나타나기를 거꾸로 돌린 움직임)·
+    /// 이동 경로(시작 시각 기준, 반복 — 경로를 따라 옮긴다, <see cref="MotionPaths"/>).
+    /// </summary>
     public enum AnimationKind
     {
         In,
         Emphasis,
-        Out
+        Out,
+        Path
     }
 
     /// <summary>
-    /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기, 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기.
+    /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기, 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기,
+    /// 이동 경로: 직선·호·원·물결·사용자 경로(이름 앞에 Path — 강조 효과 이름과 겹치지 않게).
     /// 저장된 이름이 바뀌면 예전 프로젝트에서 효과가 빠지므로 이름을 바꾸지 않는다(뒤에만 더한다).
     /// </summary>
     public enum AnimationEffect
@@ -31,7 +36,12 @@ namespace VideoEditor.Core
         Shake,
         Rotate,
         Grow,
-        Transparency
+        Transparency,
+        PathLine,
+        PathArc,
+        PathCircle,
+        PathWave,
+        PathCustom
     }
 
     /// <summary>
@@ -98,10 +108,18 @@ namespace VideoEditor.Core
         /// <summary>정도(효과마다 뜻과 단위가 다르다 — <see cref="AnimationEffectDef.Amount"/>). 정도가 없는 효과는 0.</summary>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public double Amount { get; set; }
+        /// <summary>이동 경로의 점(프로젝트 픽셀, 클립 자리 기준 — 첫 점이 (0, 0)). 경로가 아니면 null.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<PathPoint> Points { get; set; }
+        /// <summary>이동 경로의 되돌아오기: 한 번 안에서 끝까지 갔다가 시작 자리로 돌아온다.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool RoundTrip { get; set; }
 
         public ClipAnimation Clone()
         {
-            return (ClipAnimation)MemberwiseClone();
+            var copy = (ClipAnimation)MemberwiseClone();
+            copy.Points = Points?.Select(p => p?.Clone()).ToList();
+            return copy;
         }
     }
 
@@ -133,8 +151,10 @@ namespace VideoEditor.Core
         /// <summary>사라지기에서 보일 이름(없으면 <see cref="Name"/>).</summary>
         public string OutName { get; init; }
         public string Description { get; init; }
-        /// <summary>강조 효과인지(아니면 나타나기·사라지기).</summary>
+        /// <summary>강조 효과인지(아니면 나타나기·사라지기·이동 경로).</summary>
         public bool Emphasis { get; init; }
+        /// <summary>이동 경로인지(<see cref="ClipAnimations.Paths"/>).</summary>
+        public bool Path { get; init; }
         /// <summary>글자별로만 움직이는 효과(타자기·흩어지기) — 글자 클립에만 넣는다.</summary>
         public bool TextOnly { get; init; }
         /// <summary>고를 수 있는 방향(비었으면 방향 없음). 첫 값이 기본.</summary>
@@ -155,10 +175,16 @@ namespace VideoEditor.Core
         }
 
         public AnimationDirection DefaultDirection { get { return Directions.Count > 0 ? Directions[0] : AnimationDirection.Left; } }
+
+        /// <summary>이 분류에 넣을 수 있는 효과인지(강조는 강조 효과, 이동 경로는 경로, 나타나기·사라지기는 그 밖).</summary>
+        public bool Fits(AnimationKind kind)
+        {
+            return Path ? kind == AnimationKind.Path : kind != AnimationKind.Path && Emphasis == (kind == AnimationKind.Emphasis);
+        }
     }
 
     /// <summary>
-    /// 클립 애니메이션 목록과 규칙: 한 클립에 나타나기 1 + 강조 여러 개(<see cref="MaxEmphasis"/>) + 사라지기 1.
+    /// 클립 애니메이션 목록과 규칙: 한 클립에 나타나기 1 + 강조 여러 개(<see cref="MaxEmphasis"/>) + 사라지기 1 + 이동 경로 1.
     /// 단어·글자별은 글자 클립만, 그 밖의 클립은 한 번에. 프로젝트 파일은 남이 만든 것일 수 있어 읽을 때 <see cref="Clean"/>으로 범위 안에 넣는다.
     /// </summary>
     public static class ClipAnimations
@@ -211,9 +237,25 @@ namespace VideoEditor.Core
                 DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, Amount = new AnimationAmount("불투명도", 0, 100, 40, "%") }
         };
 
+        /// <summary>이동 경로 목록(탭에 보이는 차례). 나타나기·강조·사라지기 목록(<see cref="All"/>)과 따로 둔다.</summary>
+        public static IReadOnlyList<AnimationEffectDef> Paths { get; } = new[]
+        {
+            new AnimationEffectDef { Effect = AnimationEffect.PathLine, Path = true, Name = "직선", Description = "곧은 선을 따라 옮겨 갑니다. 미리 보기에서 끝점을 끌어 고칩니다.",
+                Repeats = true, DefaultEase = AnimationEase.InOut, DefaultSeconds = 2.0 },
+            new AnimationEffectDef { Effect = AnimationEffect.PathArc, Path = true, Name = "호", Description = "둥근 길(원의 한 조각)을 따라 옮겨 갑니다. 미리 보기에서 가운데 점과 끝점을 끌어 고칩니다.",
+                Repeats = true, DefaultEase = AnimationEase.InOut, DefaultSeconds = 2.0 },
+            new AnimationEffectDef { Effect = AnimationEffect.PathCircle, Path = true, Name = "원", Description = "원을 한 바퀴 돌아 제자리로 옵니다. 미리 보기에서 맞은편 점을 끌어 크기와 자리를 고칩니다.",
+                Directions = Turns, Repeats = true, DefaultSeconds = 2.0 },
+            new AnimationEffectDef { Effect = AnimationEffect.PathWave, Path = true, Name = "물결", Description = "오르내리며 옮겨 갑니다. 미리 보기에서 끝점을 끌어 고칩니다.",
+                Repeats = true, DefaultSeconds = 2.0, Amount = new AnimationAmount("물결 높이", 0, 1000, 60, "px") },
+            new AnimationEffectDef { Effect = AnimationEffect.PathCustom, Path = true, Name = "사용자 경로",
+                Description = "찍은 점을 차례로 이어 옮겨 갑니다. 미리 보기에서 점을 끌고, Shift+누르기로 끝에 더하고, 선을 두 번 눌러 사이에 더하고, 점을 두 번 눌러 뺍니다.",
+                Repeats = true, DefaultSeconds = 2.0 }
+        };
+
         public static AnimationEffectDef Def(AnimationEffect effect)
         {
-            return All.FirstOrDefault(d => d.Effect == effect);
+            return All.FirstOrDefault(d => d.Effect == effect) ?? Paths.FirstOrDefault(d => d.Effect == effect);
         }
 
         /// <summary>목록 이름: "나타나기 · 서서히".</summary>
@@ -225,13 +267,13 @@ namespace VideoEditor.Core
 
         public static string KindName(AnimationKind kind)
         {
-            return kind == AnimationKind.In ? "나타나기" : kind == AnimationKind.Out ? "사라지기" : "강조";
+            return kind == AnimationKind.In ? "나타나기" : kind == AnimationKind.Out ? "사라지기" : kind == AnimationKind.Path ? "이동 경로" : "강조";
         }
 
         /// <summary>속성 패널에 보일 방향 이름(효과마다 뜻이 다르다).</summary>
         public static string DirectionName(AnimationEffect effect, AnimationDirection direction)
         {
-            if (effect == AnimationEffect.Spin || effect == AnimationEffect.Rotate)
+            if (effect == AnimationEffect.Spin || effect == AnimationEffect.Rotate || effect == AnimationEffect.PathCircle)
                 return direction == AnimationDirection.Left ? "시계 반대" : "시계 방향";
             if (effect == AnimationEffect.Shake)
                 return direction == AnimationDirection.Up || direction == AnimationDirection.Down ? "세로" : "가로";
@@ -278,11 +320,25 @@ namespace VideoEditor.Core
             return CanHave(clip) && def != null && (!def.TextOnly || clip.Kind == ClipKind.Text);
         }
 
-        /// <summary>기본값으로 새 애니메이션(분류가 효과와 맞지 않으면 null).</summary>
+        /// <summary>기본값으로 새 애니메이션(분류가 효과와 맞지 않으면 null). 이동 경로는 높이 1080 화면 기준 기본 점(<see cref="MotionPaths.DefaultPoints"/>).</summary>
         public static ClipAnimation Create(AnimationEffectDef def, AnimationKind kind, FrameRate rate, Clip clip = null)
         {
-            if (def == null || def.Emphasis != (kind == AnimationKind.Emphasis))
+            if (def == null || !def.Fits(kind))
                 return null;
+            if (def.Path)
+            {
+                return new ClipAnimation
+                {
+                    Kind = kind,
+                    Effect = def.Effect,
+                    Direction = def.DefaultDirection,
+                    Duration = Math.Max(1, Math.Min(MaxFrames, rate.ToFrames(def.DefaultSeconds))),
+                    Repeat = def.DefaultRepeat,
+                    Ease = def.DefaultEase,
+                    Amount = def.Amount?.Default ?? 0,
+                    Points = MotionPaths.DefaultPoints(def.Effect)
+                };
+            }
             var unit = clip == null || clip.Kind == ClipKind.Text ? def.DefaultUnit : AnimationUnit.All;
             return new ClipAnimation
             {
@@ -308,12 +364,18 @@ namespace VideoEditor.Core
             return clip?.Animations?.FirstOrDefault(a => a.Kind == AnimationKind.Out);
         }
 
+        /// <summary>이동 경로(한 클립에 하나 — 없으면 null).</summary>
+        public static ClipAnimation PathOf(Clip clip)
+        {
+            return clip?.Animations?.FirstOrDefault(a => a.Kind == AnimationKind.Path);
+        }
+
         public static List<ClipAnimation> Emphases(Clip clip)
         {
             return clip?.Animations?.Where(a => a.Kind == AnimationKind.Emphasis).ToList() ?? new List<ClipAnimation>();
         }
 
-        /// <summary>나타나기·사라지기를 바꾼다(null이면 뺀다). 목록 차례는 나타나기 → 강조 → 사라지기.</summary>
+        /// <summary>나타나기·사라지기·이동 경로를 바꾼다(null이면 뺀다). 목록 차례는 나타나기 → 강조 → 사라지기 → 이동 경로.</summary>
         public static void Set(Clip clip, AnimationKind kind, ClipAnimation animation)
         {
             if (kind == AnimationKind.Emphasis)
@@ -352,7 +414,8 @@ namespace VideoEditor.Core
         {
             var ordered = list.Where(a => a.Kind == AnimationKind.In)
                 .Concat(list.Where(a => a.Kind == AnimationKind.Emphasis))
-                .Concat(list.Where(a => a.Kind == AnimationKind.Out)).ToList();
+                .Concat(list.Where(a => a.Kind == AnimationKind.Out))
+                .Concat(list.Where(a => a.Kind == AnimationKind.Path)).ToList();
             return ordered.Count == 0 ? null : ordered;
         }
 
@@ -363,8 +426,9 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// 읽은 값(남이 만든 파일일 수 있음)을 규칙에 맞게: 보이는 클립에만, 효과와 분류가 맞는 것만, 나타나기·사라지기는 첫 하나씩, 강조는 <see cref="MaxEmphasis"/>개까지.
-        /// 단어·글자별은 글자 클립만(아니면 한 번에), 타자기·흩어지기는 글자 클립만. 숫자는 범위 안으로(NaN·무한대는 기본값). 남는 것이 없으면 null.
+        /// 읽은 값(남이 만든 파일일 수 있음)을 규칙에 맞게: 보이는 클립에만, 효과와 분류가 맞는 것만, 나타나기·사라지기·이동 경로는 첫 하나씩, 강조는 <see cref="MaxEmphasis"/>개까지.
+        /// 단어·글자별은 글자 클립만(아니면 한 번에), 타자기·흩어지기는 글자 클립만. 숫자는 범위 안으로(NaN·무한대는 기본값). 경로 점은 <see cref="MotionPaths.Clean"/>로,
+        /// 경로가 아니면 점·되돌아오기를 버린다. 남는 것이 없으면 null.
         /// </summary>
         public static List<ClipAnimation> Clean(Clip clip)
         {
@@ -374,7 +438,7 @@ namespace VideoEditor.Core
             foreach (var item in clip.Animations)
             {
                 var def = item == null ? null : Def(item.Effect);
-                if (def == null || !Enum.IsDefined(item.Kind) || def.Emphasis != (item.Kind == AnimationKind.Emphasis) || !Allows(clip, def))
+                if (def == null || !Enum.IsDefined(item.Kind) || !def.Fits(item.Kind) || !Allows(clip, def))
                     continue;
                 if (item.Kind != AnimationKind.Emphasis && result.Any(a => a.Kind == item.Kind))
                     continue;
@@ -383,7 +447,7 @@ namespace VideoEditor.Core
                 var a = item.Clone();
                 if (!def.Directions.Contains(a.Direction))
                     a.Direction = def.DefaultDirection;
-                if (clip.Kind != ClipKind.Text || !Enum.IsDefined(a.Unit))
+                if (clip.Kind != ClipKind.Text || !Enum.IsDefined(a.Unit) || def.Path)
                     a.Unit = AnimationUnit.All;
                 if (def.TextOnly && a.Unit == AnimationUnit.All)
                     a.Unit = AnimationUnit.Character;
@@ -394,12 +458,22 @@ namespace VideoEditor.Core
                 a.Delay = Math.Max(0, Math.Min(MaxFrames, a.Delay));
                 a.Repeat = def.Repeats ? Math.Max(0, Math.Min(MaxRepeat, a.Repeat)) : 1;
                 a.Amount = def.Amount == null ? 0 : double.IsFinite(a.Amount) ? Math.Max(def.Amount.Min, Math.Min(def.Amount.Max, a.Amount)) : def.Amount.Default;
+                if (def.Path)
+                {
+                    a.Stagger = 0;
+                    a.Points = MotionPaths.Clean(a.Effect, a.Points);
+                }
+                else
+                {
+                    a.Points = null;
+                    a.RoundTrip = false;
+                }
                 result.Add(a);
             }
             return Order(result);
         }
 
-        /// <summary>나눈 클립: 왼쪽 조각은 사라지기를, 오른쪽 조각은 나타나기를 뺀다(강조는 둘 다 남는다 — 오른쪽은 그 조각의 시작부터 다시).</summary>
+        /// <summary>나눈 클립: 왼쪽 조각은 사라지기를, 오른쪽 조각은 나타나기를 뺀다(강조·이동 경로는 둘 다 남는다 — 오른쪽은 그 조각의 시작부터 다시).</summary>
         internal static void Split(Clip left, Clip right)
         {
             if (left.Animations != null)

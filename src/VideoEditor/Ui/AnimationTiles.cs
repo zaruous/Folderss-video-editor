@@ -12,7 +12,8 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// 애니메이션 효과 썸네일(속성 패널 [애니메이션] 탭): 작은 화면에 "가나다"를 그 효과의 반쯤 모습으로 보이고, 마우스를 올리면 움직임을 되풀이해 보인다.
-    /// 움직임은 렌더와 같은 계산(<see cref="AnimationMotion"/>)이다 — 한 번에 움직이는 효과는 글 전체, 글자별 효과(타자기·흩어지기)는 글자마다.
+    /// 움직임은 렌더와 같은 계산(<see cref="AnimationMotion"/>)이다 — 한 번에 움직이는 효과는 글 전체, 글자별 효과(타자기·흩어지기)는 글자마다,
+    /// 이동 경로는 "가" 한 글자가 점선 경로를 따라 움직인다.
     /// </summary>
     internal sealed class AnimationTile : Button
     {
@@ -77,6 +78,8 @@ namespace VideoEditor.Ui
                 animation.Stagger = def.DefaultStagger;
             if (kind == AnimationKind.Emphasis)
                 animation.Repeat = def.Repeats ? 2 : 1;
+            if (def.Path)
+                FitPath(animation);
             var length = kind == AnimationKind.Emphasis ? animation.Duration * animation.Repeat : animation.Duration;
             _period = length + 20;
             _clip = TimelineEdits.CreateText(string.Concat(Letters), 0, _period);
@@ -90,7 +93,37 @@ namespace VideoEditor.Ui
             Unloaded += (s, e) => Stop();
         }
 
-        /// <summary>고른 효과(지금 클립의 나타나기·사라지기)면 테두리를 강조색으로.</summary>
+        /// <summary>
+        /// 이동 경로 썸네일: 기본 경로를 작은 화면에 들게 줄이고(점·물결 높이를 함께), 경로가 화면 가운데에 오게 글자의 시작 자리를 옮긴다.
+        /// 글자는 "가" 하나만 보이고 경로는 점선으로 그린다.
+        /// </summary>
+        private void FitPath(ClipAnimation animation)
+        {
+            var samples = MotionPaths.Samples(animation, 32);
+            double left = samples.Min(p => p.X), right = samples.Max(p => p.X), top = samples.Min(p => p.Y), bottom = samples.Max(p => p.Y);
+            var fit = Math.Min((StageWidth - 24) / Math.Max(1, right - left), (StageHeight - 14) / Math.Max(1, bottom - top));
+            // 프로젝트 픽셀 → 썸네일 화면은 ScreenScale배라 fit / ScreenScale배로 줄인 경로가 화면에서 fit배
+            animation.Points = animation.Points.Select(p => new PathPoint(p.X * fit / ScreenScale, p.Y * fit / ScreenScale)).ToList();
+            animation.Amount *= fit / ScreenScale;
+            _origin = new Vector(-(left + right) / 2 * fit, -(top + bottom) / 2 * fit);
+            for (var i = 1; i < _letters.Length; i++)
+                _letters[i].Visibility = Visibility.Collapsed;
+            var line = new System.Windows.Shapes.Polyline
+            {
+                Stroke = new SolidColorBrush(Color.FromRgb(0x9C, 0xA3, 0xAF)),
+                StrokeThickness = 1,
+                StrokeDashArray = new DoubleCollection { 2, 2 },
+                IsHitTestVisible = false
+            };
+            foreach (var (x, y) in samples)
+                line.Points.Add(new Point(StageWidth / 2 + _origin.X + x * fit, StageHeight / 2 + _origin.Y + y * fit));
+            _stage.Children.Insert(0, line);
+        }
+
+        // 이동 경로 썸네일에서 글자의 시작 자리(가운데에서, 썸네일 화면 픽셀)
+        private Vector _origin;
+
+        /// <summary>고른 효과(지금 클립의 나타나기·사라지기·이동 경로)면 테두리를 강조색으로.</summary>
         public void SetSelected(bool selected)
         {
             if (selected)
@@ -144,8 +177,8 @@ namespace VideoEditor.Ui
             var motion = AnimationMotion.ObjectMotion(_clip, false);
             var scale = motion.Scale?.Eval(frame) ?? 1;
             var rotation = motion.Rotation?.Eval(frame) ?? 0;
-            var x = (motion.ShiftX?.Eval(frame) ?? 0) * ScreenScale;
-            var y = (motion.ShiftY?.Eval(frame) ?? 0) * ScreenScale;
+            var x = (motion.ShiftX?.Eval(frame) ?? 0) * ScreenScale + _origin.X;
+            var y = (motion.ShiftY?.Eval(frame) ?? 0) * ScreenScale + _origin.Y;
             _word.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             var size = _word.DesiredSize;
             foreach (var (weight, dx, dy) in motion.Fly)

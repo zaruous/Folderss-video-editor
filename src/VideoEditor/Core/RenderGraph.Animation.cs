@@ -105,13 +105,27 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// overlay 위치 식(가운데 + x·y 출력 픽셀). 움직임이 있으면 흔들기(프로젝트 픽셀 × k), 날아오기(무게만큼 그 방향 화면 밖 — 오른쪽 가장자리가 화면 왼쪽 끝 등),
-        /// 크기가 0에 가까우면 화면 밖으로 치우기를 더한다. time은 overlay가 보는 시각(바탕 흐름)의 τ 글.
+        /// 합치기 이음매 — 기준 위치(프로젝트 픽셀, τ = 클립 안 장 번호의 시간식). 지금은 클립의 고정 X·Y다.
+        /// 키프레임을 넣으면 여기서 그 시각의 키프레임 값 식을 돌려준다(상수가 아니면 overlay 식에 그대로 들어간다).
+        /// 위치 = 기준 위치 + 이동 경로 변위(시작점 기준) + 나타나기·강조·사라지기 변위 — 모두 <see cref="OverlayPosition"/>에서 한 번에 더한다.
         /// </summary>
-        private static (string X, string Y) OverlayPosition(ObjectMotion motion, double x, double y, double k, string time)
+        internal static (MotionExpr X, MotionExpr Y) BasePosition(Clip clip)
         {
-            var x0 = "(main_w-overlay_w)/2+" + N(x);
-            var y0 = "(main_h-overlay_h)/2+" + N(y);
+            return (MotionExpr.Num(clip.X), MotionExpr.Num(clip.Y));
+        }
+
+        /// <summary>
+        /// overlay 위치 식(가운데 + x·y 출력 픽셀): 기준 위치(<see cref="BasePosition"/>)에 움직임이 있으면 이동 경로·흔들기(프로젝트 픽셀 × k / shrink),
+        /// 날아오기(무게만큼 그 방향 화면 밖 — 오른쪽 가장자리가 화면 왼쪽 끝 등), 크기가 0에 가까우면 화면 밖으로 치우기를 더한다.
+        /// time은 overlay가 보는 시각(바탕 흐름)의 τ 글. 기준 위치가 상수면 글이 예전과 같다(N(X × k / shrink)).
+        /// </summary>
+        private static (string X, string Y) OverlayPosition(Clip clip, ObjectMotion motion, double k, double shrink, string time)
+        {
+            var (baseX, baseY) = BasePosition(clip);
+            string Base(MotionExpr value) => value.Constant is double constant ? N(constant * k / shrink) : (value * k / shrink).ToFfmpeg(time);
+            var x0 = "(main_w-overlay_w)/2+" + Base(baseX);
+            var y0 = "(main_h-overlay_h)/2+" + Base(baseY);
+            k /= shrink;
             if (motion == null)
                 return (x0, y0);
             var xs = new StringBuilder(x0);

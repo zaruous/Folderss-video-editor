@@ -505,6 +505,16 @@ namespace VideoEditor.Core
                 var def = ClipAnimations.Def(animation.Effect);
                 if (def == null)
                     continue;
+                if (animation.Kind == AnimationKind.Path)
+                {
+                    // 이동 경로: 시작점 기준 변위를 다른 효과의 변위와 함께 더한다(합치는 곳은 RenderGraph.OverlayPosition)
+                    var (pathX, pathY) = MotionPaths.Displacement(clip, animation);
+                    if (pathX.Constant != 0)
+                        shiftX = shiftX == null ? pathX : shiftX + pathX;
+                    if (pathY.Constant != 0)
+                        shiftY = shiftY == null ? pathY : shiftY + pathY;
+                    continue;
+                }
                 if (animation.Kind == AnimationKind.Emphasis)
                 {
                     Emphasis(clip, animation, def, Scale, Rotate, Fade, (dx, dy) =>
