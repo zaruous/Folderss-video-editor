@@ -12,7 +12,7 @@ using VideoEditor.Core;
 namespace VideoEditor.Media
 {
     /// <summary>
-    /// 꾸민 글자 PNG 캐시(프로세스별 임시 폴더의 styled-text\st-&lt;해시&gt;.png). 있으면 다시 그리지 않는다.
+    /// 꾸민 글자 PNG 캐시(프로세스별 임시 폴더의 styled-text\st-&lt;해시&gt;.png, 단어·글자별 애니메이션의 장은 sa-&lt;묶음 해시&gt;-i00012.png 등). 있으면 다시 그리지 않는다.
     /// 쓰기는 .part에 그린 뒤 옮기고, 지우기는 알려진 이름 패턴의 파일만 — 재귀 삭제·링크 따라가기는 하지 않는다.
     /// </summary>
     public static class TextImageCache
@@ -24,8 +24,9 @@ namespace VideoEditor.Media
         private static readonly TimeSpan RenderTimeout = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan KeepRecent = TimeSpan.FromMinutes(5);
         // \z: $는 끝의 줄바꿈 앞에서도 맞는다
-        private static readonly Regex CacheName = new Regex("^st-[0-9a-f]{64}\\.png\\z", RegexOptions.CultureInvariant);
-        private static readonly Regex PartName = new Regex("^st-[0-9a-f]{64}\\.png\\.[0-9a-f]{32}\\.part\\z", RegexOptions.CultureInvariant);
+        private const string Names = "(?:st-[0-9a-f]{64}|sa-[0-9a-f]{64}-(?:[io][0-9]{5}|s))\\.png";
+        private static readonly Regex CacheName = new Regex("^" + Names + "\\z", RegexOptions.CultureInvariant);
+        private static readonly Regex PartName = new Regex("^" + Names + "\\.[0-9a-f]{32}\\.part\\z", RegexOptions.CultureInvariant);
         // 같은 경로는 한 번만 그리도록 경로 해시로 나눈 문(경로마다 만들면 끝없이 쌓인다)
         private static readonly SemaphoreSlim[] Gates = Enumerable.Range(0, 32).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 

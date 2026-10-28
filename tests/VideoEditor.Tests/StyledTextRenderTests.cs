@@ -323,11 +323,19 @@ namespace VideoEditor.Tests
         [Fact]
         public void Key_CoversEveryProperty()
         {
-            // 요청·스타일에 필드를 더하고 키에 넣기를 잊으면 여기서 걸린다(예전 PNG를 잘못 다시 쓰게 됨). 아트 모양도 채워 그 필드까지 본다
+            // 요청·스타일에 필드를 더하고 키에 넣기를 잊으면 여기서 걸린다(예전 PNG를 잘못 다시 쓰게 됨). 아트 모양·애니메이션 장도 채워 그 필드까지 본다
             TextImageRequest WithArt()
             {
                 var r = Request();
                 r.Art = new ArtShape();
+                r.Animation = new TextAnimationFrame
+                {
+                    In = new ClipAnimation { Kind = AnimationKind.In, Effect = AnimationEffect.Typewriter, Unit = AnimationUnit.Character, Duration = 10 },
+                    Out = new ClipAnimation { Kind = AnimationKind.Out, Effect = AnimationEffect.Scatter, Unit = AnimationUnit.Word, Duration = 10 },
+                    InLength = 10,
+                    OutStart = 20,
+                    OutLength = 10
+                };
                 return r;
             }
             var baseline = WithArt().Key(1);
@@ -372,6 +380,8 @@ namespace VideoEditor.Tests
                 return (double)value == 0 ? 1.0 : (double)value / 2;
             if (type == typeof(int))
                 return (int)value + 2;
+            if (type == typeof(long))
+                return (long)value + 2;
             if (type == typeof(string))
                 return ((string)value ?? "").StartsWith("#", StringComparison.Ordinal) ? "#123456" : "다른 값";
             if (type == typeof(List<string>))

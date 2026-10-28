@@ -28,6 +28,58 @@ namespace VideoEditor.Helper
         public AVRational? FrameRate { get; private set; }
         /// <summary>-pattern_type(image2).</summary>
         public string PatternType { get; private set; }
+        /// <summary>-framerate 글 그대로(그림 묶음의 디멀티플렉서 옵션으로 넘긴다).</summary>
+        public string FrameRateText { get; private set; }
+
+        /// <summary>
+        /// 그림 묶음(-f image2 -pattern_type sequence, 파일 이름의 %05d 등에 0번부터 번호): ffmpeg.exe처럼 장마다 다음 파일을 -framerate 간격으로 읽는다.
+        /// 그림 한 장(-pattern_type none, *_pipe)과 달리 한 장을 되풀이하지 않는다.
+        /// </summary>
+        public bool IsSequence
+        {
+            get { return Format == "image2" && PatternType == "sequence"; }
+        }
+
+        /// <summary>바뀌었는지 볼 파일: 보통은 입력 파일, 그림 묶음은 첫 장(0번) 파일.</summary>
+        public string StatPath
+        {
+            get { return IsSequence ? SequenceFile(Path, 0) : Path; }
+        }
+
+        /// <summary>그림 묶음 이름 패턴(%%는 %, %d·%05d는 번호)의 index번 파일 이름 — image2의 이름 규칙과 같다.</summary>
+        internal static string SequenceFile(string pattern, long index)
+        {
+            var text = new System.Text.StringBuilder();
+            var numbered = false;
+            for (var i = 0; i < pattern.Length; i++)
+            {
+                var ch = pattern[i];
+                if (ch != '%' || i + 1 >= pattern.Length)
+                {
+                    text.Append(ch);
+                    continue;
+                }
+                if (pattern[i + 1] == '%')
+                {
+                    text.Append('%');
+                    i++;
+                    continue;
+                }
+                var j = i + 1;
+                while (j < pattern.Length && char.IsDigit(pattern[j]))
+                    j++;
+                if (numbered || j >= pattern.Length || pattern[j] != 'd')
+                {
+                    text.Append(ch);
+                    continue;
+                }
+                var width = j > i + 1 ? int.Parse(pattern.Substring(i + 1, j - i - 1), CultureInfo.InvariantCulture) : 0;
+                text.Append(index.ToString(CultureInfo.InvariantCulture).PadLeft(width, '0'));
+                numbered = true;
+                i = j;
+            }
+            return text.ToString();
+        }
 
         public static InputSpec Parse(IList<string> args)
         {
@@ -60,6 +112,7 @@ namespace VideoEditor.Helper
                         break;
                     case "-framerate":
                         spec.FrameRate = Rational(value, option);
+                        spec.FrameRateText = value;
                         break;
                     case "-pattern_type":
                         spec.PatternType = value;
@@ -130,6 +183,10 @@ namespace VideoEditor.Helper
 
         public string Key { get; private set; }
         public string Path { get; private set; }
+        /// <summary>바뀌었는지 볼 파일(그림 묶음은 첫 장).</summary>
+        public string StatPath { get; private set; }
+        /// <summary>그림 묶음(<see cref="InputSpec.IsSequence"/>) — 연 뒤에 더 그린 장을 보지 못하므로 다시 쓰지 않는다.</summary>
+        public bool IsSequence { get; private set; }
         public AVMediaType Type { get; private set; }
         public long FileSize { get; private set; }
         public long FileTime { get; private set; }
@@ -152,11 +209,11 @@ namespace VideoEditor.Helper
 
         public static InputSource Open(InputSpec spec, AVMediaType type)
         {
-            var source = new InputSource { Key = spec.PoolKey(type), Path = spec.Path, Type = type, LastUsed = DateTime.UtcNow };
+            var source = new InputSource { Key = spec.PoolKey(type), Path = spec.Path, StatPath = spec.StatPath, IsSequence = spec.IsSequence, Type = type, LastUsed = DateTime.UtcNow };
             try
             {
                 source.OpenCore(spec);
-                var file = new FileInfo(spec.Path);
+                var file = new FileInfo(spec.StatPath);
                 source.FileSize = file.Length;
                 source.FileTime = file.LastWriteTimeUtc.Ticks;
                 return source;
@@ -181,6 +238,9 @@ namespace VideoEditor.Helper
             ffmpeg.av_dict_set(&options, "protocol_whitelist", "file", 0);
             if (spec.PatternType != null)
                 ffmpeg.av_dict_set(&options, "pattern_type", spec.PatternType, 0);
+            // 그림 묶음은 디멀티플렉서가 장 시각을 -framerate로 매긴다(ffmpeg.exe와 같다 — 한 장 그림은 아래 Reset이 따로 매긴다)
+            if (spec.IsSequence && spec.FrameRateText != null)
+                ffmpeg.av_dict_set(&options, "framerate", spec.FrameRateText, 0);
             AVFormatContext* format = null;
             var result = ffmpeg.avformat_open_input(&format, spec.Path, iformat, &options);
             ffmpeg.av_dict_free(&options);
@@ -204,7 +264,7 @@ namespace VideoEditor.Helper
             _packet = ffmpeg.av_packet_alloc();
 
             var name = Native.Text(_format->iformat->name) ?? "";
-            IsStill = Type == AVMediaType.AVMEDIA_TYPE_VIDEO && (name == "image2" || name.EndsWith("_pipe", StringComparison.Ordinal));
+            IsStill = Type == AVMediaType.AVMEDIA_TYPE_VIDEO && (name == "image2" || name.EndsWith("_pipe", StringComparison.Ordinal)) && !spec.IsSequence;
             TimeBase = _stream->time_base;
             FrameRate = Type == AVMediaType.AVMEDIA_TYPE_VIDEO ? ffmpeg.av_guess_frame_rate(_format, _stream, null) : Native.Q(0, 1);
             StartSeconds = _format->start_time != ffmpeg.AV_NOPTS_VALUE ? _format->start_time / (double)ffmpeg.AV_TIME_BASE : 0;
@@ -227,7 +287,7 @@ namespace VideoEditor.Helper
         {
             try
             {
-                var file = new FileInfo(Path);
+                var file = new FileInfo(StatPath ?? Path);
                 return !file.Exists || file.Length != FileSize || file.LastWriteTimeUtc.Ticks != FileTime;
             }
             catch (Exception)
@@ -560,7 +620,8 @@ namespace VideoEditor.Helper
 
         private static bool Reusable(InputSource source)
         {
-            return source.Type != AVMediaType.AVMEDIA_TYPE_AUDIO;
+            // 그림 묶음은 열 때 마지막 장 번호를 정해 두므로 나중에 더 그린 장을 읽지 못한다 — 요청마다 새로 연다(PNG라 가볍다)
+            return source.Type != AVMediaType.AVMEDIA_TYPE_AUDIO && !source.IsSequence;
         }
 
         /// <summary>idle보다 오래 안 쓴 것을 닫는다.</summary>
