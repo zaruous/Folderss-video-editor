@@ -9,7 +9,7 @@ using VideoEditor.Media;
 
 namespace VideoEditor.Ui
 {
-    /// <summary>Folderss 설정 창의 "동영상 편집" 탭: FFmpeg 경로(비우면 자동으로 찾음), 사진·글자 기본 길이, 사진을 놓을 때 맞춤 방식, yt-dlp 경로, 다운로드 폴더.</summary>
+    /// <summary>Folderss 설정 창의 "동영상 편집" 탭: FFmpeg 경로(비우면 자동으로 찾음), 사진·글자 기본 길이, 사진을 놓을 때 맞춤 방식, yt-dlp 경로, 다운로드 폴더, 유튜브 올리기(클라이언트·로그인).</summary>
     internal sealed class EditorSettingsPage : IPluginSettingsPage
     {
         private readonly EditorServices _services;
@@ -19,6 +19,7 @@ namespace VideoEditor.Ui
         private static readonly ClipFit[] Fits = { ClipFit.Fill, ClipFit.Blur, ClipFit.Fit, ClipFit.Stretch };
         private TextBox _ytDlp;
         private TextBox _downloadFolder;
+        private YouTubeSettingsSection _youTube;
 
         public EditorSettingsPage(EditorServices services)
         {
@@ -113,6 +114,8 @@ namespace VideoEditor.Ui
             };
             // 비어 있으면 저장 안 한 프로젝트 기준 기본 폴더(플러그인 데이터 폴더\media)를 연다
             open.Click += (s, e) => downloadStatus.Text = UiKit.OpenFolder(DownloadFolderToOpen()) ?? "";
+            _youTube = new YouTubeSettingsSection(_services);
+            panel.Children.Add(_youTube.View);
             return panel;
         }
 
@@ -144,6 +147,8 @@ namespace VideoEditor.Ui
             _services.Manager.SetSetting(EditorServices.DownloadFolderKey, download.Length > 0 && System.IO.Path.IsPathFullyQualified(download) ? download : null);
             // 다음 편집 창부터 새 경로로 다시 찾는다
             _ = _services.LocateAsync();
+            // 잘못된 클라이언트 값이면 예외(설정 저장 실패 메시지) — 다른 설정을 다 저장한 뒤에
+            _youTube.Save();
         }
     }
 }
