@@ -36,8 +36,8 @@ namespace VideoEditor.Tests
         [Fact]
         public void FileName_IsSourceNamePlusCodecExtension()
         {
-            Assert.Equal("여행 사운드.m4a", SoundExtract.FileName(@"C:\영상\여행.mp4", "aac"));
-            Assert.Equal("노래 사운드.mp3", SoundExtract.FileName(@"C:\음악\노래.mp3", "mp3"));
+            Assert.Equal("여행 사운드.m4a", SoundExtract.FileName(Path.Combine("영상", "여행.mp4"), "aac"));
+            Assert.Equal("노래 사운드.mp3", SoundExtract.FileName(Path.Combine("음악", "노래.mp3"), "mp3"));
             Assert.Equal("녹음 사운드.wav", SoundExtract.FileName("녹음.wav", "pcm_s16le"));
             Assert.Equal("사운드.mka", SoundExtract.FileName("", null));
         }
