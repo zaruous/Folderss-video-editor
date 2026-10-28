@@ -19,7 +19,7 @@ namespace VideoEditor.Ui
     /// 기하만 칠하므로 ClearType·힌팅·모니터 배율과 상관없다(pixelsPerDip 1, 96 DPI 고정).
     /// 그리기는 배경 STA 스레드 하나에서 하나씩 한다 — UI 스레드를 쓰지 않고(큰 그림이 편집 화면을 멈추지 않게), 요청마다 스레드를 만들지 않는다.
     /// </summary>
-    internal sealed class StyledTextRasterizer : ITextRasterizer, IDisposable
+    internal sealed partial class StyledTextRasterizer : ITextRasterizer, IDisposable
     {
         private static readonly TimeSpan RenderTimeout = TimeSpan.FromSeconds(30);
         private static readonly Lazy<FontChoice[]> LazyFonts = new Lazy<FontChoice[]>(LoadFonts);
@@ -162,6 +162,12 @@ namespace VideoEditor.Ui
         private static void Draw(TextImageRequest request, string pngPath, CancellationToken cancellation)
         {
             cancellation.ThrowIfCancellationRequested();
+            // 단어·글자별 애니메이션의 한 장은 글자 요소마다 따로 그린다(#4 — StyledTextRasterizer.Animation.cs)
+            if (request.Animation != null && request.Art == null && TextUnits.Elements(request.Text).Count > 0)
+            {
+                DrawAnimated(request, pngPath, cancellation);
+                return;
+            }
             var style = request.Style?.Clone() ?? new TextStyle();
             style.Normalize();
             var size = Clamp(request.FontPixelSize, 0.5, 4000, 1);
