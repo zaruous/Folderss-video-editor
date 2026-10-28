@@ -129,10 +129,10 @@ namespace VideoEditor.Core
             var (cr, cg, cb) = VideoEffects.Channels(r.Color);
             var text = new StringBuilder("[" + p + "a];");
 
-            // 거리 지도(한 장): 픽셀 가운데에서 중심까지의 거리 × 4(반올림) — 모양 표의 가로 주소. 세로 주소는 0
+            // 거리 지도(한 장 — 캐시가 있으면 파일로 읽음): 픽셀 가운데에서 중심까지의 거리 × 4(반올림) — 모양 표의 가로 주소. 세로 주소는 0
             var length = (int)Math.Ceiling(Sub * shape.Reach) + 2;
-            text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gray16,geq=lum='round({4}*hypot(X+0.5-{5},Y+0.5-{6}))'{7}[{8}d];",
-                w, h, r.Rate, once, Sub, N(shape.CenterX), N(shape.CenterY), hold, p);
+            text.Append(r.Still(string.Format(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gray16,geq=lum='round({4}*hypot(X+0.5-{5},Y+0.5-{6}))'",
+                w, h, r.Rate, once, Sub, N(shape.CenterX), N(shape.CenterY)), "gray16") + hold + "[" + p + "d];");
             text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gray16{4}[{5}z];", w, h, r.Rate, once, hold, p);
 
             // 모양 표(한 장): 가로 X ↔ 고리에서의 거리 s = (X − 원점)/4(바깥이 +), 세로 Y ↔ 세기 Y/31. 원점 = 주기 끝 반지름 × 4
@@ -151,8 +151,10 @@ namespace VideoEditor.Core
             var u = ScanKit.Phase(r, period);
             var radius = string.Format(CultureInfo.InvariantCulture, "({0}*(1-pow(1-{1},2)))", N(shape.End), u);
             var strength = string.Format(CultureInfo.InvariantCulture, "(min(1,{0}/{1})*min(1,(1-{0})/{2}))", u, N(FadeIn), N(FadeOut));
-            text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r='{4}':g='{5}':b='{6}':a='{7}'{8},crop={9}:1:'{10}-round({11}*{12})':'round({13}*{14})'[{15}r];",
-                origin + length, Levels, r.Rate, once, Light(cr), Light(cg), Light(cb), push, hold, length, origin, Sub, radius, Levels - 1, strength, p);
+            // 모양 표(한 장 — 캐시가 있으면 파일로 읽음)
+            text.Append(r.Still(string.Format(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r='{4}':g='{5}':b='{6}':a='{7}'",
+                origin + length, Levels, r.Rate, once, Light(cr), Light(cg), Light(cb), push), "gbrap"));
+            text.AppendFormat(CultureInfo.InvariantCulture, "{0},crop={1}:1:'{2}-round({3}*{4})':'round({5}*{6})'[{7}r];", hold, length, origin, Sub, radius, Levels - 1, strength, p);
             text.AppendFormat(CultureInfo.InvariantCulture, "[{0}r][{0}d][{0}z]remap", p);
             // 사람에게만: 빛과 미는 거리(알파 칸) 모두에 마스크를 곱한다
             if (r.Mask != null)
@@ -171,14 +173,14 @@ namespace VideoEditor.Core
                 if (q > 1)
                 {
                     int cw = (w + q - 1) / q, ch = (h + q - 1) / q;
-                    text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r=128:g='{4}':b='{5}':a=128[{6}t];",
-                        cw, ch, r.Rate, once, Direction("X", N(q), N(q / 2.0)), Direction("Y", N(q), N(q / 2.0)), p);
+                    text.Append(r.Still(string.Format(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r=128:g='{4}':b='{5}':a=128",
+                        cw, ch, r.Rate, once, Direction("X", N(q), N(q / 2.0)), Direction("Y", N(q), N(q / 2.0))), "gbrap") + "[" + p + "t];");
                     text.AppendFormat(CultureInfo.InvariantCulture, "[{0}t]scale={1}:{2}:flags=bilinear,crop={3}:{4}:0:0{5}[{0}c];", p, cw * q, ch * q, w, h, hold);
                 }
                 else
                 {
-                    text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r=128:g='{4}':b='{5}':a=128{6}[{7}c];",
-                        w, h, r.Rate, once, Direction("X", "1", "0.5"), Direction("Y", "1", "0.5"), hold, p);
+                    text.Append(r.Still(string.Format(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r=128:g='{4}':b='{5}':a=128",
+                        w, h, r.Rate, once, Direction("X", "1", "0.5"), Direction("Y", "1", "0.5")), "gbrap") + hold + "[" + p + "c];");
                 }
                 // 미는 거리(알파 면)를 펴서 방향과 곱한다 — lut2 한 번에 G 면 = 128 + cos × 거리, B 면 = 128 + sin × 거리(R·A 면 128).
                 // 그 G·B 면을 색 세 면에 편 것이 displace의 가로·세로 지도다(알파 면 128 — 알파는 밀지 않음)

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -24,6 +25,8 @@ namespace VideoEditor.Ui
     {
         private readonly EditorServices _services;
         private readonly Dispatcher _dispatcher;
+        // 재생 구간의 무거운 수식 전환을 배경에서 미리 그리는 줄(이 창의 것 — 캐시 파일은 편집 창들이 함께 쓴다)
+        private readonly PrerenderQueue _prerender;
         private CancellationTokenSource _frameCancel;
         private CancellationTokenSource _prepareCancel;
         private int _frameRequest;
@@ -34,7 +37,23 @@ namespace VideoEditor.Ui
         {
             _services = services;
             _dispatcher = dispatcher;
+            _prerender = new PrerenderQueue(services.Prerender);
+            _prerender.Changed += () => _dispatcher.BeginInvoke(new Action(() => PrerenderChanged?.Invoke(this, EventArgs.Empty)));
+            _prerender.Finished += (job, error) => _dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_disposed)
+                    return;
+                Message?.Invoke(error == null
+                    ? "전환을 미리 그렸습니다(" + job.Name + ") — 다시 재생하면 그 구간을 매끄럽게 봅니다"
+                    : "전환을 미리 그리지 못했습니다(" + job.Name + "): " + error.Message.Split('\n')[0]);
+            }));
         }
+
+        /// <summary>배경에서 미리 그리는 전환(없으면 null) — 미리 보기 화면 구석에 진행을 보인다.</summary>
+        public PrerenderStatus Prerendering { get { return _prerender.Status; } }
+
+        /// <summary><see cref="Prerendering"/>이 바뀜(UI 스레드에서).</summary>
+        public event EventHandler PrerenderChanged;
 
         /// <summary>그린 화면(크기가 바뀌면 새 비트맵).</summary>
         public WriteableBitmap Bitmap { get; private set; }
@@ -140,14 +159,22 @@ namespace VideoEditor.Ui
             var size = OutputSize(copy);
             EnsureBitmap(size.Width, size.Height);
             var rasterizer = _services.TextRasterizer;
-            if (!copy.AllClips.Any(RenderGraph.NeedsTextImage))
+            var texts = copy.AllClips.Any(RenderGraph.NeedsTextImage);
+            // 재생 구간에 무거운 수식 전환이 있으면 미리 그린 캐시를 찾는다(없는 것은 배경에서 그리기 시작 — 이번 재생은 지금 방식)
+            var heavy = TransitionPrerender.Windows(copy, from, to, tool.MajorVersion).Count > 0;
+            if (!texts && !heavy)
             {
-                Start(tool, copy, from, to, size.Width, size.Height, rasterizer);
+                Start(tool, copy, from, to, size.Width, size.Height, rasterizer, null);
                 return;
             }
             // 꾸민 글자 PNG는 UI 스레드 밖에서 먼저 그려 둔다 — 재생 FFmpeg는 캐시만 읽어 화면이 멈추지 않는다
             var prepare = _prepareCancel = new CancellationTokenSource();
-            Task.Run(() => PreviewRenderer.PrepareTextImages(copy, from, to, size.Width, size.Height, rasterizer, prepare.Token), prepare.Token)
+            Task.Run(() =>
+            {
+                if (texts)
+                    PreviewRenderer.PrepareTextImages(copy, from, to, size.Width, size.Height, rasterizer, prepare.Token);
+                return heavy ? SurveyPrerender(tool, copy, from, to, size.Width, size.Height, rasterizer) : null;
+            }, prepare.Token)
                 .ContinueWith(t => _dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (prepare != _prepareCancel || _disposed)
@@ -160,18 +187,38 @@ namespace VideoEditor.Ui
                         StateChanged?.Invoke(this, EventArgs.Empty);
                         return;
                     }
-                    Start(tool, copy, from, to, size.Width, size.Height, rasterizer);
+                    Start(tool, copy, from, to, size.Width, size.Height, rasterizer, t.Result);
                 })), TaskScheduler.Default);
             // 준비하는 동안에도 재생 중으로 보인다(재생 단추가 멈춤 모양)
             StateChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        private void Start(FfmpegTool tool, Project copy, long from, long to, int width, int height, ITextRasterizer rasterizer)
+        /// <summary>
+        /// 재생 구간의 무거운 수식 전환: 미리 그린 캐시가 있는 구간을 돌려주고, 없는 것은 배경에서 그리기 시작한다(재생 헤드에서 가까운 차례).
+        /// 캐시를 찾지 못하면(오류) 빈 목록 — 지금 방식(줄여 섞기)으로 재생한다. UI 스레드 밖에서 부른다.
+        /// </summary>
+        private IReadOnlyList<PrerenderedSpan> SurveyPrerender(FfmpegTool tool, Project copy, long from, long to, int width, int height, ITextRasterizer rasterizer)
+        {
+            try
+            {
+                var (spans, jobs) = _services.Prerender.Survey(tool, copy, from, to, width, height, rasterizer);
+                // 이미 그리는 중인 일만 다시 청했으면 알리지 않는다(재생을 거듭 눌러도 같은 안내가 되풀이되지 않게)
+                if (jobs.Count > 0 && _prerender.Request(tool, jobs) > 0)
+                    _dispatcher.BeginInvoke(new Action(() => Message?.Invoke("무거운 전환 " + jobs.Count + "개를 미리 그립니다 — 다 그리면 그 구간을 매끄럽게 재생합니다(진행은 미리 보기 화면 왼쪽 아래)")));
+                return spans;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        private void Start(FfmpegTool tool, Project copy, long from, long to, int width, int height, ITextRasterizer rasterizer, IReadOnlyList<PrerenderedSpan> prerendered)
         {
             try
             {
                 var helper = _services.HelperFor(tool);
-                _playback = new Playback(this, tool, helper, copy, from, to, width, height, Muted, rasterizer, ex => _services.ReportHelperFailure(helper, ex));
+                _playback = new Playback(this, tool, helper, copy, from, to, width, height, Muted, rasterizer, ex => _services.ReportHelperFailure(helper, ex), prerendered);
             }
             catch (Exception ex)
             {
@@ -179,6 +226,18 @@ namespace VideoEditor.Ui
                 Message?.Invoke("재생하지 못했습니다: " + ex.Message);
             }
             StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>미리 그린 캐시로 시작한 재생이 한 장도 못 냄(깨진 캐시 등): 그 캐시를 버리고 지금 방식(줄여 섞기)으로 다시 재생한다.</summary>
+        private void RetryWithoutPrerender(Playback failed)
+        {
+            if (_playback != failed)
+                return;
+            _playback = null;
+            failed.Dispose();
+            foreach (var span in failed.Prerendered)
+                RenderCommand.TryDelete(span.Path);
+            Start(failed.Tool, failed.Project, failed.From, failed.To, failed.Width, failed.Height, failed.Rasterizer, null);
         }
 
         public void Stop()
@@ -199,6 +258,7 @@ namespace VideoEditor.Ui
             _disposed = true;
             Stop();
             _frameCancel?.Cancel();
+            _prerender.Dispose();
         }
 
         /// <summary>재생 한 번: 화면 흐름 + 소리 흐름(도우미의 파이프 또는 ffmpeg.exe 프로세스) + 읽는 스레드 + 표시 타이머.</summary>
@@ -226,7 +286,7 @@ namespace VideoEditor.Ui
             private int _disposed;
 
             public Playback(PreviewPlayer owner, FfmpegTool tool, PreviewHelper helper, Project project, long from, long to, int width, int height, bool muted,
-                ITextRasterizer rasterizer, Action<HelperException> helperFailed)
+                ITextRasterizer rasterizer, Action<HelperException> helperFailed, IReadOnlyList<PrerenderedSpan> prerendered)
             {
                 _owner = owner;
                 _from = from;
@@ -234,9 +294,13 @@ namespace VideoEditor.Ui
                 _width = width;
                 _height = height;
                 _rate = project.Rate;
+                Tool = tool;
+                Project = project;
+                Rasterizer = rasterizer;
+                Prerendered = prerendered ?? Array.Empty<PrerenderedSpan>();
                 try
                 {
-                    _video = PreviewRenderer.OpenVideo(tool, helper, project, from, to, width, height, rasterizer, helperFailed);
+                    _video = PreviewRenderer.OpenVideo(tool, helper, project, from, to, width, height, rasterizer, helperFailed, Prerendered);
                     new Thread(ReadVideo) { IsBackground = true, Name = "preview-video" }.Start();
                     if (!muted)
                     {
@@ -269,6 +333,16 @@ namespace VideoEditor.Ui
                     throw;
                 }
             }
+
+            // 같은 재생을 캐시 없이 다시 시작할 때 쓴다(RetryWithoutPrerender)
+            public FfmpegTool Tool { get; }
+            public Project Project { get; }
+            public ITextRasterizer Rasterizer { get; }
+            public IReadOnlyList<PrerenderedSpan> Prerendered { get; }
+            public long From { get { return _from; } }
+            public long To { get { return _to; } }
+            public int Width { get { return _width; } }
+            public int Height { get { return _height; } }
 
             private void ReadVideo()
             {
@@ -361,6 +435,12 @@ namespace VideoEditor.Ui
                 // 화면 흐름이 한 장도 못 내고 끝남(파일 없음·그래프 오류): 멈추고 이유를 알린다
                 if (_videoDone && _frames.Count == 0 && _lastShown < 0)
                 {
+                    // 미리 그린 캐시를 읽었다면 캐시가 깨졌을 수 있다 — 캐시 없이(지금 방식) 다시
+                    if (Prerendered.Count > 0)
+                    {
+                        _owner.RetryWithoutPrerender(this);
+                        return;
+                    }
                     var error = _video?.Error ?? "";
                     _owner.Message?.Invoke("재생하지 못했습니다" + (error.Length > 0 ? ": " + error : "."));
                     _owner.Stop();

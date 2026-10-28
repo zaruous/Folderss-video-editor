@@ -98,6 +98,9 @@ namespace VideoEditor.Media
         /// <summary>미리 보기·재생·내보내기가 쓰는 인물 마스크 제공자(편집기가 시작할 때 정한다, 없으면 null).</summary>
         public static IPersonMaskProvider PersonMasks { get; set; }
 
+        /// <summary>미리 보기(멈춘 화면·재생)가 쓰는 동영상 효과 한 장 그림 캐시(편집기가 시작할 때 정한다, 없으면 null — 늘 수식으로). 내보내기는 쓰지 않는다.</summary>
+        public static StillImageCache Stills { get; set; }
+
         /// <summary>한글이 나오는 글꼴(Windows: 맑은 고딕), 없으면 흔한 글꼴. 못 찾으면 null(FFmpeg 기본 글꼴).</summary>
         public static string DefaultFont()
         {
@@ -417,7 +420,8 @@ namespace VideoEditor.Media
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
                 TextRasterizer = textRasterizer,
-                PersonMasks = RenderEnvironment.PersonMasks
+                PersonMasks = RenderEnvironment.PersonMasks,
+                Stills = RenderEnvironment.Stills
             });
             try
             {
@@ -450,6 +454,8 @@ namespace VideoEditor.Media
             {
                 foreach (var file in plan.TextFiles.Keys)
                     RenderCommand.TryDelete(file);
+                // 이번에 수식으로 그린 효과의 한 장 그림은 배경에서 파일로 만들어 둔다 — 재생 헤드를 옮겨 다시 그릴 때부터 읽는다
+                RenderEnvironment.Stills?.Request(tool, plan.StillImages);
             }
         }
 
@@ -478,10 +484,10 @@ namespace VideoEditor.Media
 
         /// <summary>
         /// 재생: from부터 to까지 화면을 BGRA 원시 프레임 흐름으로. 도우미가 있으면 도우미의 파이프, 아니면 ffmpeg.exe의 표준 출력.
-        /// 도우미가 실패하면 helperFailed에 알리고 ffmpeg.exe로 간다.
+        /// 도우미가 실패하면 helperFailed에 알리고 ffmpeg.exe로 간다. prerendered: 미리 그려 둔 수식 전환 구간(<see cref="PrerenderCache.Survey"/>) — 그 구간은 캐시를 읽는다.
         /// </summary>
         public static PlaybackStream OpenVideo(FfmpegTool tool, PreviewHelper helper, Project project, long from, long to, int width, int height,
-            ITextRasterizer textRasterizer = null, Action<HelperException> helperFailed = null)
+            ITextRasterizer textRasterizer = null, Action<HelperException> helperFailed = null, IReadOnlyList<PrerenderedSpan> prerendered = null)
         {
             var plan = RenderGraph.Build(project, new RenderOptions
             {
@@ -496,7 +502,9 @@ namespace VideoEditor.Media
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
                 TextRasterizer = textRasterizer,
-                PersonMasks = RenderEnvironment.PersonMasks
+                PersonMasks = RenderEnvironment.PersonMasks,
+                Prerendered = prerendered,
+                Stills = RenderEnvironment.Stills
             });
             var stream = TryHelper(helper, plan, RenderCommand.ToHelperPlan(plan, true, width, height, project.SampleRate, 0), helperFailed);
             if (stream != null)

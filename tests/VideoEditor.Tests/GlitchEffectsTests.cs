@@ -268,7 +268,10 @@ namespace VideoEditor.Tests
                 var (project, clip) = VideoProject();
                 With(clip, def, e => e.PersonOnly = true);
                 var filter = Graph(project, 0, 30, new FakeMasks("a.mp4"));
-                Assert.Contains("[fx0e0o][fx0e0g][fx0m0]maskedmerge=planes=7", filter);
+                // 섞는 마스크 = 사람 마스크와 그것을 그림과 똑같이 민 것 중 큰 값(밀려 나간 사람 픽셀도 보이게)
+                Assert.Contains("[fx0m0]split[fx0e0mk][fx0e0mj];", filter);
+                Assert.Contains("[fx0e0mj][fx0e0mt]blend=all_mode=lighten[fx0e0ml];[fx0e0o][fx0e0g][fx0e0ml]maskedmerge=planes=7", filter);
+                Assert.Contains(def == RgbSplit.Def ? "[fx0e0mk]extractplanes=g,split=" : "[fx0e0xm][fx0e0ym]displace=edge=smear", filter);
                 // 마스크가 없으면 클립 전체에(섞기 없음)
                 Assert.DoesNotContain("maskedmerge", Graph(project, 0, 30, new FakeMasks("other.mp4")));
             }
@@ -294,7 +297,10 @@ namespace VideoEditor.Tests
             // 마스크는 효과마다 하나씩 나눠 쓴다
             Assert.Contains("split=4[fx0m0][fx0m1][fx0m2][fx0m3]", filter);
             for (var i = 0; i < 4; i++)
-                Assert.Contains("[fx0e" + i + "o][fx0e" + i + "g][fx0m" + i + "]maskedmerge=planes=7", filter);
+            {
+                Assert.Contains("[fx0m" + i + "]split[fx0e" + i + "mk][fx0e" + i + "mj];", filter);
+                Assert.Contains("[fx0e" + i + "o][fx0e" + i + "g][fx0e" + i + "ml]maskedmerge=planes=7", filter);
+            }
             foreach (var def in Glitches)
             {
                 var args = VideoEffects.PreviewArguments(def);

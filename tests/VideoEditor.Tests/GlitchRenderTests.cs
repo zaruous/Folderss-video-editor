@@ -36,6 +36,8 @@ namespace VideoEditor.Tests
         private static string Across { get { return Path.Combine(Folder, "across.png"); } }
         private static string Down { get { return Path.Combine(Folder, "down.png"); } }
         private static string Light { get { return Path.Combine(Folder, "light.png"); } }
+        private static string Person { get { return Path.Combine(Folder, "person.png"); } }
+        private static string MaskHalf { get { return Path.Combine(Folder, "mask-half.png"); } }
 
         /// <summary>
         /// grad: 빨강 = 세로 기울기, 초록 = 가로 기울기, 파랑 = 16px 바둑판(옆·위아래로 밀리면 값이 바뀐다), edge: 왼쪽 검정·오른쪽 흰색,
@@ -54,6 +56,10 @@ namespace VideoEditor.Tests
             Run("-f", "lavfi", "-i", "color=c=black:size=320x240,format=gray,geq=lum='X*255/319'", "-frames:v", "1", Path.Combine(folder, "across.png"));
             Run("-f", "lavfi", "-i", "color=c=black:size=320x240,format=gray,geq=lum='Y*255/239'", "-frames:v", "1", Path.Combine(folder, "down.png"));
             Run("-f", "lavfi", "-i", "color=c=0xc8c8c8:size=320x240,format=gray", "-frames:v", "1", Path.Combine(folder, "light.png"));
+            // 사람(왼쪽 절반, 검정)과 무늬 배경(오른쪽, 모든 채널 100 넘음 — 50 아래면 사람 픽셀), 그 사람 자리가 흰 원본 크기 마스크(경계가 딱 맞게 — 늘이지 않음)
+            Run("-f", "lavfi", "-i", "color=c=black:size=320x240,format=gbrp,geq=r='if(lt(X,160),0,100+Y*155/239)':g='if(lt(X,160),0,100+X*155/319)':b='if(lt(X,160),0,if(mod(floor(X/16)+floor(Y/16),2),220,110))'",
+                "-frames:v", "1", "-pix_fmt", "rgb24", Path.Combine(folder, "person.png"));
+            Run("-f", "lavfi", "-i", "color=c=black:size=320x240,format=gray,geq=lum='if(lt(X,160),255,0)'", "-frames:v", "1", Path.Combine(folder, "mask-half.png"));
             return folder;
         }
 
@@ -494,7 +500,7 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
-        public void PersonOnly_ChangesOnlyWhereTheMaskIsWhite()
+        public void PersonOnly_ChangesWhereThePersonIsOrWasPushed()
         {
             foreach (var (def, values) in Busy())
             {
@@ -505,13 +511,70 @@ namespace VideoEditor.Tests
                 effect.PersonOnly = true;
                 var person = Render(project, 12, 13, new Masks(Gradient, MaskLeft));
                 var left = Changed(plain, person, 0, 140);
-                var right = Changed(plain, person, 180, Width);
-                _out.WriteLine(def.Id + ": 사람(왼쪽) 바뀐 픽셀 " + left + " · 오른쪽 " + right);
+                // 사람 밖은 밀린 사람 픽셀이 떨어진 곳만 바뀐다 — 가장 멀리 미는 거리(블록 글리치 72 + 색 어긋남 20px) 너머는 그대로
+                var far = Changed(plain, person, 272, Width);
+                _out.WriteLine(def.Id + ": 사람(왼쪽) 바뀐 픽셀 " + left + " · 사람 밖 가까이 " + Changed(plain, person, 160, 272) + " · 멀리 " + far);
                 Assert.True(left > 200, def.Id + ": 마스크가 흰 왼쪽이 그대로입니다");
-                Assert.Equal(0, right);
+                Assert.Equal(0, far);
                 // 마스크가 아직 없으면 클립 전체에
                 var whole = Render(project, 12, 13, new Masks("other.png", MaskLeft));
-                Assert.True(Changed(plain, whole, 180, Width) > 200, def.Id + ": 마스크가 없을 때 오른쪽도 바뀌어야 합니다");
+                Assert.True(Changed(plain, whole, 272, Width) > 200, def.Id + ": 마스크가 없을 때 오른쪽도 바뀌어야 합니다");
+            }
+        }
+
+        [FfmpegFact]
+        public void PersonOnly_PushedPersonPixelsShowOutsideTheMask_BackgroundIsNotGlitched()
+        {
+            // 사람(검정, 왼쪽 절반) 밖에서 채널마다: 효과를 클립 전체에 건 그림에서 그 채널이 사람 것(50 아래)이면 사람에게만도 사람 것,
+            // 아니면(배경이 밀려 온 것) 사람에게만은 원본 그대로 — 사람 밖으로 밀려 나간 사람 픽셀은 보이고 배경은 깨지지 않는다
+            var cases = new (VideoEffectDef Def, (string, double)[] Values)[]
+            {
+                (RgbSplit.Def, new[] { ("amount", 20.0), ("jitter", 0.0), ("glow", 0.0) }),
+                (BlockGlitch.Def, new[] { ("rate", 100.0), ("block", 40.0), ("color", 0.0) }),
+                (LineSlip.Def, new[] { ("rate", 100.0), ("thick", 12.0) }),
+                (BadSignal.Def, new[] { ("rate", 100.0), ("noise", 0.0), ("scan", 0.0), ("bleed", 0.0), ("roll", 0.0), ("jitter", 100.0) })
+            };
+            foreach (var (def, values) in cases)
+            {
+                var project = NewProject();
+                var clip = Add(project, project.MainTrack, Person, 0);
+                var plain = Render(project, 12, 13);
+                var effect = With(clip, def, values);
+                var full = Render(project, 12, 13);
+                effect.PersonOnly = true;
+                var only = Render(project, 12, 13, new Masks(Person, MaskHalf));
+                int landed = 0, kept = 0, wrong = 0, total = 0;
+                for (var y = 0; y < Height; y++)
+                {
+                    for (var x = 166; x < Width; x++)
+                    {
+                        var f = Pixel(full, x, y);
+                        var o = Pixel(only, x, y);
+                        var b = Pixel(plain, x, y);
+                        foreach (var (fc, oc, bc) in new[] { (f.R, o.R, b.R), (f.G, o.G, b.G), (f.B, o.B, b.B) })
+                        {
+                            total++;
+                            if (fc < 50)
+                            {
+                                landed++;
+                                if (oc >= 60)
+                                    wrong++;
+                            }
+                            else
+                            {
+                                if (Math.Abs(fc - bc) > 12)
+                                    kept++;
+                                if (Math.Abs(oc - bc) > 12)
+                                    wrong++;
+                            }
+                        }
+                    }
+                }
+                _out.WriteLine(def.Id + ": 사람 밖으로 밀려 나간 채널 " + landed + " · 배경이 밀려 온 채널(사람에게만은 그대로) " + kept + " · 어긋남 " + wrong + "/" + total);
+                Assert.True(landed > 100, def.Id + ": 사람 밖으로 밀려 나간 사람 픽셀이 없습니다");
+                Assert.True(kept > 100, def.Id + ": 배경이 밀려 온 곳이 없어 배경이 그대로인지 알 수 없습니다");
+                // 4:2:0 색 줄임으로 경계 2×2 칸의 색이 섞이는 만큼만 너그럽게
+                Assert.True(wrong <= total / 200, def.Id + ": 어긋난 채널 " + wrong + "/" + total);
             }
         }
 
@@ -622,6 +685,46 @@ namespace VideoEditor.Tests
                 + string.Join(" · ", Enumerable.Range(1, defs.Length - 1).Select(i => defs[i].Name + " " + best[i].ToString("0.0") + "ms(+" + (best[i] - best[0]).ToString("0.0") + ")")));
             for (var i = 1; i < defs.Length; i++)
                 Assert.True(best[i] - best[0] < FfmpegMedia.CostBudget, defs[i].Name + "가 장당 " + (best[i] - best[0]).ToString("0.0") + "ms 더 걸립니다");
+        }
+
+        [FfmpegFact]
+        public void PersonOnly_Cost_At1080p()
+        {
+            // 사람에게만(마스크 읽기·맞추기 + 마스크도 그림과 같이 밀기 + 섞기)이 효과만 건 것보다 1080p 장당 더 쓰는 시간 — 2초(60장) -f null, 세 번 재 가장 빠른 값
+            var tool = FfmpegMedia.Tool;
+            var project = TestProjects.Empty();
+            project.Width = 1920;
+            project.Height = 1080;
+            var clip = TimelineEdits.CreateClip(FfmpegMedia.Probe(FfmpegMedia.TestVideo), project.Rate, 0, 0);
+            clip.Fit = ClipFit.Fill;
+            TimelineEdits.Place(project, project.MainTrack, clip, 0);
+            var masks = new Masks(FfmpegMedia.TestVideo, MaskLeft);
+            double Measure()
+            {
+                var plan = RenderGraph.Build(project, new RenderOptions { From = 0, To = 60, Width = 1920, Height = 1080, Audio = false, TempFolder = RenderEnvironment.TempFolder(), FfmpegMajor = tool.MajorVersion, PersonMasks = masks });
+                var args = RenderCommand.Arguments(tool, plan, new[] { "-map", "[vout]", "-f", "null", "-" }, out var script);
+                var watch = Stopwatch.StartNew();
+                var result = FfmpegRunner.RunText(tool.FfmpegPath, args, TimeSpan.FromMinutes(2), CancellationToken.None).GetAwaiter().GetResult();
+                watch.Stop();
+                RenderCommand.TryDelete(script);
+                Assert.True(result.ExitCode == 0, result.Error);
+                return watch.Elapsed.TotalMilliseconds / 60;
+            }
+            var lines = new List<string>();
+            foreach (var def in new[] { RgbSplit.Def, BlockGlitch.Def, LineSlip.Def, BadSignal.Def })
+            {
+                double effect = double.MaxValue, person = double.MaxValue;
+                for (var round = 0; round < 3; round++)
+                {
+                    clip.Effects = new List<ClipEffect> { VideoEffects.Create(def) };
+                    effect = Math.Min(effect, Measure());
+                    clip.Effects[0].PersonOnly = true;
+                    person = Math.Min(person, Measure());
+                }
+                lines.Add(def.Name + " " + effect.ToString("0.0") + " → " + person.ToString("0.0") + "ms(+" + (person - effect).ToString("0.0") + ")");
+                Assert.True(person - effect < FfmpegMedia.CostBudget, def.Name + "의 사람에게만이 장당 " + (person - effect).ToString("0.0") + "ms 더 걸립니다");
+            }
+            _out.WriteLine("1080p 장당, 효과만 → 사람에게만: " + string.Join(" · ", lines));
         }
     }
 }
