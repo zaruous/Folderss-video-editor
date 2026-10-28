@@ -487,29 +487,39 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// 그리개가 장마다 그리는 효과인지: 단어·글자별 나타나기·사라지기, 글자 전용 강조(물결·굵게 깜빡이기 — 한 번에여도 글자 모양이 바뀐다).
+        /// 그리개가 장마다 그리는 효과인지: 단어·글자별 나타나기·사라지기, 글자 전용 강조(물결·굵게 깜빡이기 — 한 번에여도 글자 모양이 바뀐다),
+        /// 그려지기(요소의 획).
         /// </summary>
         public static bool IsPerUnit(ClipAnimation animation)
         {
             if (animation == null)
                 return false;
+            if (ClipAnimations.Def(animation.Effect)?.Strokes == true)
+                return true;
             if (animation.Kind == AnimationKind.Emphasis)
                 return ClipAnimations.Def(animation.Effect)?.TextOnly == true;
             return animation.Unit != AnimationUnit.All;
         }
 
-        /// <summary>그리개가 장마다 그리는 효과(<see cref="IsPerUnit"/>)가 든 글자 클립인지.</summary>
+        /// <summary>그리개가 장마다 그리는 효과(<see cref="IsPerUnit"/>)가 든 글자 클립 또는 그려지기가 든 요소 클립인지.</summary>
         public static bool HasPerUnit(Clip clip)
         {
-            return clip != null && clip.Kind == ClipKind.Text
-                && (IsPerUnit(ClipAnimations.In(clip)) || IsPerUnit(ClipAnimations.Out(clip)) || ClipAnimations.Emphases(clip).Any(IsPerUnit));
+            if (clip == null || clip.Kind != ClipKind.Text && clip.Kind != ClipKind.Art)
+                return false;
+            return IsDrawnFor(clip, ClipAnimations.In(clip)) || IsDrawnFor(clip, ClipAnimations.Out(clip)) || ClipAnimations.Emphases(clip).Any(a => IsDrawnFor(clip, a));
+        }
+
+        /// <summary>이 클립에서 그리개가 그리는 효과인지: 글자 클립은 그려지기가 아닌 것, 요소 클립은 그려지기만(썸네일의 가짜 글자 클립은 그려지기를 닦아내기로 보인다).</summary>
+        public static bool IsDrawnFor(Clip clip, ClipAnimation animation)
+        {
+            return clip != null && IsPerUnit(animation) && (ClipAnimations.Def(animation.Effect)?.Strokes == true) == (clip.Kind == ClipKind.Art);
         }
 
         // ---------- 클립 전체 ----------
 
         /// <summary>
         /// 클립 전체의 움직임(시간식, τ = 클립 시작부터의 장 번호). perUnitDrawn이면 그리개가 그리는 효과(<see cref="IsPerUnit"/>)는 그림에 들어가므로 빼고,
-        /// 아니면(그리개 없음·긴 글·글자가 아닌 클립) 한 번에 움직이는 비슷한 모습으로 대신한다 — 타자기는 왼쪽부터 닦아내기, 흩어지기는 서서히,
+        /// 아니면(그리개 없음·긴 글·글자가 아닌 클립) 한 번에 움직이는 비슷한 모습으로 대신한다 — 타자기·그려지기는 왼쪽부터 닦아내기, 흩어지기는 서서히,
         /// 물결은 글 전체가 솟았다 내려앉기, 굵게 깜빡이기는 조금 커졌다 돌아오기.
         /// </summary>
         public static ObjectMotion ObjectMotion(Clip clip, bool perUnitDrawn)
@@ -606,6 +616,10 @@ namespace VideoEditor.Core
                         Blur(animation.Amount * MotionExpr.Max(0, 1 - e));
                         // 흐린 동안 먼저 보이기 시작한다(반쯤에 다 보임)
                         Fade(MotionExpr.Min(1, 2 * e));
+                        break;
+                    case AnimationEffect.Draw:
+                        // 그리개 없이: 왼쪽부터 드러나기(타자기와 같다)
+                        motion.Wipes.Add((e, -1, 0));
                         break;
                     case AnimationEffect.Fall:
                         // 사라지기 전용: 화면 아래 밖으로, 기울기만큼 기울며(서서히 끝 이징을 거꾸로 돌리면 점점 빨라진다)

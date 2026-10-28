@@ -354,7 +354,7 @@ namespace VideoEditor.Core
             {
                 // 그리개가 없으면(그릴 수 없음) 투명 — 다른 클립은 그대로 그린다
                 if (UsesRasterizer(clip, options))
-                    return StyledText(project, options, plan, clip, segFrames);
+                    return DrawsUnits(clip, options) ? AnimatedText(project, options, plan, clip, segStart, segEnd) : StyledText(project, options, plan, clip, segFrames);
                 return string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba",
                     options.Width, options.Height, fps, N(rate.ToSeconds(segFrames)));
             }

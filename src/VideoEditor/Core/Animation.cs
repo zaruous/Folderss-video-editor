@@ -14,7 +14,7 @@ namespace VideoEditor.Core
     }
 
     /// <summary>
-    /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기·떠오르기·커지며 돌기·가운데서 갈라지기·흐림에서 선명하게,
+    /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기·떠오르기·커지며 돌기·가운데서 갈라지기·흐림에서 선명하게·그려지기,
     /// 사라지기만: 떨어지기,
     /// 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기·색 바꾸기·광선 깜빡임·물결·굵게 깜빡이기.
     /// 저장된 이름이 바뀌면 예전 프로젝트에서 효과가 빠지므로 이름을 바꾸지 않는다(뒤에만 더한다).
@@ -43,7 +43,8 @@ namespace VideoEditor.Core
         Glow,
         Wave,
         BoldFlash,
-        Fall
+        Fall,
+        Draw
     }
 
     /// <summary>
@@ -159,6 +160,8 @@ namespace VideoEditor.Core
         public string DefaultColor { get; init; }
         /// <summary>사라지기에만 쓰는 효과(떨어지기 — 거꾸로 돌린 나타나기가 없다).</summary>
         public bool OutOnly { get; init; }
+        /// <summary>획을 그리는 효과(그려지기) — 선·화살표·동그라미 치기·밑줄 요소에만 넣고(<see cref="ArtShape.Draws"/>) 그리개가 장마다 그린다.</summary>
+        public bool Strokes { get; init; }
         /// <summary>고를 수 있는 방향(비었으면 방향 없음). 첫 값이 기본.</summary>
         public IReadOnlyList<AnimationDirection> Directions { get; init; } = Array.Empty<AnimationDirection>();
         public AnimationEase DefaultEase { get; init; }
@@ -229,6 +232,8 @@ namespace VideoEditor.Core
                 Directions = new[] { AnimationDirection.Left, AnimationDirection.Up }, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.6 },
             new AnimationEffectDef { Effect = AnimationEffect.Unblur, Name = "흐림에서 선명하게", OutName = "흐릿하게 사라지기", Description = "흐릿하게 나타나 선명해지고, 흐려지며 사라집니다.",
                 DefaultEase = AnimationEase.Out, DefaultSeconds = 0.8, Amount = new AnimationAmount("흐림", 1, 100, 16, "px") },
+            new AnimationEffectDef { Effect = AnimationEffect.Draw, Name = "그려지기", OutName = "지워지기", Description = "선·화살표·동그라미 치기·밑줄이 펜으로 긋듯 한쪽 끝부터 그려지고, 그린 차례를 거꾸로 거두며 지워집니다(요소 클립).",
+                Strokes = true, DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.8 },
             new AnimationEffectDef { Effect = AnimationEffect.Fall, Name = "떨어지기", Description = "기울며 점점 빨리 떨어져 화면 아래로 사라집니다(글자는 하나씩).", OutOnly = true,
                 Directions = Turns, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.8, Amount = new AnimationAmount("기울기", 0, 180, 25, "°") },
             new AnimationEffectDef { Effect = AnimationEffect.Pulse, Name = "맥박", Description = "커졌다 작아지기를 되풀이합니다.", Emphasis = true, Repeats = true,
@@ -315,10 +320,11 @@ namespace VideoEditor.Core
             return clip != null && clip.IsVisual;
         }
 
-        /// <summary>이 클립에 이 효과를 넣을 수 있는지(타자기·흩어지기·물결·굵게 깜빡이기는 글자 클립만).</summary>
+        /// <summary>이 클립에 이 효과를 넣을 수 있는지(타자기·흩어지기·물결·굵게 깜빡이기는 글자 클립만, 그려지기는 선·화살표·동그라미 치기·밑줄 요소만).</summary>
         public static bool Allows(Clip clip, AnimationEffectDef def)
         {
-            return CanHave(clip) && def != null && (!def.TextOnly || clip.Kind == ClipKind.Text);
+            return CanHave(clip) && def != null && (!def.TextOnly || clip.Kind == ClipKind.Text)
+                && (!def.Strokes || clip.Kind == ClipKind.Art && clip.Art != null && ArtShape.Draws(clip.Art.Kind));
         }
 
         /// <summary>이 분류에 쓰는 효과인지(강조는 강조끼리, 사라지기 전용은 사라지기에만).</summary>

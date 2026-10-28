@@ -655,6 +655,77 @@ namespace VideoEditor.Tests
             Assert.NotEqual(request.WithAnimation(single.At(3)).Key(1), request.WithAnimation(single.At(3, 0)).Key(1));
         }
 
+        [Fact]
+        public void ArtOutline_Drawn_CutsLinesAtX_FollowsStrokes_FullIsUnchanged()
+        {
+            double MaxX(List<List<(double X, double Y)>> outline) => outline.SelectMany(p => p).Max(p => p.X);
+            var line = ArtShape.Default(ArtKind.Line);
+            Assert.Empty(ArtGeometry.Outline(line, 1, 0));
+            Assert.Equal(200, MaxX(ArtGeometry.Outline(line, 1, 0.5)), 9);
+            // 다 그리면(1 이상) 예전 윤곽과 같다(이미 그린 그림·캐시 그대로)
+            foreach (var kind in new[] { ArtKind.Line, ArtKind.Arrow, ArtKind.CircleMark, ArtKind.Underline, ArtKind.Star })
+            {
+                var shape = ArtShape.Default(kind);
+                Assert.Equal(ArtGeometry.Outline(shape, 1.5), ArtGeometry.Outline(shape, 1.5, 1));
+                Assert.Equal(ArtGeometry.Outline(shape, 1.5), ArtGeometry.Outline(shape, 1.5, 3));
+            }
+            // 화살표: 머리도 그린 만큼만, 점선은 그 앞의 대시만
+            var arrow = ArtShape.Default(ArtKind.Arrow);
+            Assert.Equal(380, MaxX(ArtGeometry.Outline(arrow, 1, 0.95)), 9);
+            var dashed = ArtShape.Default(ArtKind.Line);
+            dashed.Dashed = true;
+            Assert.True(ArtGeometry.Outline(dashed, 1, 0.3).Count < ArtGeometry.Outline(dashed, 1).Count);
+            // 동그라미 치기·밑줄: 붓 선의 앞부분만(밑줄은 왼쪽 끝부터)
+            var circle = ArtShape.Default(ArtKind.CircleMark);
+            var half = Assert.Single(ArtGeometry.Outline(circle, 1, 0.5));
+            Assert.True(half.Count < Assert.Single(ArtGeometry.Outline(circle, 1)).Count);
+            Assert.True(MaxX(ArtGeometry.Outline(ArtShape.Default(ArtKind.Underline), 1, 0.3)) < 480 * 0.3 + 20);
+            // 그려지지 않는 모양은 drawn과 상관없이 다 그린다
+            Assert.Equal(ArtGeometry.Outline(ArtShape.Default(ArtKind.Star), 1), ArtGeometry.Outline(ArtShape.Default(ArtKind.Star), 1, 0));
+        }
+
+        [Fact]
+        public void Draw_OnlyForStrokeArt_DrawnFraction_AndFramesFromTheRasterizer()
+        {
+            var project = TestProjects.Empty(magnetic: false);
+            var line = TimelineEdits.CreateArt(ArtKind.Line, 0, 60);
+            TimelineEdits.Place(project, project.MainTrack, line, 0);
+            var box = TimelineEdits.CreateArt(ArtKind.Rectangle, 0, 60);
+            var def = ClipAnimations.Def(AnimationEffect.Draw);
+            Assert.True(ClipAnimations.Offers(line, def, AnimationKind.In) && ClipAnimations.Offers(line, def, AnimationKind.Out));
+            Assert.False(ClipAnimations.Allows(box, def));
+            Assert.False(ClipAnimations.Allows(TimelineEdits.CreateText("가", 0, 30), def));
+            box.Animations = new List<ClipAnimation> { Make(AnimationEffect.Draw, AnimationKind.In) };
+            Assert.Null(ClipAnimations.Clean(box));
+
+            // 그린 비율: 나타나기는 이징한 진행, 지워지기는 거꾸로, 구간 밖은 정확히 1
+            var draw = Make(AnimationEffect.Draw, AnimationKind.In, 10, line);
+            draw.Ease = AnimationEase.Linear;
+            var erase = Make(AnimationEffect.Draw, AnimationKind.Out, 10, line);
+            erase.Ease = AnimationEase.Bounce;
+            line.Animations = new List<ClipAnimation> { draw, erase };
+            Assert.Equal("사라지기 · 지워지기", ClipAnimations.Name(erase));
+            var frame = TextAnimationFrame.Of(line, project.Rate);
+            Assert.Equal((0.0, 0.5, 1.0, 1.0), (frame.Drawn(0), frame.Drawn(5), frame.Drawn(10), frame.Drawn(50)));
+            Assert.Equal(0, frame.Drawn(60));
+            Assert.True(frame.Drawn(55) > 0 && frame.Drawn(55) < 1);
+
+            // 그리개가 장마다 그린다(나타나기 10장 + 쉬는 장 + 지워지기 10장 + 지운 장), 그리개가 없으면 시간식에서도 빠지지 않는다(왼쪽부터 닦아내기)
+            var rasterizer = new FakeTextRasterizer();
+            var plan = RenderGraph.Build(project, Options(rasterizer, 0, 60));
+            var names = plan.TextImages.Keys.Select(Path.GetFileName).ToList();
+            Assert.All(names, n => Assert.Matches("^sa-[0-9a-f]{64}-(i[0-9]{5}|s|o[0-9]{5})\\.png$", n));
+            Assert.Equal(21, names.Count);
+            Assert.All(plan.TextImages.Values, r => Assert.NotNull(r.Art));
+            Assert.Contains("concat=n=3", plan.Filter);
+            Assert.DoesNotContain("crop=w=iw/2", plan.Filter);
+            Assert.True(AnimationMotion.HasPerUnit(line));
+            Assert.Equal(2, AnimationMotion.ObjectMotion(line, false).Wipes.Count);
+            // 그려지기가 없는 요소는 예전처럼 그림 한 장
+            line.Animations = new List<ClipAnimation> { Make(AnimationEffect.Fade, AnimationKind.In) };
+            Assert.StartsWith("st-", Path.GetFileName(Assert.Single(RenderGraph.Build(project, Options(rasterizer, 0, 60)).TextImages).Key));
+        }
+
         // ---------- 글자 나누기·글자별 모습 ----------
 
         [Fact]

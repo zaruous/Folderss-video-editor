@@ -25,9 +25,14 @@ namespace VideoEditor.Core
             return motion.IsEmpty ? null : motion;
         }
 
-        /// <summary>단어·글자별 나타나기·사라지기를 그리개가 장마다 그리는지(글자 클립, 그리개 있음, 긴 글 아님, 글자가 있음).</summary>
+        /// <summary>
+        /// 그리개가 장마다 그리는 효과(<see cref="AnimationMotion.IsPerUnit"/>)를 그리개가 그리는지: 글자 클립(그리개 있음, 긴 글 아님, 글자가 있음),
+        /// 요소 클립의 그려지기(그리개 있음).
+        /// </summary>
         private static bool DrawsUnits(Clip clip, RenderOptions options)
         {
+            if (clip.Kind == ClipKind.Art)
+                return AnimationMotion.HasPerUnit(clip) && UsesRasterizer(clip, options);
             return clip.Kind == ClipKind.Text && AnimationMotion.HasPerUnit(clip) && UsesRasterizer(clip, options) && TextUnits.Elements(clip.Text).Count > 0;
         }
 
@@ -310,7 +315,7 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// 그리개가 장마다 그리는 효과(단어·글자별 나타나기·사라지기, 글자 전용 강조)가 든 글자 클립의 화면 원본: 그린 PNG를 구간별로 이어 붙인다(concat — 모든 장이 같은 크기).
+        /// 그리개가 장마다 그리는 효과(단어·글자별 나타나기·사라지기, 글자 전용 강조, 요소의 그려지기)가 든 클립의 화면 원본: 그린 PNG를 구간별로 이어 붙인다(concat — 모든 장이 같은 크기).
         /// 클립 안 프레임으로 [0, 나타나기 시작) 나타나기 첫 장 · 나타나기 구간 장들 · 쉬는 동안 · 사라지기 구간 장들 · [사라지기 끝, 클립 끝) 사라진 장.
         /// 쉬는 동안은 강조 구간으로 나눠 강조가 없으면 쉬는 장 하나(s), 강조 하나면 그 강조 한 번(w0-00000…)을 그림 묶음 되풀이(-loop 1)로, 둘 이상 겹치면 장마다(m…-).
         /// 파일 이름은 묶음 키(sa-&lt;해시&gt;-)에 구간 안 번호(i00012·o00003) — 같은 설정이면 같은 이름이라 다시 그리지 않는다.

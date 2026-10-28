@@ -16,7 +16,7 @@ namespace VideoEditor.Core
     }
 
     /// <summary>
-    /// 단어·글자별 애니메이션 한 장의 값(그리개 요청 <see cref="TextImageRequest.Animation"/>): 나타나기·사라지기(단위를 나누는 것만)·글자 전용 강조와 그 구간(클립 안 프레임),
+    /// 그리개가 그리는 애니메이션 한 장의 값(그리개 요청 <see cref="TextImageRequest.Animation"/>): 나타나기·사라지기(단위를 나누는 것·그려지기)·글자 전용 강조와 그 구간(클립 안 프레임),
     /// 프레임 레이트, 그릴 장(클립 안 프레임). 그리개는 <see cref="Poses"/>로 글자 요소마다의 모습을 받아 그리고,
     /// <see cref="States"/>의 모든 장에서 움직이는 범위를 모아 한 클립의 장들을 같은 크기로 그린다(이어 붙이는 입력이 같은 크기여야 한다).
     /// </summary>
@@ -59,19 +59,20 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// 글자 클립의 단어·글자별 나타나기·사라지기와 글자 전용 강조(없으면 null). 구간은 <see cref="AnimationMotion.Window"/>·<see cref="AnimationMotion.EmphasisWindow"/>와 같다.
+        /// 글자 클립의 단어·글자별 나타나기·사라지기와 글자 전용 강조, 요소 클립의 그려지기(없으면 null).
+        /// 구간은 <see cref="AnimationMotion.Window"/>·<see cref="AnimationMotion.EmphasisWindow"/>와 같다.
         /// </summary>
         public static TextAnimationFrame Of(Clip clip, FrameRate rate)
         {
-            if (clip == null || clip.Kind != ClipKind.Text)
+            if (clip == null || clip.Kind != ClipKind.Text && clip.Kind != ClipKind.Art)
                 return null;
             var appear = ClipAnimations.In(clip);
             var vanish = ClipAnimations.Out(clip);
-            if (!AnimationMotion.IsPerUnit(appear))
+            if (!AnimationMotion.IsDrawnFor(clip, appear))
                 appear = null;
-            if (!AnimationMotion.IsPerUnit(vanish))
+            if (!AnimationMotion.IsDrawnFor(clip, vanish))
                 vanish = null;
-            var emphases = ClipAnimations.Emphases(clip).Where(AnimationMotion.IsPerUnit).ToList();
+            var emphases = ClipAnimations.Emphases(clip).Where(a => AnimationMotion.IsDrawnFor(clip, a)).ToList();
             if (appear == null && vanish == null && emphases.Count == 0)
                 return null;
             var frame = new TextAnimationFrame { RateNumerator = rate.Numerator, RateDenominator = rate.Denominator };
@@ -130,6 +131,27 @@ namespace VideoEditor.Core
                     poses[i] = poses[i].Then(AnimationMotion.OutPose(Out, p, units[i], total, size, pixel));
             }
             return poses;
+        }
+
+        /// <summary>
+        /// frame 장에서 획이 그려진 비율(0~1, 그려지기 — 요소 클립): 나타나기는 이징한 진행, 사라지기는 그것을 거꾸로(그린 차례를 거꾸로 거둔다).
+        /// 그려지기가 없으면 1.
+        /// </summary>
+        public double Drawn(long frame)
+        {
+            var drawn = 1.0;
+            // 구간 밖은 정확히 다 그린 것(튕김 이징의 끝 값이 1에서 아주 조금 어긋나도 다 그린 장이 정지 그림과 같게)
+            if (In != null && ClipAnimations.Def(In.Effect)?.Strokes == true)
+            {
+                var p = Progress(frame, InStart, InLength);
+                drawn = Math.Min(drawn, p >= 1 ? 1 : AnimationMotion.Ease(In.Ease, p));
+            }
+            if (Out != null && ClipAnimations.Def(Out.Effect)?.Strokes == true)
+            {
+                var p = Progress(frame, OutStart, OutLength);
+                drawn = Math.Min(drawn, p <= 0 ? 1 : AnimationMotion.Ease(Out.Ease, 1 - p));
+            }
+            return Math.Max(0, drawn);
         }
 
         /// <summary>frame 장에서 글자 요소마다 강조만의 모습(강조가 없으면 모두 제자리). <see cref="Solo"/>면 그 강조만.</summary>

@@ -579,6 +579,25 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
+        public async Task ArtDraw_JoinsDrawnFrames_PreviewEqualsExport()
+        {
+            // 화살표 그려지기(0~9장) · 쉬는 장 · 지워지기(22~29장): 장 번호를 색에 담은 그리개로 어느 장이 어디에 이어졌는지 본다
+            var project = NewProject();
+            var arrow = TimelineEdits.CreateArt(ArtKind.Arrow, 0, 30);
+            TimelineEdits.Place(project, project.MainTrack, arrow, 0);
+            arrow.Animations = new List<ClipAnimation>
+            {
+                Animation(AnimationEffect.Draw, AnimationKind.In, 10, AnimationEase.Linear, arrow), Animation(AnimationEffect.Draw, AnimationKind.Out, 8, AnimationEase.InOut, arrow)
+            };
+            var rasterizer = new FrameColorRasterizer();
+            int Expected(long f) => FrameColorRasterizer.Red(f < 10 ? f : f < 22 ? 10 : f);
+            int RedAt(byte[] bgra) => bgra[(120 * Width + 160) * 4 + 2];
+            foreach (var f in new long[] { 0, 4, 9, 15, 22, 27 })
+                Assert.InRange(RedAt(Frame(project, f, rasterizer)), Expected(f) - 4, Expected(f) + 4);
+            await AssertPreviewEqualsExport(project, new long[] { 3, 12, 25, 29 }, rasterizer);
+        }
+
+        [FfmpegFact]
         public async Task NewEmphases_PreviewEqualsExport()
         {
             // 사진: 색 바꾸기 + 광선 깜빡임, 글자: 물결(되풀이) + 굵게 깜빡이기(겹치는 동안은 장마다)
@@ -709,6 +728,10 @@ namespace VideoEditor.Tests
             var wave = Make(AnimationEffect.Wave, AnimationKind.Emphasis, 7, waving);
             wave.Repeat = 0;
             waving.Animations = new List<ClipAnimation> { wave };
+            // 그려지기: 요소도 그리개가 장마다 그린 그림을 잇는다
+            var underline = TimelineEdits.CreateArt(ArtKind.Underline, 12, 30);
+            TimelineEdits.Place(project, TimelineEdits.AddTrack(project, TrackKind.Video), underline, 12);
+            underline.Animations = new List<ClipAnimation> { Make(AnimationEffect.Draw, AnimationKind.In, 9, underline), Make(AnimationEffect.Draw, AnimationKind.Out, 6, underline) };
             return project;
         }
 

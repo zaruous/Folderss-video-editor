@@ -181,7 +181,8 @@ namespace VideoEditor.UiTests
                     Assert.Null(Ui.ById<Button>(window, "AnimEmphasis_Wave"));
                     Assert.Equal(10, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
                     Assert.Equal(7, Ui.ById<WrapPanel>(window, "AnimationTilesEmphasis").Children.Count);
-                    // 떨어지기는 사라지기에만
+                    // 그려지기는 선·화살표·동그라미 치기·밑줄 요소에만, 떨어지기는 사라지기에만
+                    Assert.Null(Ui.ById<Button>(window, "AnimIn_Draw"));
                     Assert.Null(Ui.ById<Button>(window, "AnimIn_Fall"));
                     Assert.NotNull(Ui.ById<Button>(window, "AnimOut_Fall"));
                     Assert.Equal(11, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
@@ -416,6 +417,34 @@ namespace VideoEditor.UiTests
             _out.WriteLine("굵게 " + thick.Ink() + " · 끝 " + thin.Ink() + " · 정지 " + still.Ink());
             Assert.True(thick.Ink() > still.Ink() * 1.2, "굵어짐");
             Assert.Equal(still.Ink(), thin.Ink());
+        }
+        [UiFact]
+        public async Task Rasterizer_ArtDraw_StrokeGrowsFromTheTail_FramesSameSize()
+        {
+            var rasterizer = NewRasterizer();
+            object Art(string kind, string animation)
+            {
+                var json = "{\"Text\":\"\",\"FontPixelSize\":40,\"EffectScale\":1,\"CanvasWidth\":1280,\"CanvasHeight\":720,"
+                    + "\"Style\":{\"Fill\":{\"Kind\":\"Solid\",\"Colors\":[\"#FF3366\"]}},\"Art\":{\"Kind\":\"" + kind + "\",\"Width\":400,\"Height\":120,\"Thickness\":16}"
+                    + (animation == null ? "" : ",\"Animation\":" + animation) + "}";
+                var options = new JsonSerializerOptions();
+                options.Converters.Add(new JsonStringEnumConverter());
+                return JsonSerializer.Deserialize(json, rasterizer.GetType().Assembly.GetType("VideoEditor.Core.TextImageRequest", true), options);
+            }
+            string Draw(int frame) => "{\"In\":{\"Kind\":\"In\",\"Effect\":\"Draw\",\"Duration\":10},\"InStart\":0,\"InLength\":10,\"Frame\":" + frame + "}";
+            foreach (var kind in new[] { "Arrow", "CircleMark", "Underline" })
+            {
+                var still = await Render(rasterizer, Art(kind, null), "draw-" + kind + "-still");
+                var frames = new List<Png>();
+                foreach (var f in new[] { 0, 3, 6, 10 })
+                    frames.Add(await Render(rasterizer, Art(kind, Draw(f)), "draw-" + kind + "-" + f));
+                _out.WriteLine(kind + ": 정지 " + still.Width + "×" + still.Height + " " + still.Ink() + " · " + string.Join(", ", frames.Select(p => p.Width + "×" + p.Height + " " + p.Ink())));
+                // 모든 장이 정지 그림과 같은 크기, 처음엔 없고 점점 늘어 끝 장은 정지 그림과 같다
+                Assert.All(frames, p => Assert.Equal((still.Width, still.Height), (p.Width, p.Height)));
+                Assert.Equal(0, frames[0].Ink());
+                Assert.True(frames[1].Ink() > 0 && frames[1].Ink() < frames[2].Ink() && frames[2].Ink() < still.Ink(), kind + " 획이 늘지 않음");
+                Assert.True(frames[3].Bgra.SequenceEqual(still.Bgra), kind + " 다 그린 장 = 정지 그림");
+            }
         }
     }
 }
