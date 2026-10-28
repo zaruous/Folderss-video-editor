@@ -343,15 +343,19 @@ namespace VideoEditor.Media
         /// <summary>일 하나가 끝남: 그린 일과 실패 까닭(성공이면 null). 그만둔 일은 알리지 않는다.</summary>
         public event Action<PrerenderJob, Exception> Finished;
 
-        /// <summary>기다리는 일을 jobs로 바꾼다(앞에서부터 그림). 그리던 일이 jobs에 없으면 그만둔다.</summary>
-        public void Request(FfmpegTool tool, IReadOnlyList<PrerenderJob> jobs)
+        /// <summary>기다리는 일을 jobs로 바꾼다(앞에서부터 그림). 그리던 일이 jobs에 없으면 그만둔다. 새로 줄에 든 일(기다리거나 그리던 것이 아닌) 수를 돌려준다.</summary>
+        public int Request(FfmpegTool tool, IReadOnlyList<PrerenderJob> jobs)
         {
             lock (_gate)
             {
                 if (_disposed || tool == null)
-                    return;
+                    return 0;
                 _tool = tool;
                 var keys = new HashSet<string>(jobs.Select(j => j.Key), StringComparer.Ordinal);
+                var known = new HashSet<string>(_waiting.Select(j => j.Key), StringComparer.Ordinal);
+                if (_running != null)
+                    known.Add(_running.Key);
+                var added = keys.Count(k => !known.Contains(k) && !_failed.Contains(k));
                 _waiting = jobs.Where(j => !_failed.Contains(j.Key) && (_running == null || _running.Key != j.Key))
                     .GroupBy(j => j.Key).Select(g => g.First()).ToList();
                 if (_running != null && !keys.Contains(_running.Key))
@@ -361,6 +365,7 @@ namespace VideoEditor.Media
                     _working = true;
                     Task.Run(Work);
                 }
+                return added;
             }
         }
 

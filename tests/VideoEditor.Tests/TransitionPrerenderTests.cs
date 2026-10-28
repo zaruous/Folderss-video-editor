@@ -465,8 +465,10 @@ namespace VideoEditor.Tests
                     var first = cache.Survey(FfmpegMedia.Tool, project, 0, 120, 320, 240, null).Jobs;
                     var second = cache.Survey(FfmpegMedia.Tool, other, 0, 120, 320, 240, null).Jobs;
                     // 먼저 청한 일을 곧바로 다른 목록으로 바꾸면 앞의 것은 그만두고 뒤의 것만 그린다
-                    queue.Request(FfmpegMedia.Tool, first);
-                    queue.Request(FfmpegMedia.Tool, second);
+                    Assert.Equal(1, queue.Request(FfmpegMedia.Tool, first));
+                    Assert.Equal(1, queue.Request(FfmpegMedia.Tool, second));
+                    // 같은 일을 다시 청하면 새로 든 것이 없다(안내를 되풀이하지 않게)
+                    Assert.Equal(0, queue.Request(FfmpegMedia.Tool, second));
                     Assert.True(done.Wait(TimeSpan.FromMinutes(1)), "미리 그리기가 끝나지 않았습니다");
                     var result = Assert.Single(finished);
                     Assert.Null(result.Error);

@@ -202,11 +202,9 @@ namespace VideoEditor.Ui
             try
             {
                 var (spans, jobs) = _services.Prerender.Survey(tool, copy, from, to, width, height, rasterizer);
-                if (jobs.Count > 0)
-                {
-                    _prerender.Request(tool, jobs);
+                // 이미 그리는 중인 일만 다시 청했으면 알리지 않는다(재생을 거듭 눌러도 같은 안내가 되풀이되지 않게)
+                if (jobs.Count > 0 && _prerender.Request(tool, jobs) > 0)
                     _dispatcher.BeginInvoke(new Action(() => Message?.Invoke("무거운 전환 " + jobs.Count + "개를 미리 그립니다 — 다 그리면 그 구간을 매끄럽게 재생합니다(진행은 미리 보기 화면 왼쪽 아래)")));
-                }
                 return spans;
             }
             catch (Exception)
