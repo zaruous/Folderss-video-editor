@@ -17,7 +17,8 @@ namespace VideoEditor.Ui
         private UIElement AnimationTab(string id)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
-            var text = _session.Project.FindClip(id)?.Kind == ClipKind.Text;
+            var target = _session.Project.FindClip(id);
+            var text = target?.Kind == ClipKind.Text;
             var tiles = new List<(AnimationTile Tile, AnimationKind Kind, AnimationEffect Effect)>();
             var rows = new Dictionary<AnimationKind, StackPanel>();
             foreach (var kind in new[] { AnimationKind.In, AnimationKind.Emphasis, AnimationKind.Out })
@@ -25,7 +26,7 @@ namespace VideoEditor.Ui
                 panel.Children.Add(Section(ClipAnimations.KindName(kind)));
                 var wrap = new WrapPanel();
                 AutomationProperties.SetAutomationId(wrap, "AnimationTiles" + kind);
-                foreach (var def in ClipAnimations.All.Where(d => d.Emphasis == (kind == AnimationKind.Emphasis) && (text || !d.TextOnly)))
+                foreach (var def in ClipAnimations.All.Where(d => ClipAnimations.Offers(target, d, kind)))
                 {
                     var tile = new AnimationTile(def, kind, text && def.TextOnly, "Anim" + kind + "_" + def.Effect);
                     var chosen = def;

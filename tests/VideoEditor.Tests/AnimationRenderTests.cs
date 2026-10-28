@@ -449,6 +449,25 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
+        public async Task VideoFall_DropsOffscreen_AndPreviewEqualsExport()
+        {
+            // 떨어지기(일정, 기울기 0): 반쯤 화면 아래 밖까지의 반(제자리 위 60 → 150), 마지막 장은 거의 화면 밖(구간 끝 = 클립 끝)
+            var (project, clip) = BlueProject();
+            var fall = Animation(AnimationEffect.Fall, AnimationKind.Out, 10);
+            fall.Amount = 0;
+            clip.Animations = new List<ClipAnimation> { fall };
+            Assert.Equal((80, 60, 239, 179), BlueBox(Frame(project, clip.Duration - 10)));
+            var half = BlueBox(Frame(project, clip.Duration - 5));
+            _out.WriteLine("떨어지기 반쯤 " + half);
+            Assert.Equal((80, 150, 239, 239), half);
+            Assert.InRange(BlueBox(Frame(project, clip.Duration - 1)).Top, 220, 239);
+            // 기울며 떨어지기(기본 이징·25°): 미리 보기 = 내보내기
+            fall.Amount = 25;
+            fall.Ease = AnimationEase.Out;
+            await AssertPreviewEqualsExport(project, new long[] { 30, clip.Duration - 8, clip.Duration - 4 });
+        }
+
+        [FfmpegFact]
         public async Task NewEntrancesAndExits_PreviewEqualsExport()
         {
             // 사진 클립 넷(각 30장): 나타나기·사라지기 새 효과를 모두 한 번씩(사라지기 = 거꾸로)

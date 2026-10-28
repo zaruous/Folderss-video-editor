@@ -295,28 +295,36 @@ namespace VideoEditor.Tests
                 foreach (var ease in new[] { AnimationEase.Linear, AnimationEase.Out, AnimationEase.Bounce, AnimationEase.Elastic })
                 {
                     var (_, text) = TextProject();
-                    var appear = Make(def.Effect, AnimationKind.In, 12, text);
-                    appear.Unit = AnimationUnit.All;
-                    appear.Ease = ease;
                     var vanish = Make(def.Effect, AnimationKind.Out, 12, text);
                     vanish.Unit = AnimationUnit.All;
                     vanish.Ease = ease;
-                    text.Animations = new List<ClipAnimation> { appear };
-                    var motion = AnimationMotion.ObjectMotion(text, false);
-                    Assert.False(motion.IsEmpty, def.Name);
                     var rest = (1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
-                    Assert.Equal(rest, Pose(motion, 12));
-                    Assert.Equal(rest, Pose(motion, 40));
-                    var start = Pose(motion, 0);
-                    Assert.True(start.Scale == 0 || start.Opacity == 0 || start.Fly == 1 || start.Visible == 0, def.Name + " " + ease + "은(는) 처음에 보이지 않는다");
-                    // 구간 앞(지연)도 보이지 않는다
-                    appear.Delay = 5;
-                    var early = Pose(AnimationMotion.ObjectMotion(text, false), 2);
-                    Assert.True(early.Scale == 0 || early.Opacity == 0 || early.Fly == 1 || early.Visible == 0, def.Name + " 지연 동안");
-                    Assert.Equal(rest, Pose(AnimationMotion.ObjectMotion(text, false), 17));
+                    // 사라지기 전용(떨어지기)은 나타나기로 만들지 않는다
+                    if (def.OutOnly)
+                    {
+                        Assert.Null(ClipAnimations.Create(def, AnimationKind.In, FrameRate.Default, text));
+                    }
+                    else
+                    {
+                        var appear = Make(def.Effect, AnimationKind.In, 12, text);
+                        appear.Unit = AnimationUnit.All;
+                        appear.Ease = ease;
+                        text.Animations = new List<ClipAnimation> { appear };
+                        var appearing = AnimationMotion.ObjectMotion(text, false);
+                        Assert.False(appearing.IsEmpty, def.Name);
+                        Assert.Equal(rest, Pose(appearing, 12));
+                        Assert.Equal(rest, Pose(appearing, 40));
+                        var start = Pose(appearing, 0);
+                        Assert.True(start.Scale == 0 || start.Opacity == 0 || start.Fly == 1 || start.Visible == 0, def.Name + " " + ease + "은(는) 처음에 보이지 않는다");
+                        // 구간 앞(지연)도 보이지 않는다
+                        appear.Delay = 5;
+                        var early = Pose(AnimationMotion.ObjectMotion(text, false), 2);
+                        Assert.True(early.Scale == 0 || early.Opacity == 0 || early.Fly == 1 || early.Visible == 0, def.Name + " 지연 동안");
+                        Assert.Equal(rest, Pose(AnimationMotion.ObjectMotion(text, false), 17));
+                    }
 
                     text.Animations = new List<ClipAnimation> { vanish };
-                    motion = AnimationMotion.ObjectMotion(text, false);
+                    var motion = AnimationMotion.ObjectMotion(text, false);
                     Assert.Equal(rest, Pose(motion, 48));
                     var end = Pose(motion, 60);
                     Assert.True(end.Scale == 0 || end.Opacity == 0 || end.Fly == 1 || end.Visible == 0, def.Name + " " + ease + "은(는) 끝에 보이지 않는다");
@@ -393,6 +401,43 @@ namespace VideoEditor.Tests
             var unblur = With(AnimationEffect.Unblur, AnimationKind.In, 16);
             Assert.Equal((16.0, 8.0, 0.0), (unblur.Blur.Eval(0), unblur.Blur.Eval(5), unblur.Blur.Eval(10)));
             Assert.Equal((0.0, 0.6, 1.0), (unblur.Opacity.Eval(0), Math.Round(unblur.Opacity.Eval(3), 9), unblur.Opacity.Eval(5)));
+        }
+
+        [Fact]
+        public void Fall_OutOnly_AcceleratesDownOffscreen_Tilting()
+        {
+            var (project, video) = VideoProject();
+            var def = ClipAnimations.Def(AnimationEffect.Fall);
+            Assert.True(def.OutOnly);
+            Assert.False(ClipAnimations.Offers(video, def, AnimationKind.In));
+            Assert.True(ClipAnimations.Offers(video, def, AnimationKind.Out));
+            // 나타나기로 저장된 떨어지기는 읽을 때 빠진다
+            video.Animations = new List<ClipAnimation>
+            {
+                new ClipAnimation { Kind = AnimationKind.In, Effect = AnimationEffect.Fall, Duration = 10 }, Make(AnimationEffect.Fall, AnimationKind.Out)
+            };
+            Assert.Equal(AnimationKind.Out, Assert.Single(ClipAnimations.Clean(video)).Kind);
+
+            // 사라지기(50~59장): 서서히 끝 이징을 거꾸로 — 반쯤 화면 밖까지의 1/4(점점 빨라짐), 끝에 화면 아래 밖·시계 방향 25° 기울기
+            var fall = Make(AnimationEffect.Fall, AnimationKind.Out);
+            fall.Direction = AnimationDirection.Right;
+            video.Animations = new List<ClipAnimation> { fall };
+            var motion = AnimationMotion.ObjectMotion(video, false);
+            var (weight, dx, dy) = motion.Fly.Single();
+            Assert.Equal((0, 1), (dx, dy));
+            Assert.Equal((0.0, 0.25, 1.0), (weight.Eval(50), weight.Eval(55), weight.Eval(60)));
+            Assert.Equal((0.0, -25.0), (motion.Rotation.Eval(50), motion.Rotation.Eval(60)));
+            Assert.Null(motion.Opacity);
+
+            // 글자별: 글자 크기의 4배 아래로, 글자마다 다르게(시계 방향으로) 기울며 끝에 투명
+            var (_, text) = TextProject("가나다");
+            var letters = Make(AnimationEffect.Fall, AnimationKind.Out, 10, text);
+            letters.Unit = AnimationUnit.Character;
+            letters.Stagger = 0;
+            text.Animations = new List<ClipAnimation> { letters };
+            var end = TextAnimationFrame.Of(text, project.Rate).Poses(text.Text, 30, 60);
+            Assert.All(end, p => Assert.Equal((120.0, 0.0), (p.Y, p.Opacity)));
+            Assert.True(end.Select(p => Math.Round(p.Rotation, 3)).Distinct().Count() == 3 && end.All(p => p.Rotation < 0));
         }
 
         [Fact]

@@ -607,6 +607,11 @@ namespace VideoEditor.Core
                         // 흐린 동안 먼저 보이기 시작한다(반쯤에 다 보임)
                         Fade(MotionExpr.Min(1, 2 * e));
                         break;
+                    case AnimationEffect.Fall:
+                        // 사라지기 전용: 화면 아래 밖으로, 기울기만큼 기울며(서서히 끝 이징을 거꾸로 돌리면 점점 빨라진다)
+                        motion.Fly.Add((1 - e, 0, 1));
+                        Rotate((animation.Direction == AnimationDirection.Left ? 1 : -1) * animation.Amount * (1 - e));
+                        break;
                 }
             }
             motion.Scale = scale;
@@ -782,6 +787,12 @@ namespace VideoEditor.Core
                 case AnimationEffect.Unblur:
                     pose.Blur = animation.Amount * Math.Max(0, 1 - e) * pixel;
                     pose.Opacity = Math.Max(0, Math.Min(1, 2 * e));
+                    break;
+                case AnimationEffect.Fall:
+                    // 글자 크기의 4배 아래로, 글자마다 조금씩 다르게 기울며 끝에서 흐려진다
+                    pose.Y = (1 - e) * 4 * size;
+                    pose.Rotation = (animation.Direction == AnimationDirection.Left ? 1 : -1) * animation.Amount * (0.6 + 0.8 * Hash(index, 4)) * (1 - e);
+                    pose.Opacity = Math.Min(1, q * 3);
                     break;
             }
             return pose;

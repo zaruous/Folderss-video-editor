@@ -90,7 +90,7 @@ namespace VideoEditor.UiTests
                     Assert.True(tops.Max() - tops.Min() < 1, "속성 탭 머리가 두 줄");
                     Assert.Equal(12, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
                     Assert.Equal(9, Ui.ById<WrapPanel>(window, "AnimationTilesEmphasis").Children.Count);
-                    Assert.Equal(12, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
+                    Assert.Equal(13, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
                     Ui.Snap(window, plugin.ShotFolder, "animation-tab-empty");
                     Ui.Click(Ui.ById<Button>(window, "AnimIn_Typewriter"));
                     Ui.Click(Ui.ById<Button>(window, "AnimEmphasis_Pulse"));
@@ -181,6 +181,10 @@ namespace VideoEditor.UiTests
                     Assert.Null(Ui.ById<Button>(window, "AnimEmphasis_Wave"));
                     Assert.Equal(10, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
                     Assert.Equal(7, Ui.ById<WrapPanel>(window, "AnimationTilesEmphasis").Children.Count);
+                    // 떨어지기는 사라지기에만
+                    Assert.Null(Ui.ById<Button>(window, "AnimIn_Fall"));
+                    Assert.NotNull(Ui.ById<Button>(window, "AnimOut_Fall"));
+                    Assert.Equal(11, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
                     // 좁은 속성 패널(1280×800 창에서 약 250px): 썸네일은 줄을 바꿔 패널 안에 들고, 긴 이름("흐려지며 가라앉기")은 칸 안에서 줄을 바꾼다
                     foreach (var id in new[] { "AnimationTilesIn", "AnimationTilesEmphasis", "AnimationTilesOut" })
                     {
