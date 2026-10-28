@@ -116,8 +116,9 @@ namespace VideoEditor.Core
             var bright = N(128 + 127 * 0.75 * r.Number("grid") / 100);
             var pattern = string.Format(CultureInfo.InvariantCulture, "if(eq(mod(Y,{0}),0),{1},if(eq(mod(X,{2}),0)+eq(mod(Y,{2}),{3}),{4},128))", shape.LineGap, dark, shape.GridGap, shape.LineGap / 2, bright);
             // 무늬는 격자 한 칸만큼 더 높게 한 장 그려(R 면만 수식, 나머지 면에 복사) 창 윗변 mod 격자 간격 자리를 잘라 쓴다 — 화면에 붙어 있게
-            text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r='{4}':g=0:b=0:a=255,shuffleplanes=map0=2:map1=2:map2=2:map3=3{5},crop={0}:{6}:0:'mod({7},{8})'[{9}g];",
-                w, hs + shape.GridGap, r.Rate, once, pattern, hold, hs, y1, shape.GridGap, p);
+            text.Append(r.Still(string.Format(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r='{4}':g=0:b=0:a=255",
+                w, hs + shape.GridGap, r.Rate, once, pattern), "gbrap"));
+            text.AppendFormat(CultureInfo.InvariantCulture, ",shuffleplanes=map0=2:map1=2:map2=2:map3=3{0},crop={1}:{2}:0:'mod({3},{4})'[{5}g];", hold, w, hs, y1, shape.GridGap, p);
             text.AppendFormat(CultureInfo.InvariantCulture, "[{0}g][{0}t]blend=all_mode=overlay:c3_mode=normal:c3_opacity=0[{0}q];", p);
 
             // 띠 모양(창 높이의 세 배 — 가운데 1/3이 띠): 섞는 정도(위 끝에서 차올라 앞머리까지 1, 그 아래 0)와 앞머리 빛(흰 선 + 색 빛 + 띠 안 옅은 색)

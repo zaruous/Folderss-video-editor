@@ -150,8 +150,9 @@ namespace VideoEditor.Core
             var crop = shape.Vertical
                 ? string.Format(CultureInfo.InvariantCulture, "crop={0}:{1}:0:'{2}'", shape.Thickness, h, flow)
                 : string.Format(CultureInfo.InvariantCulture, "crop={0}:{1}:'{2}':0", w, shape.Thickness, flow);
-            text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r='{4}':g='{5}':b=0:a=255,colorchannelmixer=rr={6}:rg={7}:rb=0:gr={6}:gg={8}:gb=0:br={6}:bg={9}:bb=0{10},{11}[{12}s];",
-                stripWidth, stripHeight, r.Rate, once, core, light, N(opacity), N(opacity * cr), N(opacity * cg), N(opacity * cb), hold, crop, p);
+            // 빛 띠(한 장 — 캐시가 있으면 파일로 읽음)
+            text.Append(r.Still(string.Format(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrap,geq=r='{4}':g='{5}':b=0:a=255,colorchannelmixer=rr={6}:rg={7}:rb=0:gr={6}:gg={8}:gb=0:br={6}:bg={9}:bb=0",
+                stripWidth, stripHeight, r.Rate, once, core, light, N(opacity), N(opacity * cr), N(opacity * cg), N(opacity * cb)), "gbrap") + hold + "," + crop + "[" + p + "s];");
 
             // 검은 틀에 띠를 시각의 자리로 얹는다
             var travel = shape.Vertical ? w : h;
@@ -175,9 +176,9 @@ namespace VideoEditor.Core
                 var halo = string.Format(CultureInfo.InvariantCulture, "255*min(1,0.8*pow({0},3)+{1})", fade, spikes);
                 // 색은 세기를 곱하지 않고(가운데는 흰색 그대로 — 흰 선 위에 얹어도 어두워지지 않게) 알파에만 불투명도·빛줄기 양을 곱한다
                 var level = opacity * (0.4 + 0.6 * amount);
-                text.AppendFormat(CultureInfo.InvariantCulture, "[{0}b];color=c=black:s={1}x{1}:r={2}:d={3},format=gbrap,geq=r='{4}':g='{5}':b=0:a=0,"
-                    + "colorchannelmixer=rr=1:rg={6}:rb=0:gr=1:gg={7}:gb=0:br=1:bg={8}:bb=0:ar={9}:ag={9}:ab=0:aa=0{10}[{0}f];",
-                    p, size, r.Rate, once, hot, halo, N(cr), N(cg), N(cb), N(level), hold);
+                text.Append("[" + p + "b];" + r.Still(string.Format(CultureInfo.InvariantCulture, "color=c=black:s={0}x{0}:r={1}:d={2},format=gbrap,geq=r='{3}':g='{4}':b=0:a=0,"
+                    + "colorchannelmixer=rr=1:rg={5}:rb=0:gr=1:gg={6}:gb=0:br=1:bg={7}:bb=0:ar={8}:ag={8}:ab=0:aa=0",
+                    size, r.Rate, once, hot, halo, N(cr), N(cg), N(cb), N(level)), "gbrap") + hold + "[" + p + "f];");
                 // 빛 위를 오르내린다(주기마다 한 번 — 사인)
                 var lengthAlong = shape.Vertical ? h : w;
                 var slide = string.Format(CultureInfo.InvariantCulture, "floor({0}*(0.5+0.3*sin(2*PI*(t+{1})/{2}))-{3})", lengthAlong, N(r.TimeOffset), N(period), (size - 1) / 2);

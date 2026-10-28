@@ -619,9 +619,11 @@ namespace VideoEditor.Core
                 // 주사선은 키운 뒤의 줄 번호(2·Y)로 정해 간격이 짝수면 그대로다
                 var dark = scan > 0 ? "-if(lt(mod(2*Y," + period + ")," + period / 2 + "),0," + N(60 * scan) + ")" : "";
                 var nf = Glitch.FrameExpr(r, "t");
-                text.AppendFormat(CultureInfo.InvariantCulture,
-                    "[{0}p];color=c=black:s={1}x{2}:r={3}:d={4},format=gray,geq=lum='clip(128{5}{6},0,255)',scale=iw*2:ih*2:flags=neighbor,format=gbrap,tpad=stop_mode=clone:stop_duration={7},crop={8}:{9}:'floor({10}*{11})':'{12}*floor({13}*{14})'[{0}n]",
-                    p, (w + spare + 1) / 2, (h + spare + 1) / 2, r.Rate, once, grain, dark, N(r.Seconds), w, h, spare, H(nf + "*12.9898+0.1"), period, spare / period, H(nf + "*78.233+0.2"));
+                // 판(한 장 — 캐시가 있으면 파일로 읽음)
+                text.Append("[" + p + "p];" + r.Still(string.Format(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gray,geq=lum='clip(128{4}{5},0,255)'",
+                    (w + spare + 1) / 2, (h + spare + 1) / 2, r.Rate, once, grain, dark), "gray"));
+                text.AppendFormat(CultureInfo.InvariantCulture, ",scale=iw*2:ih*2:flags=neighbor,format=gbrap,tpad=stop_mode=clone:stop_duration={1},crop={2}:{3}:'floor({4}*{5})':'{6}*floor({7}*{8})'[{0}n]",
+                    p, N(r.Seconds), w, h, spare, H(nf + "*12.9898+0.1"), period, spare / period, H(nf + "*78.233+0.2"));
                 text.AppendFormat(CultureInfo.InvariantCulture, ";[{0}p][{0}n]blend=c0_mode=grainmerge:c1_mode=grainmerge:c2_mode=grainmerge:c3_mode=normal", p);
             }
             text.Append(Glitch.Finish(r, maskRoll + (twice ? Glitch.Displaced(r, maskSource, (p + "x", p + "y"), (p + "w", p + "z")) : Glitch.Displaced(r, maskSource, (p + "x", p + "y")))));

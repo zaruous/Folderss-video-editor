@@ -168,6 +168,29 @@ namespace VideoEditor.Core
         public string Label { get; set; }
         /// <summary>사람에게만: 틀 크기 흑백 마스크 흐름의 라벨(gbrp, 흰색 = 사람). 없으면 null(클립 전체).</summary>
         public string Mask { get; set; }
+        /// <summary>한 장 그림 캐시와 그 파일을 입력으로 더할 계획(렌더 그래프가 미리 보기에서 넘김 — 없으면 늘 수식으로, 썸네일도).</summary>
+        internal IStillImageCache Stills { get; set; }
+        internal RenderPlan Plan { get; set; }
+
+        /// <summary>
+        /// 한 장 그림의 근원 조각: generator(color 소스부터 그 그림의 수식까지, 한 장 — 끝 픽셀 형식 format)를 그대로 돌려주거나,
+        /// 캐시에 그 그림 파일이 있으면 그 파일을 한 장 읽는 입력으로 바꾼다(무손실이라 같은 값, 시각·SAR도 color 소스와 같게).
+        /// 캐시가 있는데 파일이 아직 없으면 계획에 만들 것으로 적는다(<see cref="RenderPlan.StillImages"/> — 부르는 쪽이 배경에서 만들어 다음 그리기부터 읽는다).
+        /// </summary>
+        public string Still(string generator, string format)
+        {
+            if (Stills == null || Plan == null)
+                return generator;
+            var path = Stills.PathOf(generator, format);
+            if (!Stills.Has(path))
+            {
+                Plan.StillImages[path] = new StillImageRequest(generator, format);
+                return generator;
+            }
+            // image2 + pattern_type none: 경로에 %d 같은 글이 있어도 파일 이름 패턴으로 읽지 않게. -loop 없이 한 장(뒤의 tpad가 늘인다)
+            var index = RenderGraph.AddInput(Plan, "-framerate", Rate, "-f", "image2", "-pattern_type", "none", "-i", path);
+            return "[" + index + ":v]setpts=PTS-STARTPTS,setsar=1,format=" + format;
+        }
 
         /// <summary>숫자 값(범위 안, 없으면 기본값).</summary>
         public double Number(string key)

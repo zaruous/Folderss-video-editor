@@ -58,6 +58,8 @@ namespace VideoEditor.Ui
             RenderEnvironment.PersonMasks = PersonMasks;
             // 재생 때 미리 그린 수식 전환 구간(데이터 폴더\cache\prerender — 편집 창들이 함께 쓴다)
             Prerender = new PrerenderCache(Path.Combine(Manager.DataDirectory, "cache", "prerender"));
+            // 동영상 효과의 한 장 그림(빛 띠·거리 지도·방향 지도·잡음 판 — 임시 폴더, 실행끼리 같이 쓴다)
+            var stills = RenderEnvironment.Stills ??= new StillImageCache(Path.Combine(RenderEnvironment.TempRoot(), StillImageCache.FolderName));
             // 앞서 끝난 실행이 남긴 꾸민 글자 PNG 캐시와 끊긴 인물 마스크(.part)를 치운다(살아 있는 실행의 폴더는 건드리지 않음).
             // 시스템 글꼴 목록도 미리 읽어 둔다 — 처음 글자 클립을 고를 때 UI 스레드가 멈추지 않게
             Task.Run(() =>
@@ -66,6 +68,7 @@ namespace VideoEditor.Ui
                 _ = StyledTextRasterizer.Fonts;
                 PersonMasks.Cleanup(TimeSpan.FromHours(1));
                 Prerender.Cleanup(TimeSpan.FromHours(1));
+                stills.Cleanup(TimeSpan.FromHours(1));
             });
         }
 

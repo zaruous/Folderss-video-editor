@@ -36,6 +36,8 @@ namespace VideoEditor.Core
         /// 재생 미리 보기(<see cref="Playback"/>·<see cref="Preview"/>)에서만 쓴다.
         /// </summary>
         public IReadOnlyList<PrerenderedSpan> Prerendered { get; set; }
+        /// <summary>동영상 효과의 한 장 그림 캐시(<see cref="IStillImageCache"/>) — 있으면 캐시한 그림은 파일로 읽고, 없는 것은 <see cref="RenderPlan.StillImages"/>에 적는다. null이면 늘 수식으로.</summary>
+        public IStillImageCache Stills { get; set; }
         /// <summary>꾸민 글자(글자 상자를 정한 글자도)를 PNG로 그릴 그리개. null이면 스타일이 있어도 drawtext로 그린다(첫 채우기 색만 반영, 글자 상자는 무시).</summary>
         public ITextRasterizer TextRasterizer { get; set; }
     }
@@ -59,6 +61,8 @@ namespace VideoEditor.Core
         public Dictionary<string, TextImageRequest> TextImages { get; } = new Dictionary<string, TextImageRequest>();
         /// <summary><see cref="TextImages"/>를 그릴 그리개.</summary>
         public ITextRasterizer TextRasterizer { get; set; }
+        /// <summary>캐시에 아직 없어 이번에는 수식으로 그린 효과의 한 장 그림 — 경로·그릴 것(<see cref="RenderOptions.Stills"/>). 부르는 쪽이 배경에서 만들어 둔다.</summary>
+        public Dictionary<string, StillImageRequest> StillImages { get; } = new Dictionary<string, StillImageRequest>();
     }
 
     /// <summary>
@@ -447,7 +451,9 @@ namespace VideoEditor.Core
                     // 흐름의 0초 = 그리기 시작(segStart) — 효과 시각은 클립 안 시각이라 어디서부터 그려도(멈춘 화면·재생·내보내기) 같은 프레임은 같다
                     TimeOffset = rate.ToSeconds(segStart - clip.Start),
                     Label = "fx" + n + "e" + i,
-                    Mask = Personal(effects[i]) && masks.Count > 0 ? masks.Dequeue() : null
+                    Mask = Personal(effects[i]) && masks.Count > 0 ? masks.Dequeue() : null,
+                    Stills = options.Stills,
+                    Plan = plan
                 };
                 if (ShakeZoom.CanCombine(def))
                 {

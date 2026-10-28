@@ -138,8 +138,9 @@ namespace VideoEditor.Core
             // 색 입히기: 속(R)은 흰색, 번짐(G)은 색 — 둘 다 불투명도만큼
             var opacity = r.Number("opacity") / 100;
             var (cr, cg, cb) = VideoEffects.Channels(r.Color);
-            text.AppendFormat(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrp,geq=r='{4}':g='{5}':b=0,colorchannelmixer=rr={6}:rg={7}:rb=0:gr={6}:gg={8}:gb=0:br={6}:bg={9}:bb=0,tpad=stop_mode=clone:stop_duration={10}[{11}s];",
-                w, h, r.Rate, once, core, glow, N(opacity), N(opacity * cr), N(opacity * cg), N(opacity * cb), seconds, p);
+            // 띠 한 장(캐시가 있으면 파일로 읽음)
+            text.Append(r.Still(string.Format(CultureInfo.InvariantCulture, "color=c=black:s={0}x{1}:r={2}:d={3},format=gbrp,geq=r='{4}':g='{5}':b=0,colorchannelmixer=rr={6}:rg={7}:rb=0:gr={6}:gg={8}:gb=0:br={6}:bg={9}:bb=0",
+                w, h, r.Rate, once, core, glow, N(opacity), N(opacity * cr), N(opacity * cg), N(opacity * cb)), "gbrp") + ",tpad=stop_mode=clone:stop_duration=" + seconds + "[" + p + "s];");
             var strip = p + "s";
 
             if (shape.Jitter > 0)
