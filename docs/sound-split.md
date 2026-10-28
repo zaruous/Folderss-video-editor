@@ -60,6 +60,10 @@
 - 그릇은 코덱에 맞춘다(Core `SoundExtract.ExtensionFor`): aac → `.m4a`, mp3 → `.mp3`, opus → `.opus`, vorbis → `.ogg`, flac → `.flac`, pcm → `.wav`, 그 밖 → `.mka`. 저장 창에서 WAV를 골라도 된다.
 - 그대로 꺼내지 못하면(그릇이 코덱을 받지 않음 — 빅 엔디언 PCM을 WAV에 등) 같은 이름의 `.wav`(pcm_s16le)로 저장하고 알린다. `.wav`로 고르면 PCM 원본만 그대로 담고 그 밖은 PCM으로 바꾼다(다른 코덱을 담은 WAV는 못 여는 프로그램이 많다).
 - 옆의 임시 이름(`이름.part-xxxxxxxx.확장자`)에 쓰고 다 되면 바꿔 넣는다 — 실패해도 덮어쓰기로 고른 원래 파일이 남는다. 실행은 Media `SoundExtractor`(다른 FFmpeg 작업처럼 셸 없이, 작업 개체 안에서).
+- **진행 창과 취소**(#34): 저장 창에서 파일을 고르면 "사운드 저장" 창(`SoundSaveDialog` — `SoundSaveProgress`·`SoundSaveStatus`·`SoundSaveCancelButton`)이 진행률을 보인다.
+  FFmpeg `-progress pipe:1`의 `out_time_us`를 저장할 소리의 길이(Core `SoundExtract.OutputSeconds` = (구간 또는 원본 길이 − 처음) ÷ 속도)로 나눈다(0.5초마다, 길이를 모르면 막대가 흐름).
+  [취소]·창 닫기는 FFmpeg를 끝내고, 끝난 뒤 임시 파일을 지우고 닫는다 — 저장한 파일도 미디어에 더한 것도 없고, 덮어쓰기로 고른 원래 파일은 그대로다(FFmpeg가 막 끝난 때 눌러도 바꿔 넣지 않는다).
+  실패하면 창에 까닭을 보이고 [닫기]를 기다린다. 시간 제한 30분은 그대로.
 - 타임라인 클립의 음량이 100%가 아니거나 페이드가 있으면 저장 전에 "음량·페이드를 넣어 저장할까요?"를 묻는다([넣어 저장]·[원본 소리 그대로]).
   넣으면 렌더 그래프와 같은 volume 식(`SoundExtract.ClipVolume` = `RenderGraph.VolumeExpression`, 클립 처음 = 0초, 속도 뒤에)으로 WAV에 쓴다. 미디어 패널은 원본 소리 그대로.
   전환의 교차 페이드는 넣지 않는다(이웃 클립과 겹치는 소리라 클립 하나의 파일에는 맞지 않음). 저장한 파일은 미디어 목록에 더한다(가져오기와 같은 실행 취소 한 단계).
@@ -87,3 +91,4 @@
 | 2026-10-25 | 구현(가지 `sound-split`): 이름 통일(사운드 분리, Ctrl+Alt+D 그대로), 미디어 패널 [사운드 분리해서 배치], 링크(`Clip.LinkId`·`Unlinked`, Core `ClipLinks` — 함께 고르기·옮기기·다듬기·분할·삭제·속도, 밀리고 당겨지면 따라감, 덮어쓰지 않음, Alt로 그 한 번만 따로), 링크 해제·다시 링크·어긋남 배지·싱크 맞추기, 사운드 합치기, 사운드를 파일로 저장(Core `SoundExtract` + Media `SoundExtractor`, 원본 그대로 → 안 되면 WAV, 클립 구간·속도). Core 시험 61개(FFmpeg 통합 4개 포함) 통과, 화면 시험 4개는 작성(컴파일 확인) |
 | 2026-10-25 | #31 짝 다듬기·붙여 넣기 경계: 늘이는 다듬기에서 짝이 옆 클립에 막히면 이끄는 쪽도 짝이 늘어난 만큼만(`ClipLinks.AfterTrim` — 짝을 다듬은 뒤 덜 는 만큼 이끄는 쪽을 따로 줄임, 잠긴 짝은 맞추지 않음). 붙여 넣은 사운드가 0 앞으로 가야 하면 앞부분을 잘라 싱크 유지(`ClipLinks.PlaceInSync` — 예전에는 0에 고정해 그만큼 어긋남), 통째로 0 앞이면 거절. 시험: 끝·앞 늘이기에서 짝이 막힘(영상이 이끔·사운드가 이끔), 잠긴 짝은 예전대로, 마그네틱 주 트랙에서 뒤 영상이 다시 붙음, 0 앞 자르기·0 이후·통째로 0 앞 |
 | 2026-10-26 | #31 음량·페이드 넣어 저장: `SoundExtract.ClipVolume`(음량 100%·페이드 없음이면 null) → `Arguments`의 `-af`에 속도 뒤 `volume=`, 넣으면 그대로 꺼내지 않고 WAV(`ShouldCopy(shaped)`). 타임라인 클립 저장에서만 묻는다. 시험: Core(식이 그래프와 같음, 인수 순서, 그대로 꺼내지 않음), FFmpeg(음량 50% + 1초 페이드 인 — 처음 0.02배, 0.5초 0.24배, 1.3초 뒤 0.50배, .m4a를 골라도 WAV) |
+| 2026-10-28 | #34 사운드를 파일로 저장 — 진행 창과 취소: Media `SoundExtractor.Extract`에 `progress`(0~1)·`sourceSeconds`(끝까지 꺼낼 때의 분모) 인수를 더하고(기존 호출은 그대로), FFmpeg를 `-progress pipe:1 -nostats`로 돌려 `out_time_us`를 Core `SoundExtract.OutputSeconds`로 나눈다. 취소·시간 초과는 FFmpeg를 끝내고 끝날 때까지 기다린 뒤 임시 파일을 지운다 — FFmpeg가 이미 끝났어도 취소했으면 바꿔 넣지 않는다. Ui `SoundSaveDialog`("사운드 저장" — 뜨자마자 저장, 진행률·[취소], 창을 닫아도 취소와 같고 FFmpeg가 멈춘 뒤 닫힘, 실패는 까닭을 보이고 [닫기]), `EditorCommands.SaveSoundJobs`(창을 띄우고 저장한 파일을 미디어에 더해 상태 줄 — 취소면 "사운드 저장을 취소했습니다"). 시험: Core(`SoundSaveTests.OutputSeconds_…` — 구간·원본 나머지 ÷ 속도, 모르면 0), FFmpeg(진행률이 1까지·임시 파일 없음, 20분 소리를 4분의 1 속도로 저장하다 첫 알림에서 취소하면 원래 파일 그대로·임시 파일 없음(이 PC에서 첫 알림 0.41), 시작 전에 취소하면 아무것도 쓰지 않음), 화면(`SoundSaveTests.SaveClipSound_ProgressWindow_CancelLeavesNothing` — 30분 소리 4분의 1 속도 클립: 진행 창에 % → [취소] → 파일·미디어 없음, 작성만 함) |

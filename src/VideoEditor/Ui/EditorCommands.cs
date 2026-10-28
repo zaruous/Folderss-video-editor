@@ -303,7 +303,29 @@ namespace VideoEditor.Ui
         /// <summary>[사운드를 파일로 저장…] 미디어 패널: 파일 전체의 소리를 다시 인코딩하지 않고 꺼낸다(안 되면 WAV).</summary>
         public Task SaveSound(MediaInfo media)
         {
-            return SaveSound(media.Path, media.AudioCodec, 0, 0, 1, Path.GetFileNameWithoutExtension(media.Path) + " 사운드");
+            return SaveSound(media.Path, media.AudioCodec, 0, 0, 1, Path.GetFileNameWithoutExtension(media.Path) + " 사운드", null, media.DurationSeconds);
+        }
+
+        /// <summary>
+        /// 저장 진행 창(<see cref="SoundSaveDialog"/>)으로 jobs를 차례로 저장하고(진행률·취소), 저장한 파일을 미디어에 더해 상태 줄에 알린다.
+        /// 취소해도 그 전에 다 저장한 파일은 미디어에 더한다. done은 모두 저장했을 때의 알림 글.
+        /// </summary>
+        private async Task SaveSoundJobs(IReadOnlyList<SoundSaveDialog.Job> jobs, string folder, Func<IReadOnlyList<string>, string> done)
+        {
+            var dialog = new SoundSaveDialog(jobs, folder);
+            var owner = UiKit.OwnerOf(_owner);
+            if (owner != null && owner.IsLoaded)
+                dialog.Owner = owner;
+            dialog.ShowDialog();
+            if (dialog.Saved.Count > 0)
+                await ImportPaths(dialog.Saved.ToArray(), null, -1);
+            // 시작하기 전에 닫은 창도 취소
+            if (dialog.Cancelled || dialog.Saved.Count == 0 && dialog.Errors.Count == 0)
+                Status("사운드 저장을 취소했습니다." + (dialog.Saved.Count > 0 ? " 먼저 저장한 " + dialog.Saved.Count + "개는 미디어에 더했습니다." : ""));
+            else if (dialog.Errors.Count > 0)
+                Status("사운드를 저장하지 못했습니다: " + string.Join(" / ", dialog.Errors));
+            else
+                Status(done(dialog.Saved));
         }
 
         /// <summary>[사운드를 파일로 저장…] 타임라인: 그 클립 구간(In~Out)만, 속도를 바꿨으면 속도대로(WAV). 음량·페이드가 있으면 넣을지 묻는다(넣으면 WAV).</summary>
@@ -323,7 +345,8 @@ namespace VideoEditor.Ui
             return SaveSound(clip.Path, Project.FindMedia(clip.Path)?.AudioCodec, rate.ToSeconds(clip.SourceIn), rate.ToSeconds(clip.SourceOut - clip.SourceIn), clip.Speed, name, volume);
         }
 
-        private async Task SaveSound(string source, string codec, double from, double seconds, double speed, string name, string volume = null)
+        /// <summary>사운드 하나를 저장 창에서 고른 파일로(진행 창 — 진행률·취소). sourceSeconds는 끝까지 꺼낼 때 진행률의 분모(원본 길이).</summary>
+        private async Task SaveSound(string source, string codec, double from, double seconds, double speed, string name, string volume = null, double sourceSeconds = 0)
         {
             try
             {
@@ -346,12 +369,15 @@ namespace VideoEditor.Ui
                 };
                 if (dialog.ShowDialog(UiKit.OwnerOf(_owner)) != true)
                     return;
-                Status("사운드를 꺼내는 중… " + Path.GetFileName(dialog.FileName));
-                var saved = await SoundExtractor.Extract(tool, source, codec, dialog.FileName, from, seconds, speed, CancellationToken.None, volume);
-                var fallback = !string.Equals(saved, dialog.FileName, StringComparison.OrdinalIgnoreCase);
-                await ImportPaths(new[] { saved }, null, -1);
-                Status("사운드를 저장하고 미디어에 더했습니다: " + saved
-                       + (fallback ? " (원본 그대로 담을 수 없어 WAV로 저장)" : copy && !saved.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ? " (원본 그대로)" : ""));
+                var chosen = dialog.FileName;
+                var job = new SoundSaveDialog.Job(Path.GetFileName(chosen), (progress, cancellation) =>
+                    SoundExtractor.Extract(tool, source, codec, chosen, from, seconds, speed, cancellation, volume, progress, sourceSeconds));
+                await SaveSoundJobs(new[] { job }, Path.GetDirectoryName(chosen), saved =>
+                {
+                    var fallback = !string.Equals(saved[0], chosen, StringComparison.OrdinalIgnoreCase);
+                    return "사운드를 저장하고 미디어에 더했습니다: " + saved[0]
+                           + (fallback ? " (원본 그대로 담을 수 없어 WAV로 저장)" : copy && !saved[0].EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ? " (원본 그대로)" : "");
+                });
             }
             catch (Exception ex)
             {

@@ -596,6 +596,17 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
+        /// 진행률의 분모 — 저장할 소리의 길이(출력 초): (seconds가 있으면 seconds, 없으면 원본 길이 − from) ÷ 속도. 모르면 0(진행률 없이 돈다).
+        /// </summary>
+        public static double OutputSeconds(double from, double seconds, double speed, double sourceSeconds)
+        {
+            var length = seconds > 0 ? seconds : sourceSeconds - Math.Max(0, from);
+            if (!double.IsFinite(length) || length <= 0 || !double.IsFinite(speed) || speed <= 0)
+                return 0;
+            return length / speed;
+        }
+
+        /// <summary>
         /// 다시 인코딩하지 않고 꺼낼지: 속도가 1이고 음량·페이드를 넣지 않을 때(shaped)만. .wav로 저장하면 PCM 원본만 그대로(다른 코덱을 WAV에 담으면 못 여는 프로그램이 많다).
         /// </summary>
         public static bool ShouldCopy(string extension, string codec, double speed, bool shaped = false)
