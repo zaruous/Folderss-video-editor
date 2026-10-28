@@ -15,7 +15,7 @@ namespace VideoEditor.Ui
     /// 미리 보기 위의 틀: 고른 동영상·사진·글자 클립 하나가 재생 헤드에 보이면 그 영역(글자는 글자 상자)에 틀과 손잡이를 그린다.
     /// 안쪽을 끌면 옮기고(X·Y, 화면 가운데 가까이 가면 붙음) 모서리를 끌면 가운데를 두고 크기를 바꾼다(크기 %).
     /// 글자는 옆 손잡이가 넷 더 있다: 왼쪽·오른쪽은 상자 너비, 위·아래는 상자 높이 — 반대쪽 옆은 그대로 두고, 두 번 누르면 자동(0)으로.
-    /// 아트 요소는 모양 손잡이(노란 둥근 점 — <see cref="ArtHandles"/>)가 더 있다: 사각형 모서리 반경, 선·화살표 양 끝(반대쪽 끝은 그대로), 별 안쪽.
+    /// 아트 요소는 모양 손잡이(노란 둥근 점 — <see cref="ArtHandles"/>)가 더 있다: 모서리 반경, 선·화살표 양 끝(반대쪽 끝은 그대로), 별 안쪽, 말풍선 꼬리 끝.
     /// 틀 밖에서 보이는 클립을 누르면 그 클립을 고른다(맨 위 것, 빈 곳이면 고르기는 그대로). Esc는 끌기 취소.
     /// 끄는 동안은 틀만 움직이고, 놓을 때 한 번 편집한다(실행 취소 한 번). 미리 보기를 누른 뒤에는 화살표로 1px(Shift 10px)씩 옮긴다.
     /// </summary>
@@ -219,8 +219,10 @@ namespace VideoEditor.Ui
                 var point = ToScreen(ArtHandles.Position(project, probe, _shapeKinds[i]));
                 if (_shapeKinds[i] == ArtHandle.CornerRadius)
                 {
-                    var corner = ToScreen(ArtHandles.ToProject(project, probe, 0, 0));
-                    var inward = ToScreen(ArtHandles.ToProject(project, probe, 1, 1)) - corner;
+                    // 화면 테두리는 안쪽 모서리(테두리 두께만큼 안쪽)에서 띄운다
+                    var inset = _art.Kind == ArtKind.ScreenBorder ? Math.Min(_art.Thickness, Math.Min(_art.Width, _art.Height) / 2) : 0;
+                    var corner = ToScreen(ArtHandles.ToProject(project, probe, inset, inset));
+                    var inward = ToScreen(ArtHandles.ToProject(project, probe, inset + 1, inset + 1)) - corner;
                     if (inward.Length > 1e-9 && (point - corner).Length < ShapeHandleGap)
                     {
                         inward.Normalize();
@@ -492,6 +494,8 @@ namespace VideoEditor.Ui
                     return "길이 " + Math.Round(_art.Width) + "px · 방향 " + Math.Round(_rotation) + "°";
                 case ArtHandle.InnerRatio:
                     return "안쪽 " + Math.Round(_art.InnerRatio * 100) + "%";
+                case ArtHandle.Tail:
+                    return "꼬리 끝 X " + Math.Round(_art.TailX * _art.Width) + " · Y " + Math.Round(_art.TailY * _art.Height) + "px(상자 가운데에서)";
                 default:
                     return "모서리 반경 " + Math.Round(_art.CornerRadius) + "px";
             }
@@ -537,7 +541,7 @@ namespace VideoEditor.Ui
             var (id, x, y, rotation, art) = (_clip.Id, _x, _y, _rotation, _art?.Clone());
             var moved = _pointerMoved && art != null && _startArt != null
                 && (x != _startX || y != _startY || rotation != _startRotation || art.Width != _startArt.Width || art.CornerRadius != _startArt.CornerRadius
-                    || art.InnerRatio != _startArt.InnerRatio);
+                    || art.InnerRatio != _startArt.InnerRatio || art.TailX != _startArt.TailX || art.TailY != _startArt.TailY);
             EndDrag();
             if (!moved)
                 return true;
@@ -556,6 +560,10 @@ namespace VideoEditor.Ui
                         break;
                     case ArtHandle.InnerRatio:
                         c.Art.InnerRatio = Math.Round(art.InnerRatio, 3);
+                        break;
+                    case ArtHandle.Tail:
+                        c.Art.TailX = Math.Round(art.TailX, 4);
+                        c.Art.TailY = Math.Round(art.TailY, 4);
                         break;
                     default:
                         c.Art.CornerRadius = Math.Round(art.CornerRadius);

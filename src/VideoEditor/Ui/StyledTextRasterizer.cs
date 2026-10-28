@@ -168,6 +168,8 @@ namespace VideoEditor.Ui
 
             double boxWidth, boxHeight;
             var geometry = new GeometryGroup { FillRule = FillRule.Nonzero };
+            // 아트 요소 안의 글(말풍선 등) — 모양 위에 글자 색으로만 칠한다(꾸미기 효과는 모양에)
+            GeometryGroup words = null;
             if (request.Art != null)
             {
                 // 아트 요소: 모양 윤곽(출력 픽셀)을 글자 윤곽 대신 칠한다 — 상자 = 모양 상자, 휘기는 쓰지 않는다
@@ -176,8 +178,20 @@ namespace VideoEditor.Ui
                 var scale = Clamp(request.EffectScale, 0.001, 100, 1);
                 boxWidth = art.Width * scale;
                 boxHeight = art.Height * scale;
-                foreach (var polygon in ArtGeometry.Outline(art, scale))
-                    geometry.Children.Add(Polygon(polygon));
+                geometry.Children.Add(ArtPath(ArtGeometry.Outline(art, scale)));
+                var area = ArtGeometry.TextArea(art, scale);
+                if (area != null && !string.IsNullOrEmpty(request.Text))
+                {
+                    // 글 상자 너비에서 줄을 나누고 높이 가운데에(글이 더 길면 넘친다 — 글자 상자와 같은 배치 함수)
+                    var (left, top, width, height) = area.Value;
+                    var arranged = Arrange(request.Text, style, size, width, height, TextVerticalAlign.Middle);
+                    words = new GeometryGroup { FillRule = FillRule.Nonzero };
+                    foreach (var line in arranged.Lines)
+                    {
+                        foreach (var piece in line.Pieces)
+                            words.Children.Add(piece.Text.BuildGeometry(new Point(left + line.X + piece.Offset, top + line.Top + line.Baseline - piece.Text.Baseline)));
+                    }
+                }
                 cancellation.ThrowIfCancellationRequested();
             }
             else
@@ -202,12 +216,15 @@ namespace VideoEditor.Ui
                 }
             }
 
-            // PNG 가운데 = 배치 상자 가운데. 글자 모양이 상자 밖으로 나가도(기울임·행간이 좁을 때·휘기·상자보다 긴 글) 잘리지 않게 대칭으로 넓힌다
+            // PNG 가운데 = 배치 상자 가운데. 글자 모양이 상자 밖으로 나가도(기울임·행간이 좁을 때·휘기·상자보다 긴 글·말풍선 꼬리) 잘리지 않게 대칭으로 넓힌다
             var ink = geometry.Bounds;
+            var extent = ink;
+            if (words != null && !words.Bounds.IsEmpty)
+                extent.Union(words.Bounds);
             var centerX = boxWidth / 2;
             var centerY = boxHeight / 2;
-            var halfWidth = Math.Max(centerX, ink.IsEmpty ? 0 : Math.Max(centerX - ink.Left, ink.Right - centerX));
-            var halfHeight = Math.Max(centerY, ink.IsEmpty ? 0 : Math.Max(centerY - ink.Top, ink.Bottom - centerY));
+            var halfWidth = Math.Max(centerX, extent.IsEmpty ? 0 : Math.Max(centerX - extent.Left, extent.Right - centerX));
+            var halfHeight = Math.Max(centerY, extent.IsEmpty ? 0 : Math.Max(centerY - extent.Top, extent.Bottom - centerY));
             var layout = StyledTextLayout.Fit(halfWidth * 2, halfHeight * 2, style, request.EffectScale, request.CanvasWidth, request.CanvasHeight);
             if ((double)layout.Width * layout.Height > StyledTextLayout.MaxPixels)
                 throw new InvalidOperationException("꾸민 글자 그림이 너무 큽니다: " + layout.Width + "×" + layout.Height);
@@ -227,6 +244,17 @@ namespace VideoEditor.Ui
                 context.Pop();
             }
             front.Add(body);
+            if (words != null)
+            {
+                var text = new DrawingVisual();
+                using (var context = text.RenderOpen())
+                {
+                    context.PushTransform(new TranslateTransform(origin.X, origin.Y));
+                    context.DrawGeometry(SolidBrush(request.ArtTextColor ?? "#FFFFFF"), null, words);
+                    context.Pop();
+                }
+                front.Add(text);
+            }
             var layers = new List<Visual>();
             var shadow = ShadowLayer(geometry, ink, style, request.EffectScale, origin);
             if (shadow != null)
@@ -248,13 +276,21 @@ namespace VideoEditor.Ui
                 encoder.Save(stream);
         }
 
-        /// <summary>닫힌 다각형 하나(아트 모양의 윤곽 조각).</summary>
-        private static PathGeometry Polygon(IReadOnlyList<(double X, double Y)> points)
+        /// <summary>
+        /// 아트 모양의 윤곽 조각들(<see cref="ArtGeometry.Outline"/>)을 한 기하로 — 0이 아닌 감김 규칙이라 같은 방향 조각은 합쳐지고(말풍선 몸통과 꼬리)
+        /// 반대 방향 조각은 구멍이 된다(테두리 안쪽). 요소 탭 칸 그림도 같은 것을 쓴다.
+        /// </summary>
+        internal static PathGeometry ArtPath(IEnumerable<IReadOnlyList<(double X, double Y)>> polygons)
         {
-            var figure = new PathFigure { StartPoint = new Point(points[0].X, points[0].Y), IsClosed = true, IsFilled = true };
-            figure.Segments.Add(new PolyLineSegment(points.Skip(1).Select(p => new Point(p.X, p.Y)), true));
-            var path = new PathGeometry();
-            path.Figures.Add(figure);
+            var path = new PathGeometry { FillRule = FillRule.Nonzero };
+            foreach (var points in polygons)
+            {
+                if (points.Count < 2)
+                    continue;
+                var figure = new PathFigure { StartPoint = new Point(points[0].X, points[0].Y), IsClosed = true, IsFilled = true };
+                figure.Segments.Add(new PolyLineSegment(points.Skip(1).Select(p => new Point(p.X, p.Y)), true));
+                path.Figures.Add(figure);
+            }
             return path;
         }
 

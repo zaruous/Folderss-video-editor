@@ -64,18 +64,25 @@ namespace VideoEditor.Core
             };
         }
 
-        /// <summary>아트 요소 클립: 모양 기본값과 단색 채우기(파랑) 스타일.</summary>
+        /// <summary>아트 요소 클립: 모양 기본값과 종류별 처음 스타일(<see cref="ArtStyle(ArtKind)"/>). 글을 넣는 모양(말풍선 등)은 처음 글·글자 크기 44·글자 색도.</summary>
         public static Clip CreateArt(ArtKind kind, long start, long frames)
         {
-            return new Clip
+            var clip = new Clip
             {
                 Kind = ClipKind.Art,
                 Art = ArtShape.Default(kind),
-                Style = ArtStyle(),
+                Style = ArtStyle(kind),
                 HasVideo = true,
                 Start = Math.Max(0, start),
                 SourceOut = Math.Max(1, frames)
             };
+            if (ArtShape.HoldsText(kind))
+            {
+                clip.Text = ArtShape.DefaultText(kind);
+                clip.FontSize = 44;
+                clip.TextColor = ArtShape.DefaultTextColor(kind);
+            }
+            return clip;
         }
 
         /// <summary>
@@ -87,6 +94,16 @@ namespace VideoEditor.Core
         public static Clip AddArt(Project project, ArtKind kind, long start, long frames, Track preferred = null)
         {
             var clip = CreateArt(kind, start, frames);
+            FitArtToScreen(project, clip);
+            return AddOverlay(project, clip, preferred);
+        }
+
+        /// <summary>
+        /// 화면에 겹쳐 쓰는 클립(아트 요소·스티커)을 그 시작에 넣는다: preferred(끌어 놓은 줄)가 쓸 수 있는 동영상 트랙이고 그 구간이 비었으면 거기,
+        /// 아니면 그 구간이 빈 덮어 쓰기 트랙, 없으면 새 동영상 트랙. 마그네틱 주 트랙은 쓰지 않는다(<see cref="AddArt(Project, ArtKind, long, long, Track)"/>).
+        /// </summary>
+        public static Clip AddOverlay(Project project, Clip clip, Track preferred = null)
+        {
             bool Free(Track t) => t.Kind == TrackKind.Video && !t.Locked && !t.Subtitles && !IsMagnetic(project, t)
                                   && !t.Clips.Any(c => c.Start < clip.End && c.End > clip.Start);
             var track = preferred != null && Free(preferred) ? preferred
@@ -95,11 +112,85 @@ namespace VideoEditor.Core
             return clip;
         }
 
-        /// <summary>아트 요소의 처음 스타일(파란 단색 채우기).</summary>
+        /// <summary>
+        /// 화면에 맞추는 요소: 집중선·화면 테두리는 화면 크기, 아래 자막 띠는 화면 폭의 52%·높이의 13%로 왼쪽 아래(가장자리에서 폭의 5%·높이의 8%)에 둔다.
+        /// </summary>
+        public static void FitArtToScreen(Project project, Clip clip)
+        {
+            if (clip?.Art == null)
+                return;
+            switch (clip.Art.Kind)
+            {
+                case ArtKind.FocusLines:
+                case ArtKind.ScreenBorder:
+                    clip.Art.Width = project.Width;
+                    clip.Art.Height = project.Height;
+                    break;
+                case ArtKind.LowerThird:
+                    clip.Art.Width = Math.Round(project.Width * 0.52);
+                    clip.Art.Height = Math.Round(project.Height * 0.13);
+                    clip.X = Math.Round(-project.Width / 2.0 + project.Width * 0.05 + clip.Art.Width / 2);
+                    clip.Y = Math.Round(project.Height / 2.0 - project.Height * 0.08 - clip.Art.Height / 2);
+                    break;
+            }
+        }
+
+        /// <summary>아트 요소의 처음 스타일(파란 단색 채우기) — 스타일이 빠진 예전 파일을 고칠 때.</summary>
         public static TextStyle ArtStyle()
         {
             var style = new TextStyle();
             style.Fill.Colors = new List<string> { "#3B82F6" };
+            return style;
+        }
+
+        /// <summary>
+        /// 종류별 처음 스타일: 도형은 파랑, 말풍선은 흰 바탕·짙은 윤곽선, 동그라미 치기·밑줄·테두리 상자는 빨강, 형광펜은 반투명 노랑,
+        /// 반짝임은 연노랑에 노란 광선, 집중선·화면 테두리는 흰색(집중선은 조금 비침), 아래 자막 띠·배경 판은 반투명 어두운 색(띠의 글은 왼쪽 정렬).
+        /// </summary>
+        public static TextStyle ArtStyle(ArtKind kind)
+        {
+            var style = ArtStyle();
+            void Fill(string color) => style.Fill.Colors = new List<string> { color };
+            switch (kind)
+            {
+                case ArtKind.Bubble:
+                case ArtKind.BubbleSquare:
+                case ArtKind.BubbleThought:
+                    Fill("#FFFFFF");
+                    style.Outline.Enabled = true;
+                    style.Outline.Color = "#1F2937";
+                    style.Outline.Width = 3;
+                    break;
+                case ArtKind.CircleMark:
+                case ArtKind.Underline:
+                case ArtKind.BoxMark:
+                    Fill("#EF4444");
+                    break;
+                case ArtKind.Highlighter:
+                    Fill("#8CFACC15");
+                    break;
+                case ArtKind.Sparkle:
+                    Fill("#FFF7AE");
+                    style.Glow.Enabled = true;
+                    style.Glow.Color = "#FACC15";
+                    style.Glow.Size = 12;
+                    style.Glow.Opacity = 0.8;
+                    break;
+                case ArtKind.FocusLines:
+                    Fill("#E6FFFFFF");
+                    break;
+                case ArtKind.ScreenBorder:
+                    Fill("#FFFFFF");
+                    break;
+                case ArtKind.LowerThird:
+                    Fill("#E61E293B");
+                    style.Align = TextAlign.Left;
+                    break;
+                case ArtKind.Plate:
+                    Fill("#99000000");
+                    break;
+            }
+            style.Normalize();
             return style;
         }
 

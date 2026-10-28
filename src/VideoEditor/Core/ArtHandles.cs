@@ -13,7 +13,9 @@ namespace VideoEditor.Core
         /// <summary>선·화살표의 끝(오른쪽 — 화살표 머리).</summary>
         LineEnd,
         /// <summary>별의 안쪽 꼭짓점(안쪽 비율).</summary>
-        InnerRatio
+        InnerRatio,
+        /// <summary>말풍선 꼬리 끝.</summary>
+        Tail
     }
 
     /// <summary>
@@ -29,12 +31,20 @@ namespace VideoEditor.Core
             switch (kind)
             {
                 case ArtKind.Rectangle:
+                case ArtKind.BoxMark:
+                case ArtKind.ScreenBorder:
+                case ArtKind.Plate:
                     return new[] { ArtHandle.CornerRadius };
                 case ArtKind.Line:
                 case ArtKind.Arrow:
                     return new[] { ArtHandle.LineStart, ArtHandle.LineEnd };
                 case ArtKind.Star:
                     return new[] { ArtHandle.InnerRatio };
+                case ArtKind.Bubble:
+                case ArtKind.BubbleThought:
+                    return new[] { ArtHandle.Tail };
+                case ArtKind.BubbleSquare:
+                    return new[] { ArtHandle.CornerRadius, ArtHandle.Tail };
                 default:
                     return Array.Empty<ArtHandle>();
             }
@@ -48,6 +58,7 @@ namespace VideoEditor.Core
                 case ArtHandle.LineStart: return "시작 끝";
                 case ArtHandle.LineEnd: return "끝";
                 case ArtHandle.InnerRatio: return "안쪽";
+                case ArtHandle.Tail: return "꼬리";
                 default: return "모서리 반경";
             }
         }
@@ -86,7 +97,10 @@ namespace VideoEditor.Core
             return (shape.Width / 2 + (dx * cos + dy * sin) / s, shape.Height / 2 + (-dx * sin + dy * cos) / s);
         }
 
-        /// <summary>손잡이 자리(상자 좌표). 모서리 반경은 그리는 반경(짧은 변의 절반까지)의 원 가운데.</summary>
+        /// <summary>
+        /// 손잡이 자리(상자 좌표). 모서리 반경은 그리는 반경(짧은 변의 절반까지)의 원 가운데 — 화면 테두리는 안쪽 모서리라 테두리 두께만큼 안쪽.
+        /// 꼬리는 꼬리 끝.
+        /// </summary>
         public static (double X, double Y) Local(ArtShape art, ArtHandle handle)
         {
             var shape = (art ?? new ArtShape()).Clone();
@@ -103,12 +117,25 @@ namespace VideoEditor.Core
                     var a = InnerAngle(shape.Sides);
                     return (w / 2 + w / 2 * shape.InnerRatio * Math.Cos(a), h / 2 + h / 2 * shape.InnerRatio * Math.Sin(a));
                 }
+                case ArtHandle.Tail:
+                    return ArtGeometry.TailTip(shape, 1);
                 default:
                 {
-                    var r = Math.Min(shape.CornerRadius, Math.Min(w, h) / 2);
-                    return (r, r);
+                    var (inset, limit) = Corner(shape);
+                    var r = Math.Min(shape.CornerRadius, limit);
+                    return (inset + r, inset + r);
                 }
             }
+        }
+
+        /// <summary>모서리 반경 손잡이의 기준(상자 모서리에서 안쪽으로 얼마 — 화면 테두리는 두께)과 반경 상한(짧은 변의 절반, 화면 테두리는 안쪽 구멍의 짧은 변의 절반).</summary>
+        private static (double Inset, double Limit) Corner(ArtShape shape)
+        {
+            var shorter = Math.Min(shape.Width, shape.Height);
+            if (shape.Kind != ArtKind.ScreenBorder)
+                return (0, shorter / 2);
+            var inset = Math.Min(shape.Thickness, shorter / 2);
+            return (inset, Math.Max(0, shorter - inset * 2) / 2);
         }
 
         /// <summary>손잡이 자리(화면, 프로젝트 픽셀).</summary>
@@ -127,7 +154,8 @@ namespace VideoEditor.Core
         /// <summary>
         /// 손잡이를 from에서 to로(화면, 프로젝트 픽셀) 끌었을 때의 값 — clip은 끌기 시작 때의 값이고 고치지 않는다(새 모양은 사본).
         /// 모서리 반경: 끈 거리를 상자 대각선(안쪽)에 투영한 만큼(0 ~ 짧은 변의 절반). 선 끝: 그 끝만 옮기고 반대쪽 끝은 그대로 — 너비(길이)·회전·가운데가 함께 바뀐다(크기 배율은 그대로).
-        /// 별 안쪽: 끈 점을 안쪽 꼭짓점 방향에 투영한 비율(0.1~0.95). 누른 자리와 손잡이가 조금 달라도 튀지 않게 끈 만큼만 옮긴다.
+        /// 별 안쪽: 끈 점을 안쪽 꼭짓점 방향에 투영한 비율(0.1~0.95). 꼬리: 꼬리 끝을 끈 만큼(상자 크기의 ±4배까지).
+        /// 누른 자리와 손잡이가 조금 달라도 튀지 않게 끈 만큼만 옮긴다.
         /// </summary>
         public static (double X, double Y, double Rotation, ArtShape Art) Drag(Project project, Clip clip, ArtHandle handle,
             (double X, double Y) from, (double X, double Y) to)
@@ -174,9 +202,16 @@ namespace VideoEditor.Core
                     shape.InnerRatio = Math.Max(0.1, Math.Min(0.95, u * Math.Cos(angle) + v * Math.Sin(angle)));
                     return (clip.X, clip.Y, rotation, shape);
                 }
+                case ArtHandle.Tail:
+                {
+                    var tip = ArtGeometry.TailTip(shape, 1);
+                    shape.TailX = Math.Max(-ArtShape.MaxTail, Math.Min(ArtShape.MaxTail, (tip.X + dx - w / 2) / w));
+                    shape.TailY = Math.Max(-ArtShape.MaxTail, Math.Min(ArtShape.MaxTail, (tip.Y + dy - h / 2) / h));
+                    return (clip.X, clip.Y, rotation, shape);
+                }
                 default:
                 {
-                    var limit = Math.Min(w, h) / 2;
+                    var limit = Corner(shape).Limit;
                     var radius = Math.Min(shape.CornerRadius, limit);
                     shape.CornerRadius = Math.Max(0, Math.Min(limit, radius + (dx + dy) / 2));
                     return (clip.X, clip.Y, rotation, shape);

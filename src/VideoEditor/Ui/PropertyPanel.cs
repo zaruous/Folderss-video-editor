@@ -137,8 +137,9 @@ namespace VideoEditor.Ui
             {
                 if (clip.Kind == ClipKind.Art)
                 {
-                    tabs.Items.Add(new TabItem { Header = "모양", Content = ShapeTab(id, clip.Art?.Kind ?? ArtKind.Rectangle) });
-                    var styleTab = new TabItem { Header = "꾸미기", Content = StyleTab(id, true) };
+                    var artKind = clip.Art?.Kind ?? ArtKind.Rectangle;
+                    tabs.Items.Add(new TabItem { Header = "모양", Content = ShapeTab(id, artKind) });
+                    var styleTab = new TabItem { Header = "꾸미기", Content = StyleTab(id, true, ArtShape.HoldsText(artKind)) };
                     AutomationProperties.SetAutomationId(styleTab, "StyleTab");
                     tabs.Items.Add(styleTab);
                 }
@@ -782,8 +783,9 @@ namespace VideoEditor.Ui
         /// 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도), 윤곽선 묶음(켜기·색·두께·이음), 그림자 묶음(켜기·색·거리·방향·흐림·불투명도),
         /// 광선 묶음(켜기·색·크기·불투명도), 반사 묶음(켜기·크기·간격·불투명도), 맨 끝에 휘기 묶음(종류·정도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
+        /// 아트 요소(art)는 글꼴·휘기 묶음을 숨기고, 글을 넣는 모양(artText — 말풍선 등)은 글꼴 묶음만 보인다(안의 글에 씀).
         /// </summary>
-        private UIElement StyleTab(string id, bool art = false)
+        private UIElement StyleTab(string id, bool art = false, bool artText = false)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             panel.Children.Add(Section("스타일 모음"));
@@ -791,7 +793,7 @@ namespace VideoEditor.Ui
             var sample = art ? ArtShape.StyleSample() : null;
             panel.Children.Add(PresetGallery(id, sample));
             panel.Children.Add(MyStyles(id, sample));
-            // 아트 요소는 글꼴·휘기 묶음을 숨긴다(모양에는 쓰지 않음 — 스타일은 글자와 같은 것을 쓴다)
+            // 아트 요소는 글꼴·휘기 묶음을 숨긴다(모양에는 쓰지 않음 — 스타일은 글자와 같은 것을 쓴다). 말풍선 등은 글꼴 묶음을 안의 글에 쓴다
             var fontFrom = panel.Children.Count;
             var warning = UiKit.Label("이 PC에 없는 글꼴이라 맑은 고딕으로 그립니다.", true);
             warning.TextWrapping = TextWrapping.Wrap;
@@ -888,8 +890,8 @@ namespace VideoEditor.Ui
                         while (fill.Colors.Count <= index)
                             fill.Colors.Add(fill.Colors.LastOrDefault() ?? "#FFFFFF");
                         fill.Colors[index] = hex;
-                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
-                        if (index == 0)
+                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게) — 아트 요소의 글자 색(말풍선 안 글)은 따로
+                        if (index == 0 && c.Kind != ClipKind.Art)
                             c.TextColor = hex;
                     }, null));
                 colorRows.Add(row);
@@ -1133,7 +1135,7 @@ namespace VideoEditor.Ui
                 {
                     var family = c.Style?.FontFamily ?? TextStyle.DefaultFont;
                     fonts.SelectedItem = StyledTextRasterizer.Fonts.FirstOrDefault(f => f.Names.Contains(family, StringComparer.OrdinalIgnoreCase));
-                    warning.Visibility = art || StyledTextRasterizer.IsInstalled(family) ? Visibility.Collapsed : Visibility.Visible;
+                    warning.Visibility = art && !artText || StyledTextRasterizer.IsInstalled(family) ? Visibility.Collapsed : Visibility.Visible;
                     bold.IsChecked = c.Style?.Bold == true;
                     italic.IsChecked = c.Style?.Italic == true;
                     align.SelectedIndex = (int)(c.Style?.Align ?? TextAlign.Center);
@@ -1187,7 +1189,7 @@ namespace VideoEditor.Ui
             {
                 for (var i = fontFrom; i < panel.Children.Count; i++)
                 {
-                    if (i < fontTo || i >= warpFrom)
+                    if (i < fontTo && !artText || i >= warpFrom)
                         panel.Children[i].Visibility = Visibility.Collapsed;
                 }
             }
@@ -1195,28 +1197,41 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
-        /// [모양] 아트 요소의 상자(너비·높이)와 종류별 값 — 사각형: 모서리 반경, 다각형·별: 변·뿔 수, 별: 안쪽 비율, 선·화살표: 두께·점선, 화살표: 머리 크기.
-        /// 길이는 프로젝트 픽셀(크기 배율 전). 미리 보기 틀의 노란 점(모양 손잡이)으로도 바꾼다 — 모서리 반경, 선·화살표 양 끝, 별 안쪽.
+        /// [모양] 아트 요소의 값 — 글을 넣는 모양(말풍선·아래 자막 띠·배경 판)은 맨 위에 글·글자 크기·글자 색, 그다음 상자(너비·높이)와 종류별 값:
+        /// 모서리 반경(사각형·각진 말풍선·테두리 상자·배경 판, 화면 테두리는 안쪽 모서리), 변·뿔 수, 별 안쪽·집중선의 빈 가운데, 두께, 점선, 화살표 머리, 말풍선 꼬리 끝.
+        /// 길이는 프로젝트 픽셀(크기 배율 전). 미리 보기 틀의 노란 점(모양 손잡이)으로도 바꾼다 — 모서리 반경, 선·화살표 양 끝, 별 안쪽, 말풍선 꼬리.
         /// </summary>
         private UIElement ShapeTab(string id, ArtKind kind)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             ArtShape Shape(Clip c) => c.Art ??= ArtShape.Default(kind);
             var line = kind == ArtKind.Line || kind == ArtKind.Arrow;
+            if (ArtShape.HoldsText(kind))
+            {
+                // 안의 글: 모양과 같은 그림에 그린다(꼬리·크기를 바꾸면 따라간다). 글꼴은 [꾸미기]의 글꼴 묶음
+                panel.Children.Add(ContentBox(id, "ArtText", "요소 안 글"));
+                panel.Children.Add(NumberRow("글자 크기", "ArtFontSize", 8, 400, "px", id, c => c.FontSize, (c, v) => c.FontSize = Math.Max(4, Math.Min(1000, v))));
+                var textColor = UiKit.ColorRow("글자 색", "ArtTextColor", () => _session.Project.FindClip(id)?.TextColor ?? "#FFFFFF", hex => Edit(id, c => c.TextColor = hex, null));
+                _refreshers.Add(textColor.Refresh);
+                panel.Children.Add(textColor);
+            }
             panel.Children.Add(NumberRow("너비", "ArtWidth", 1, 4000, "px", id, c => c.Art?.Width ?? 400, (c, v) => Shape(c).Width = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
             panel.Children.Add(NumberRow("높이", "ArtHeight", 1, 4000, "px", id, c => c.Art?.Height ?? 300, (c, v) => Shape(c).Height = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
-            if (kind == ArtKind.Rectangle)
-                panel.Children.Add(NumberRow("모서리", "ArtCornerRadius", 0, 1000, "px", id, c => c.Art?.CornerRadius ?? 0, (c, v) => Shape(c).CornerRadius = Math.Max(0, v)));
+            if (ArtShape.UsesCornerRadius(kind))
+                panel.Children.Add(NumberRow(kind == ArtKind.ScreenBorder ? "안쪽 모서리" : "모서리", "ArtCornerRadius", 0, 1000, "px", id, c => c.Art?.CornerRadius ?? 0, (c, v) => Shape(c).CornerRadius = Math.Max(0, v)));
             if (kind == ArtKind.Polygon || kind == ArtKind.Star)
                 panel.Children.Add(NumberRow(kind == ArtKind.Star ? "뿔 수" : "변 수", "ArtSides", 3, 12, "", id, c => c.Art?.Sides ?? 5,
                     (c, v) => Shape(c).Sides = (int)Math.Round(Math.Max(3, Math.Min(12, v)))));
-            if (kind == ArtKind.Star)
-                panel.Children.Add(NumberRow("안쪽", "ArtInnerRatio", 10, 95, "%", id, c => (c.Art?.InnerRatio ?? 0.5) * 100,
+            if (kind == ArtKind.Star || kind == ArtKind.FocusLines)
+                panel.Children.Add(NumberRow(kind == ArtKind.Star ? "안쪽" : "빈 가운데", "ArtInnerRatio", 10, 95, "%", id, c => (c.Art?.InnerRatio ?? 0.5) * 100,
                     (c, v) => Shape(c).InnerRatio = Math.Max(0.1, Math.Min(0.95, v / 100))));
-            if (line)
+            if (ArtShape.UsesThickness(kind))
             {
                 panel.Children.Add(NumberRow("두께", "ArtThickness", 1, 200, "px", id, c => c.Art?.Thickness ?? 12,
                     (c, v) => Shape(c).Thickness = Math.Max(1, Math.Min(ArtShape.MaxThickness, v))));
+            }
+            if (line)
+            {
                 var dashed = new CheckBox { Content = "점선" };
                 AutomationProperties.SetAutomationId(dashed, "ArtDashed");
                 dashed.Click += (s, e) => Edit(id, c => Shape(c).Dashed = dashed.IsChecked == true, null);
@@ -1225,9 +1240,26 @@ namespace VideoEditor.Ui
             }
             if (kind == ArtKind.Arrow)
                 panel.Children.Add(NumberRow("머리", "ArtHeadSize", 1.5, 10, "×", id, c => c.Art?.HeadSize ?? 3, (c, v) => Shape(c).HeadSize = Math.Max(1.5, Math.Min(10, v))));
-            var hint = UiKit.Label(line ? "선·화살표는 상자 가운데 높이에서 왼쪽 끝 → 오른쪽 끝으로 긋습니다. 미리 보기에서 양 끝의 노란 점을 끌면 길이·방향이 바뀌고 반대쪽 끝은 그대로입니다([화면] 탭의 회전으로도)."
-                : kind == ArtKind.Rectangle || kind == ArtKind.Star ? "미리 보기 틀의 노란 점을 끌어 " + (kind == ArtKind.Star ? "안쪽 비율" : "모서리 반경") + "을 바꿀 수도 있습니다. 색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다."
-                : "색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.", true);
+            if (ArtShape.IsBubble(kind))
+            {
+                // 꼬리 끝: 상자 가운데에서 상자 너비·높이의 %(상자를 키우면 꼬리도 따라 커진다)
+                panel.Children.Add(NumberRow("꼬리 X", "ArtTailX", -400, 400, "%", id, c => (c.Art?.TailX ?? 0) * 100,
+                    (c, v) => Shape(c).TailX = Math.Max(-ArtShape.MaxTail, Math.Min(ArtShape.MaxTail, v / 100))));
+                panel.Children.Add(NumberRow("꼬리 Y", "ArtTailY", -400, 400, "%", id, c => (c.Art?.TailY ?? 0) * 100,
+                    (c, v) => Shape(c).TailY = Math.Max(-ArtShape.MaxTail, Math.Min(ArtShape.MaxTail, v / 100))));
+            }
+            string text;
+            if (line)
+                text = "선·화살표는 상자 가운데 높이에서 왼쪽 끝 → 오른쪽 끝으로 긋습니다. 미리 보기에서 양 끝의 노란 점을 끌면 길이·방향이 바뀌고 반대쪽 끝은 그대로입니다([화면] 탭의 회전으로도).";
+            else if (ArtShape.IsBubble(kind))
+                text = "미리 보기에서 꼬리 끝의 노란 점을 끌어 꼬리를 옮깁니다. 글은 말풍선 안에서 줄을 나눠 가운데에 놓입니다(글꼴은 [꾸미기]).";
+            else if (ArtShape.HoldsText(kind))
+                text = "글은 띠·판 안에서 줄을 나눠 놓입니다(글꼴·정렬은 [꾸미기]). 색·윤곽선·그림자도 [꾸미기]에서 고칩니다.";
+            else if (ArtHandles.For(kind).Count > 0)
+                text = "미리 보기 틀의 노란 점을 끌어 " + (kind == ArtKind.Star ? "안쪽 비율" : kind == ArtKind.ScreenBorder ? "안쪽 모서리 반경" : "모서리 반경") + "을 바꿀 수도 있습니다. 색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.";
+            else
+                text = "색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.";
+            var hint = UiKit.Label(text, true);
             hint.TextWrapping = TextWrapping.Wrap;
             hint.Margin = new Thickness(0, 4, 0, 4);
             panel.Children.Add(hint);
@@ -1251,8 +1283,9 @@ namespace VideoEditor.Ui
                 button.Click += (s, e) => Edit(id, c =>
                 {
                     c.Style = style.Clone();
-                    // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
-                    c.TextColor = c.Style.Fill.Colors[0];
+                    // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게) — 아트 요소의 글자 색은 따로
+                    if (c.Kind != ClipKind.Art)
+                        c.TextColor = c.Style.Fill.Colors[0];
                 }, null);
                 tiles.Add((frame, style, "StylePreset" + i + "Image"));
                 gallery.Children.Add(button);
@@ -1300,8 +1333,9 @@ namespace VideoEditor.Ui
                     button.Click += (s, e) => Edit(id, c =>
                     {
                         c.Style = style.Clone();
-                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
-                        c.TextColor = c.Style.Fill.Colors[0];
+                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게) — 아트 요소의 글자 색은 따로
+                        if (c.Kind != ClipKind.Art)
+                            c.TextColor = c.Style.Fill.Colors[0];
                     }, null);
                     var index = i;
                     var rename = new MenuItem { Header = new TextBlock { Text = "이름 바꾸기…" } };

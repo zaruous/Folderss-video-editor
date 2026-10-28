@@ -318,9 +318,15 @@ namespace VideoEditor.Ui
 
         // ---------- 요소 ----------
 
+        // [요소] 탭 묶음: 제목과 칸 묶음의 AutomationId(도형은 1단계 그대로 ArtTiles)
+        private static readonly (string Group, string AutomationId)[] ArtGroups =
+        {
+            ("도형", "ArtTiles"), ("말풍선", "ArtTilesBubble"), ("강조", "ArtTilesMark"), ("프레임·배경", "ArtTilesFrame")
+        };
+
         /// <summary>
-        /// [요소] 도형·선·화살표 칸: 두 번 누르면 재생 헤드에, 타임라인으로 끌어 놓으면 그 줄·자리에 넣는다(<see cref="EditorCommands.AddArt"/>).
-        /// 칸의 그림은 모양 윤곽(<see cref="ArtGeometry"/>)을 그대로 그린 것이라 FFmpeg·그리개를 기다리지 않는다.
+        /// [요소] 도형·말풍선·강조·프레임·배경 칸(묶음마다 제목): 두 번 누르면 재생 헤드에, 타임라인으로 끌어 놓으면 그 줄·자리에 넣는다(<see cref="EditorCommands.AddArt"/>).
+        /// 칸의 그림은 모양 윤곽(<see cref="ArtGeometry"/>)을 처음 채우기 색으로 그대로 그린 것이라 FFmpeg·그리개를 기다리지 않는다.
         /// </summary>
         private UIElement ArtTab()
         {
@@ -330,35 +336,60 @@ namespace VideoEditor.Ui
             hint.TextWrapping = TextWrapping.Wrap;
             AutomationProperties.SetAutomationId(hint, "ArtHint");
             panel.Children.Add(hint);
-            var tiles = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-            AutomationProperties.SetAutomationId(tiles, "ArtTiles");
-            foreach (ArtKind kind in Enum.GetValues(typeof(ArtKind)))
-                tiles.Children.Add(ArtTile(kind));
-            panel.Children.Add(tiles);
+            foreach (var (group, automationId) in ArtGroups)
+            {
+                panel.Children.Add(new TextBlock { Text = group, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 4) });
+                var tiles = new WrapPanel();
+                AutomationProperties.SetAutomationId(tiles, automationId);
+                foreach (ArtKind kind in Enum.GetValues(typeof(ArtKind)))
+                {
+                    if (ArtShape.Group(kind) == group)
+                        tiles.Children.Add(ArtTile(kind));
+                }
+                panel.Children.Add(tiles);
+            }
             return new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        }
+
+        /// <summary>
+        /// 칸 그림의 모양: 처음 모양이되 화면 크기 요소(집중선·화면 테두리)는 16:9 작은 상자로, 두께 있는 요소는 칸에서 보일 만큼 굵게(가장 긴 변의 6%).
+        /// </summary>
+        private static ArtShape TileShape(ArtKind kind)
+        {
+            var shape = ArtShape.Default(kind);
+            if (kind == ArtKind.FocusLines || kind == ArtKind.ScreenBorder || kind == ArtKind.LowerThird)
+            {
+                shape.Width = 320;
+                shape.Height = kind == ArtKind.LowerThird ? 60 : 180;
+            }
+            if (ArtShape.UsesThickness(kind) && kind != ArtKind.Line && kind != ArtKind.Arrow)
+                shape.Thickness = Math.Max(shape.Thickness, Math.Max(shape.Width, shape.Height) * 0.06);
+            return shape;
         }
 
         private Button ArtTile(ArtKind kind)
         {
             const double Icon = 44;
             var name = ArtShape.DisplayName(kind);
-            var shape = ArtShape.Default(kind);
+            var shape = TileShape(kind);
             var scale = Icon / Math.Max(shape.Width, shape.Height);
-            var geometry = new GeometryGroup();
-            foreach (var polygon in ArtGeometry.Outline(shape, scale))
+            // 처음 채우기 색 — 흰색처럼 밝은 색(말풍선·화면 테두리)은 어두운 윤곽선을 둘러 밝은 테마에서도 보이게
+            var color = UiKit.ParseColor(TimelineEdits.ArtStyle(kind).Fill.Colors[0], Color.FromRgb(0x3B, 0x82, 0xF6));
+            var light = (0.2126 * color.R + 0.7152 * color.G + 0.0722 * color.B) / 255 > 0.8;
+            var path = new System.Windows.Shapes.Path
             {
-                var figure = new PathFigure { StartPoint = new Point(polygon[0].X, polygon[0].Y), IsClosed = true };
-                figure.Segments.Add(new PolyLineSegment(polygon.Skip(1).Select(p => new Point(p.X, p.Y)), true));
-                geometry.Children.Add(new PathGeometry(new[] { figure }));
-            }
-            var path = new System.Windows.Shapes.Path { Data = geometry, Fill = new SolidColorBrush(Color.FromRgb(0x3B, 0x82, 0xF6)) };
+                Data = StyledTextRasterizer.ArtPath(ArtGeometry.Outline(shape, scale)),
+                Fill = new SolidColorBrush(color),
+                Stroke = light ? new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55)) : null,
+                StrokeThickness = light ? 1 : 0
+            };
             var picture = new Grid { Width = Icon, Height = Icon, Margin = new Thickness(0, 2, 0, 2) };
             path.HorizontalAlignment = HorizontalAlignment.Center;
             path.VerticalAlignment = VerticalAlignment.Center;
             picture.Children.Add(path);
             var content = new StackPanel();
             content.Children.Add(picture);
-            content.Children.Add(new TextBlock { Text = name, HorizontalAlignment = HorizontalAlignment.Center, FontSize = 11 });
+            content.Children.Add(new TextBlock { Text = name, HorizontalAlignment = HorizontalAlignment.Center, FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis });
             var button = new Button { Content = content, Width = 64, Padding = new Thickness(2), Margin = new Thickness(0, 0, 4, 4), ToolTip = name };
             AutomationProperties.SetAutomationId(button, "ArtTile" + kind);
             AutomationProperties.SetName(button, name);

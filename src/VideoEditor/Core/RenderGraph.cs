@@ -542,16 +542,22 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// 아트 요소 요청: 꾸미기 중 모양에 쓰는 것(채우기·윤곽선·그림자·광선·반사)만 남긴다 — 화면에서 숨긴 글꼴·휘기·글자 크기가 달라도 같은 그림이 다른 캐시 파일이 되지 않게.
+        /// 글을 넣는 모양(말풍선·아래 자막 띠·배경 판)에 글이 있으면 글·글자 크기(출력 배율을 곱함)·글자 색·글꼴 값도 넘긴다(같은 그림에 함께 그림).
         /// </summary>
         private static TextImageRequest ArtRequest(Clip clip, TextStyle style, double scale, int canvasWidth, int canvasHeight)
         {
-            var used = ArtShape.UsedStyle(style);
             var art = (clip.Art ?? new ArtShape()).Clone();
             art.Normalize();
+            // 긴 글은 꾸민 글자처럼 상한까지만 그린다
+            var text = ArtShape.HoldsText(art.Kind) && !string.IsNullOrEmpty(clip.Text) ? clip.Text : "";
+            if (text.Length > MaxStyledTextLength)
+                text = text.Substring(0, MaxStyledTextLength);
             return new TextImageRequest
             {
-                Text = "",
-                Style = used,
+                Text = text,
+                Style = ArtShape.UsedStyle(style, text.Length > 0),
+                FontPixelSize = text.Length > 0 ? Math.Max(4, Math.Min(1000, clip.FontSize)) * scale : 0,
+                ArtTextColor = text.Length > 0 ? TextStyle.NormalizeColor(clip.TextColor, "#FFFFFF") : null,
                 EffectScale = scale,
                 CanvasWidth = canvasWidth,
                 CanvasHeight = canvasHeight,
