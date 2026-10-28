@@ -40,8 +40,8 @@ namespace VideoEditor.Ui
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _stylePreviews = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.Ordinal);
         private Task<FfmpegTool> _locating;
         private Task<YtDlpTool> _locatingYtDlp;
-        // 썸네일·파형 FFmpeg를 한꺼번에 수십 개 띄우지 않게
-        private static readonly SemaphoreSlim PictureGate = new SemaphoreSlim(3);
+        // 썸네일·파형 FFmpeg를 한꺼번에 수십 개 띄우지 않게 — 사용자 전환 효과 썸네일은 줄 선 것보다 먼저(급함)
+        private static readonly PriorityGate PictureGate = new PriorityGate(3);
         // 스타일 썸네일은 하나씩 그린다(TextStylePreview)
         private static readonly SemaphoreSlim StylePreviewGate = new SemaphoreSlim(1);
         // 스타일 썸네일 캐시 상한: 스타일 모음 16개 + 내 스타일 50개에 여유
@@ -630,11 +630,13 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// 효과 미리 보기 띠(<see cref="Transitions.PreviewFrames"/>칸). 그리는 방법이 같으면 한 번만 그려 데이터 폴더\cache\transitions에 둔다.
+        /// 사용자 효과는 그리기 줄에서 기본 효과보다 먼저 그린다(기본 효과는 한 번 그리면 캐시에 남지만 새로 넣은 사용자 효과는 처음 그려야 한다 —
+        /// [전환] 탭을 연 뒤 [다시 읽기]로 더한 효과도 이미 줄 선 기본 효과 뒤에서 기다리지 않게).
         /// FFmpeg가 없거나 실패하면 null(다음에 다시 시도).
         /// </summary>
         public Task<BitmapSource> TransitionPreview(TransitionDef def)
         {
-            return CachedStrip(_transitionPreviews, "transitions", Transitions.PreviewKey(def), tool => MediaPictures.TransitionStrip(tool, def, CancellationToken.None));
+            return CachedStrip(_transitionPreviews, "transitions", Transitions.PreviewKey(def), tool => MediaPictures.TransitionStrip(tool, def, CancellationToken.None), !def.BuiltIn);
         }
 
         /// <summary>
@@ -646,8 +648,9 @@ namespace VideoEditor.Ui
             return CachedStrip(_effectPreviews, "video-effects", VideoEffects.PreviewKey(def), tool => MediaPictures.EffectStrip(tool, def, CancellationToken.None));
         }
 
-        /// <summary>미리 보기 띠 캐시: 메모리(key) → 데이터 폴더\cache\folder\key.png → FFmpeg로 그리기(다 쓴 뒤 이름을 바꿔 넣음).</summary>
-        private Task<BitmapSource> CachedStrip(ConcurrentDictionary<string, Task<BitmapSource>> memory, string folder, string key, Func<FfmpegTool, Task<byte[]>> draw)
+        /// <summary>미리 보기 띠 캐시: 메모리(key) → 데이터 폴더\cache\folder\key.png → FFmpeg로 그리기(다 쓴 뒤 이름을 바꿔 넣음). urgent면 그리기 줄의 앞으로.</summary>
+        private Task<BitmapSource> CachedStrip(ConcurrentDictionary<string, Task<BitmapSource>> memory, string folder, string key, Func<FfmpegTool, Task<byte[]>> draw,
+            bool urgent = false)
         {
             var file = Path.Combine(Manager.DataDirectory, "cache", folder, key + ".png");
             var tool = Tool;
@@ -660,7 +663,7 @@ namespace VideoEditor.Ui
                     if (File.Exists(file))
                         return Decode(await File.ReadAllBytesAsync(file).ConfigureAwait(false));
                     byte[] png;
-                    await PictureGate.WaitAsync().ConfigureAwait(false);
+                    await PictureGate.WaitAsync(urgent).ConfigureAwait(false);
                     try
                     {
                         png = await draw(tool).ConfigureAwait(false);
