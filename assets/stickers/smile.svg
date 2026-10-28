@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>웃음</title>
+  <circle cx="64" cy="64" r="58" fill="#FFCC33" stroke="#E0A100" stroke-width="4"/>
+  <ellipse cx="44" cy="52" rx="7" ry="10" fill="#4A2C12"/>
+  <ellipse cx="84" cy="52" rx="7" ry="10" fill="#4A2C12"/>
+  <ellipse cx="30" cy="76" rx="9" ry="5" fill="#FF7A6B" fill-opacity="0.55"/>
+  <ellipse cx="98" cy="76" rx="9" ry="5" fill="#FF7A6B" fill-opacity="0.55"/>
+  <path d="M38 78 Q64 104 90 78" fill="none" stroke="#4A2C12" stroke-width="7" stroke-linecap="round"/>
+</svg>

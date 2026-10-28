@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Automation;
@@ -14,6 +15,7 @@ namespace VideoEditor.Ui
     /// 미리 보기 위의 틀: 고른 동영상·사진·글자 클립 하나가 재생 헤드에 보이면 그 영역(글자는 글자 상자)에 틀과 손잡이를 그린다.
     /// 안쪽을 끌면 옮기고(X·Y, 화면 가운데 가까이 가면 붙음) 모서리를 끌면 가운데를 두고 크기를 바꾼다(크기 %).
     /// 글자는 옆 손잡이가 넷 더 있다: 왼쪽·오른쪽은 상자 너비, 위·아래는 상자 높이 — 반대쪽 옆은 그대로 두고, 두 번 누르면 자동(0)으로.
+    /// 아트 요소는 모양 손잡이(노란 둥근 점 — <see cref="ArtHandles"/>)가 더 있다: 모서리 반경, 선·화살표 양 끝(반대쪽 끝은 그대로), 별 안쪽, 말풍선 꼬리 끝.
     /// 틀 밖에서 보이는 클립을 누르면 그 클립을 고른다(맨 위 것, 빈 곳이면 고르기는 그대로). Esc는 끌기 취소.
     /// 끄는 동안은 틀만 움직이고, 놓을 때 한 번 편집한다(실행 취소 한 번). 미리 보기를 누른 뒤에는 화살표로 1px(Shift 10px)씩 옮긴다.
     /// </summary>
@@ -21,11 +23,15 @@ namespace VideoEditor.Ui
     {
         private const double Handle = 10;
         private const double SnapPixels = 8;
-        // 손잡이 번호: 0~3 모서리(왼쪽 위부터 시계 방향), 4 틀 안, 5~8 옆(위·오른쪽·아래·왼쪽 — 글자만, BoxEdge 순서), -1 밖
+        // 손잡이 번호: 0~3 모서리(왼쪽 위부터 시계 방향), 4 틀 안, 5~8 옆(위·오른쪽·아래·왼쪽 — 글자만, BoxEdge 순서), 9~ 모양 손잡이(아트만), -1 밖
         private const int Inside = 4;
         private const int FirstEdge = 5;
+        private const int FirstShape = 9;
+        // 모양 손잡이가 모서리 손잡이와 겹쳐 보이지 않게 띄우는 거리(화면 픽셀 — 모서리 반경 0일 때 등)
+        private const double ShapeHandleGap = 14;
         // 손잡이가 틀 가운데에서 향하는 방향(회전 전, 도 — 0 = 오른쪽, 시계 방향): 커서 모양을 고를 때
         private static readonly double[] HandleAngles = { 225, 315, 45, 135, 0, 270, 0, 90, 180 };
+        private static readonly Brush ShapeHandleFill = Frozen(Color.FromRgb(0xFF, 0xC1, 0x07));
         private readonly EditorSession _session;
         private readonly EditorCommands _commands;
         private readonly Func<bool> _playing;
@@ -34,9 +40,16 @@ namespace VideoEditor.Ui
         private readonly Rectangle[] _handles = new Rectangle[8];
         private readonly Line _guideX = new Line { StrokeThickness = 1, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
         private readonly Line _guideY = new Line { StrokeThickness = 1, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
+        // 모양 손잡이(아트만 — 종류마다 몇 개, _shapeKinds 순서)
+        private readonly Ellipse[] _shapeHandles = new Ellipse[2];
+        private IReadOnlyList<ArtHandle> _shapeKinds = Array.Empty<ArtHandle>();
         private Clip _clip;
-        // 끄는 중: 0 = 아님, 1 = 옮기기, 2 = 크기, 3 = 상자 옆(_edge)
+        // 끄는 중: 0 = 아님, 1 = 옮기기, 2 = 크기, 3 = 상자 옆(_edge), 4 = 모양 손잡이(_shapeHandle)
         private int _drag;
+        private ArtHandle _shapeHandle;
+        // 아트의 지금 모양·회전(끄는 동안 바뀜)과 끌기 시작 때 값
+        private ArtShape _art, _startArt;
+        private double _rotation, _startRotation;
         private BoxEdge _edge;
         private Point _dragFrom;
         // 누른 뒤 포인터가 실제로 움직였는지
@@ -74,6 +87,13 @@ namespace VideoEditor.Ui
                 _handles[i].SetResourceReference(Shape.StrokeProperty, "AccentBrush");
                 Children.Add(_handles[i]);
             }
+            // 모양 손잡이는 노란 둥근 점(크기 손잡이와 다르게 보이게)
+            for (var i = 0; i < _shapeHandles.Length; i++)
+            {
+                _shapeHandles[i] = new Ellipse { Width = Handle + 1, Height = Handle + 1, Fill = ShapeHandleFill, StrokeThickness = 1.5, IsHitTestVisible = false };
+                _shapeHandles[i].SetResourceReference(Shape.StrokeProperty, "AccentBrush");
+                Children.Add(_shapeHandles[i]);
+            }
             session.Changed += (s, e) => Refresh();
             session.SelectionChanged += (s, e) => Refresh();
             session.PlayheadChanged += (s, e) => Refresh();
@@ -102,6 +122,9 @@ namespace VideoEditor.Ui
             _scale = clip.Scale;
             _boxWidth = clip.TextBoxWidth;
             _boxHeight = clip.TextBoxHeight;
+            _rotation = clip.Rotation;
+            _art = clip.Kind == ClipKind.Art ? (clip.Art ?? new ArtShape()).Clone() : null;
+            _shapeKinds = _art != null ? ArtHandles.For(_art.Kind) : Array.Empty<ArtHandle>();
             Show(true);
             Layout();
             RefreshGroup();
@@ -128,6 +151,8 @@ namespace VideoEditor.Ui
             _frame.Visibility = state;
             for (var i = 0; i < _handles.Length; i++)
                 _handles[i].Visibility = visible && (i < 4 || HasBoxHandles) ? Visibility.Visible : Visibility.Collapsed;
+            for (var i = 0; i < _shapeHandles.Length; i++)
+                _shapeHandles[i].Visibility = visible && i < _shapeKinds.Count ? Visibility.Visible : Visibility.Collapsed;
             if (!visible)
                 _guideX.Visibility = _guideY.Visibility = Visibility.Collapsed;
             Cursor = null;
@@ -151,22 +176,65 @@ namespace VideoEditor.Ui
         /// <summary>지금 값(_x·_y·_scale, 글자는 상자 값도)의 틀: 가운데·크기(화면 픽셀)와 회전.</summary>
         private (Point Center, double Width, double Height, double Rotation) Frame()
         {
-            var probe = _clip.CloneWithNewId();
-            probe.X = _x;
-            probe.Y = _y;
-            probe.Scale = _scale;
+            var probe = Probe();
             var content = ClipLayout.Content(_session.Project, probe);
             if (IsText)
             {
                 var box = TextSize(_clip, _boxWidth, _boxHeight);
                 content = ClipLayout.TextBox(_session.Project, probe, box.Width, box.Height);
             }
-            else if (_clip.Kind == ClipKind.Art && _clip.Art != null)
+            else if (_art != null)
             {
-                content = ClipLayout.TextBox(_session.Project, probe, _clip.Art.Width, _clip.Art.Height);
+                content = ClipLayout.TextBox(_session.Project, probe, _art.Width, _art.Height);
             }
             var (zoom, left, top) = Screen();
             return (new Point(left + content.CenterX * zoom, top + content.CenterY * zoom), content.Width * zoom, content.Height * zoom, content.Rotation);
+        }
+
+        /// <summary>지금 값(끄는 동안의 위치·크기·회전·모양)을 넣은 클립 사본(프로젝트에 없음).</summary>
+        private Clip Probe()
+        {
+            var probe = _clip.CloneWithNewId();
+            probe.X = _x;
+            probe.Y = _y;
+            probe.Scale = _scale;
+            probe.Rotation = _rotation;
+            if (_art != null)
+                probe.Art = _art.Clone();
+            return probe;
+        }
+
+        /// <summary>
+        /// 모양 손잡이 자리(화면 픽셀, _shapeKinds 순서). 모서리 반경 손잡이는 반경이 작아 모서리 손잡이와 겹치면 대각선 안쪽으로 조금 띄워 보인다
+        /// (끌기는 끈 거리만큼 바꾸므로 띄운 만큼 튀지 않는다).
+        /// </summary>
+        private Point[] ShapeHandlePoints()
+        {
+            if (_art == null || _shapeKinds.Count == 0)
+                return new Point[0];
+            var probe = Probe();
+            var project = _session.Project;
+            var (zoom, left, top) = Screen();
+            Point ToScreen((double X, double Y) at) => new Point(left + at.X * zoom, top + at.Y * zoom);
+            var points = new Point[_shapeKinds.Count];
+            for (var i = 0; i < points.Length; i++)
+            {
+                var point = ToScreen(ArtHandles.Position(project, probe, _shapeKinds[i]));
+                if (_shapeKinds[i] == ArtHandle.CornerRadius)
+                {
+                    // 화면 테두리는 안쪽 모서리(테두리 두께만큼 안쪽)에서 띄운다
+                    var inset = _art.Kind == ArtKind.ScreenBorder ? Math.Min(_art.Thickness, Math.Min(_art.Width, _art.Height) / 2) : 0;
+                    var corner = ToScreen(ArtHandles.ToProject(project, probe, inset, inset));
+                    var inward = ToScreen(ArtHandles.ToProject(project, probe, inset + 1, inset + 1)) - corner;
+                    if (inward.Length > 1e-9 && (point - corner).Length < ShapeHandleGap)
+                    {
+                        inward.Normalize();
+                        point = corner + inward * ShapeHandleGap;
+                    }
+                }
+                points[i] = point;
+            }
+            return points;
         }
 
         private Point[] Corners((Point Center, double Width, double Height, double Rotation) frame)
@@ -204,17 +272,38 @@ namespace VideoEditor.Ui
                 SetLeft(_handles[i], points[i].X - Handle / 2);
                 SetTop(_handles[i], points[i].Y - Handle / 2);
             }
+            var shapePoints = ShapeHandlePoints();
+            for (var i = 0; i < shapePoints.Length && i < _shapeHandles.Length; i++)
+            {
+                SetLeft(_shapeHandles[i], shapePoints[i].X - _shapeHandles[i].Width / 2);
+                SetTop(_shapeHandles[i], shapePoints[i].Y - _shapeHandles[i].Height / 2);
+            }
             if (_groupMoving)
                 LayoutGroup();
         }
 
-        /// <summary>점이 무엇 위에 있는지: 0~3 모서리 손잡이, 5~8 옆 손잡이(글자만), 4 틀 안, -1 밖.</summary>
+        /// <summary>점이 무엇 위에 있는지: 0~3 모서리 손잡이, 5~8 옆 손잡이(글자만), 9~ 모양 손잡이(아트만), 4 틀 안, -1 밖.</summary>
         private int Hit(Point point)
         {
             if (_clip == null)
                 return -1;
             var frame = Frame();
             var corners = Corners(frame);
+            // 모양 손잡이가 먼저(납작한 선의 끝점은 모서리 손잡이와 가깝다) — 둥근 점 크기만큼
+            var shapePoints = ShapeHandlePoints();
+            var shapeBest = -1;
+            var shapeNearest = double.MaxValue;
+            for (var i = 0; i < shapePoints.Length; i++)
+            {
+                var distance = (point - shapePoints[i]).Length;
+                if (distance <= Handle / 2 + 2 && distance < shapeNearest)
+                {
+                    shapeBest = FirstShape + i;
+                    shapeNearest = distance;
+                }
+            }
+            if (shapeBest >= 0)
+                return shapeBest;
             // 가장 가까운 손잡이(같으면 모서리). 틀이 작으면 잡는 거리를 줄여 안쪽(옮기기)이 손잡이에 가리지 않게 한다
             var reach = Math.Min(Handle, Math.Max(3, Math.Min(frame.Width, frame.Height) / 3));
             var points = HasBoxHandles ? corners.Concat(Edges(corners)).ToArray() : corners;
@@ -243,6 +332,8 @@ namespace VideoEditor.Ui
                 return Cursors.SizeAll;
             if (hit < 0)
                 return null;
+            if (hit >= FirstShape)
+                return Cursors.Cross;
             var angle = HandleAngles[hit] + (_clip?.Rotation ?? 0);
             var step = (int)Math.Round(((angle % 180) + 180) % 180 / 45) % 4;
             return step == 0 ? Cursors.SizeWE : step == 1 ? Cursors.SizeNWSE : step == 2 ? Cursors.SizeNS : Cursors.SizeNESW;
@@ -308,7 +399,7 @@ namespace VideoEditor.Ui
                     return false;
                 hit = Inside;
             }
-            _drag = hit == Inside ? 1 : hit < 4 ? 2 : 3;
+            _drag = hit == Inside ? 1 : hit < 4 ? 2 : hit >= FirstShape ? 4 : 3;
             _dragFrom = point;
             _pointerMoved = false;
             _startX = _x;
@@ -316,6 +407,10 @@ namespace VideoEditor.Ui
             _startScale = _scale;
             _startBoxWidth = _boxWidth;
             _startBoxHeight = _boxHeight;
+            _startRotation = _rotation;
+            _startArt = _art?.Clone();
+            if (_drag == 4)
+                _shapeHandle = _shapeKinds[hit - FirstShape];
             _startDistance = Math.Max(1, (point - Frame().Center).Length);
             if (_drag == 3)
             {
@@ -366,6 +461,23 @@ namespace VideoEditor.Ui
                 var distance = Math.Max(1, (point - center).Length);
                 _scale = Math.Max(0.05, Math.Min(4, _startScale * distance / _startDistance));
             }
+            else if (_drag == 4)
+            {
+                // 끌기 시작 때의 값에서 끈 만큼(화면 → 프로젝트 픽셀)
+                var start = _clip.CloneWithNewId();
+                start.X = _startX;
+                start.Y = _startY;
+                start.Scale = _startScale;
+                start.Rotation = _startRotation;
+                start.Art = _startArt.Clone();
+                var (_, left, top) = Screen();
+                var dragged = ArtHandles.Drag(_session.Project, start, _shapeHandle,
+                    ((_dragFrom.X - left) / zoom, (_dragFrom.Y - top) / zoom), ((point.X - left) / zoom, (point.Y - top) / zoom));
+                _x = dragged.X;
+                _y = dragged.Y;
+                _rotation = dragged.Rotation;
+                _art = dragged.Art;
+            }
             else
             {
                 // 반대쪽 옆은 그대로: 끈 거리를 클립 축에 투영해 상자 크기와 가운데를 함께 바꾼다
@@ -384,7 +496,25 @@ namespace VideoEditor.Ui
             Cursor = DragCursor(point);
             _commands.Status(_groupMoving ? GroupStatus() : _drag == 1 ? "위치 X " + Math.Round(_x) + " · Y " + Math.Round(_y) + " (놓으면 바뀝니다, Esc는 취소)"
                 : _drag == 2 ? "크기 " + Math.Round(_scale * 100) + "% (놓으면 바뀝니다, Esc는 취소)"
+                : _drag == 4 ? ShapeStatus() + " (놓으면 바뀝니다, Esc는 취소)"
                 : (_edge == BoxEdge.Left || _edge == BoxEdge.Right ? "상자 너비 " + Math.Round(_boxWidth) : "상자 높이 " + Math.Round(_boxHeight)) + "px (놓으면 바뀝니다, Esc는 취소)");
+        }
+
+        /// <summary>모양 손잡이를 끄는 동안 상태 줄 글.</summary>
+        private string ShapeStatus()
+        {
+            switch (_shapeHandle)
+            {
+                case ArtHandle.LineStart:
+                case ArtHandle.LineEnd:
+                    return "길이 " + Math.Round(_art.Width) + "px · 방향 " + Math.Round(_rotation) + "°";
+                case ArtHandle.InnerRatio:
+                    return "안쪽 " + Math.Round(_art.InnerRatio * 100) + "%";
+                case ArtHandle.Tail:
+                    return "꼬리 끝 X " + Math.Round(_art.TailX * _art.Width) + " · Y " + Math.Round(_art.TailY * _art.Height) + "px(상자 가운데에서)";
+                default:
+                    return "모서리 반경 " + Math.Round(_art.CornerRadius) + "px";
+            }
         }
 
         /// <summary>놓음: 바뀌었으면 한 번 편집한다(실행 취소 한 번 — 바뀐 값을 모두 함께). 끄는 중이 아니었으면 false.</summary>
@@ -392,6 +522,8 @@ namespace VideoEditor.Ui
         {
             if (_drag == 0)
                 return false;
+            if (_drag == 4)
+                return ShapeUp();
             // 누르고 움직이지 않았으면 편집하지 않는다(자동 크기가 상한보다 커서 옆 손잡이를 누르기만 해도 값이 바뀌는 경우 등)
             var moved = _pointerMoved && (_x != _startX || _y != _startY || _scale != _startScale || _boxWidth != _startBoxWidth || _boxHeight != _startBoxHeight);
             var horizontal = _drag == 3 && (_edge == BoxEdge.Left || _edge == BoxEdge.Right);
@@ -418,6 +550,48 @@ namespace VideoEditor.Ui
                         c.TextBoxHeight = ClipLayout.TextBoxLength(Math.Round(boxHeight));
                 }, null);
             }
+            return true;
+        }
+
+        /// <summary>
+        /// 모양 손잡이를 놓음: 바뀐 값(위치·회전·모양)을 한 번에 편집한다(실행 취소 한 번). 위치는 정수로 반올림하지 않는다 —
+        /// 선 끝을 끌 때 반대쪽 끝이 반올림만큼 밀리지 않게(소수 둘째 자리까지).
+        /// </summary>
+        private bool ShapeUp()
+        {
+            var handle = _shapeHandle;
+            var (id, x, y, rotation, art) = (_clip.Id, _x, _y, _rotation, _art?.Clone());
+            var moved = _pointerMoved && art != null && _startArt != null
+                && (x != _startX || y != _startY || rotation != _startRotation || art.Width != _startArt.Width || art.CornerRadius != _startArt.CornerRadius
+                    || art.InnerRatio != _startArt.InnerRatio || art.TailX != _startArt.TailX || art.TailY != _startArt.TailY);
+            EndDrag();
+            if (!moved)
+                return true;
+            _commands.EditClip(id, (p, c) =>
+            {
+                if (c.Art == null)
+                    return;
+                c.X = Math.Round(x, 2);
+                c.Y = Math.Round(y, 2);
+                c.Rotation = Math.Round(rotation, 2);
+                switch (handle)
+                {
+                    case ArtHandle.LineStart:
+                    case ArtHandle.LineEnd:
+                        c.Art.Width = Math.Round(art.Width, 2);
+                        break;
+                    case ArtHandle.InnerRatio:
+                        c.Art.InnerRatio = Math.Round(art.InnerRatio, 3);
+                        break;
+                    case ArtHandle.Tail:
+                        c.Art.TailX = Math.Round(art.TailX, 4);
+                        c.Art.TailY = Math.Round(art.TailY, 4);
+                        break;
+                    default:
+                        c.Art.CornerRadius = Math.Round(art.CornerRadius);
+                        break;
+                }
+            }, null);
             return true;
         }
 
@@ -483,6 +657,12 @@ namespace VideoEditor.Ui
             return !HasBoxHandles ? new Point[0] : Edges(Corners(Frame()));
         }
 
+        /// <summary>모양 손잡이 자리(화면 픽셀)와 종류 이름(<see cref="ArtHandle"/>) — 시험용.</summary>
+        internal (Point[] Points, string[] Kinds) ShapePoints()
+        {
+            return _clip == null ? (new Point[0], new string[0]) : (ShapeHandlePoints(), _shapeKinds.Select(k => k.ToString()).ToArray());
+        }
+
         /// <summary>프로젝트 픽셀 → 이 틀(화면) 픽셀 — 시험용.</summary>
         internal Point ToScreen(double x, double y)
         {
@@ -494,8 +674,9 @@ namespace VideoEditor.Ui
         {
             if (e.Key == Key.Escape && _drag != 0)
             {
+                var shape = _drag == 4;
                 Cancel();
-                _commands.Status("옮기기·크기 바꾸기를 취소했습니다.");
+                _commands.Status(shape ? "모양 바꾸기를 취소했습니다." : "옮기기·크기 바꾸기를 취소했습니다.");
                 e.Handled = true;
             }
         }
@@ -515,6 +696,8 @@ namespace VideoEditor.Ui
             _scale = _startScale;
             _boxWidth = _startBoxWidth;
             _boxHeight = _startBoxHeight;
+            _rotation = _startRotation;
+            _art = _startArt?.Clone() ?? _art;
             EndDrag();
         }
 
@@ -528,6 +711,13 @@ namespace VideoEditor.Ui
             if (IsMouseCaptured)
                 ReleaseMouseCapture();
             Refresh();
+        }
+
+        private static Brush Frozen(Color color)
+        {
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            return brush;
         }
 
         /// <summary>가운데에 붙었을 때 세로(가로 가운데)·가로(세로 가운데) 안내선.</summary>

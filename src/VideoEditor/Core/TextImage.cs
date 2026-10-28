@@ -54,6 +54,8 @@ namespace VideoEditor.Core
         /// PNG 가운데 = 모양 상자 가운데. 글자 요청은 null(키가 예전과 같아 이미 그린 글자 PNG를 그대로 쓴다).
         /// </summary>
         public ArtShape Art { get; set; }
+        /// <summary>아트 요소 안 글(말풍선 등 — <see cref="ArtGeometry.TextArea"/>)의 글자 색("#RRGGBB"·"#AARRGGBB"). 글이 없으면 null.</summary>
+        public string ArtTextColor { get; set; }
 
         /// <summary>
         /// 캐시 키: 픽셀에 영향을 주는 값을 정해진 순서의 JSON으로 적고 SHA-256(소문자 16진 64자)으로.
@@ -116,6 +118,17 @@ namespace VideoEditor.Core
                 Number(json, "art.thickness", art.Thickness);
                 Flag(json, "art.dashed", art.Dashed);
                 Number(json, "art.headSize", art.HeadSize);
+                // 2단계에서 더한 값은 쓰는 모양에만 적는다 — 1단계 모양의 키(이미 그린 PNG)는 그대로
+                if (ArtShape.IsBubble(art.Kind))
+                {
+                    Number(json, "art.tailX", art.TailX);
+                    Number(json, "art.tailY", art.TailY);
+                }
+                if (ArtTextColor != null)
+                    Quoted(json, "art.textColor", ArtTextColor);
+                // 스티커는 그림 글의 해시(이름은 그림에 영향이 없다)
+                if (art.Kind == ArtKind.Sticker)
+                    Quoted(json, "art.sticker", StickerSvg.Hash(art.StickerSvg ?? ""));
             }
             json.Length--;
             json.Append('}');

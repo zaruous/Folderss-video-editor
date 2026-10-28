@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>해</title>
+  <g fill="#FFB300">
+  <rect x="60" y="2" width="8" height="22" rx="4" transform="rotate(0 64 64)"/>
+  <rect x="60" y="2" width="8" height="22" rx="4" transform="rotate(45 64 64)"/>
+  <rect x="60" y="2" width="8" height="22" rx="4" transform="rotate(90 64 64)"/>
+  <rect x="60" y="2" width="8" height="22" rx="4" transform="rotate(135 64 64)"/>
+  <rect x="60" y="2" width="8" height="22" rx="4" transform="rotate(180 64 64)"/>
+  <rect x="60" y="2" width="8" height="22" rx="4" transform="rotate(225 64 64)"/>
+  <rect x="60" y="2" width="8" height="22" rx="4" transform="rotate(270 64 64)"/>
+  <rect x="60" y="2" width="8" height="22" rx="4" transform="rotate(315 64 64)"/>
+  </g>
+  <circle cx="64" cy="64" r="32" fill="#FFCA28" stroke="#FF8F00" stroke-width="4"/>
+</svg>

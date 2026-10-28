@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>반함</title>
+  <circle cx="64" cy="64" r="58" fill="#FFCC33" stroke="#E0A100" stroke-width="4"/>
+  <path d="M44 65.3 C27.9 54.8 31.4 40.1 44 47.1 C56.6 40.1 60.1 54.8 44 65.3 Z" fill="#E53935"/>
+  <path d="M84 65.3 C67.9 54.8 71.4 40.1 84 47.1 C96.6 40.1 100.1 54.8 84 65.3 Z" fill="#E53935"/>
+  <path d="M38 80 Q64 106 90 80" fill="none" stroke="#4A2C12" stroke-width="7" stroke-linecap="round"/>
+</svg>

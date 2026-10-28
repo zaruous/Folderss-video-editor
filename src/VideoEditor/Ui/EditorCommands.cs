@@ -1240,6 +1240,70 @@ namespace VideoEditor.Ui
                 _session.Select(new[] { Project.FindClip(id) });
         }
 
+        /// <summary>
+        /// 스티커를 넣는다(요소 탭에서 두 번 누르기·끌어 놓기 — 아트 요소와 같은 자리 규칙). SVG 스티커는 깨끗한 SVG를 품은 아트 요소 클립(프로젝트를 옮겨도 그대로 그림),
+        /// 그림(PNG) 스티커는 프로젝트의 미디어 폴더(URL 받기와 같은 곳)에 복사해 사진 클립으로(맞춤, 원래 픽셀 크기쯤). 실행 취소 한 번에 사라진다.
+        /// </summary>
+        public void AddSticker(string key, string trackId = null, long frame = -1)
+        {
+            var item = _services.FindSticker(key);
+            if (item == null)
+            {
+                Status("스티커를 찾지 못했습니다(지웠을 수 있습니다).");
+                return;
+            }
+            if (item.IsPicture)
+            {
+                _ = AddPictureSticker(item, trackId, frame);
+                return;
+            }
+            var start = frame >= 0 ? frame : _session.Playhead;
+            string id = null;
+            if (Run(p =>
+                {
+                    var clip = TimelineEdits.CreateSticker(item.Name, item.Sticker, start, p.Rate.ToFrames(_services.ImageSeconds));
+                    id = clip.Id;
+                    TimelineEdits.AddOverlay(p, clip, trackId == null ? null : p.FindTrack(trackId));
+                }, item.Name + " 스티커를 넣었습니다."))
+                _session.Select(new[] { Project.FindClip(id) });
+        }
+
+        private async Task AddPictureSticker(StickerItem item, string trackId, long frame)
+        {
+            var tool = await NeedTool();
+            if (tool == null)
+                return;
+            var start = frame >= 0 ? frame : _session.Playhead;
+            MediaInfo info;
+            try
+            {
+                // 같은 파일 이름 = 같은 그림(이름에 해시)이라 이미 복사했으면 그것을 쓴다
+                var folder = _services.MediaDownloadFolder(_session.FilePath);
+                Directory.CreateDirectory(folder);
+                var target = Path.Combine(folder, Path.GetFileName(item.Path));
+                if (!File.Exists(target))
+                    File.Copy(item.Path, target);
+                info = Project.FindMedia(target) ?? await MediaProbe.Probe(tool, target, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                Status("스티커 그림을 가져오지 못했습니다: " + ex.Message);
+                return;
+            }
+            string id = null;
+            if (Run(p =>
+                {
+                    if (p.FindMedia(info.Path) == null)
+                        p.Media.Add(info);
+                    var clip = TimelineEdits.CreateClip(info, p.Rate, start, p.Rate.ToFrames(_services.ImageSeconds));
+                    clip.Fit = ClipFit.Fit;
+                    clip.Scale = TimelineEdits.PictureStickerScale(info.Width, info.Height, p.Width, p.Height);
+                    id = clip.Id;
+                    TimelineEdits.AddOverlay(p, clip, trackId == null ? null : p.FindTrack(trackId));
+                }, item.Name + " 스티커를 넣었습니다(그림은 " + Path.GetFileName(info.Path) + "로 복사)."))
+                _session.Select(new[] { Project.FindClip(id) });
+        }
+
         // ---------- 마커·In/Out ----------
 
         public void AddMarker()

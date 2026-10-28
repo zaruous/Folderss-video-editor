@@ -36,6 +36,7 @@
     네이티브 DLL은 Windows x64 것만 .deps.json이 가리키는 runtimes\win-x64\native\ 그대로 넣는다(ONNX Runtime 약 12MB, zip에서 약 4.7MB —
     다른 플랫폼 것은 넣지 않는다). ONNX Runtime의 MIT 라이선스·제3자 고지는 licenses\에.
     미리 보기 도우미(VideoEditor.Helper.exe와 그 DLL·FFmpeg.AutoGen)는 helper\에 넣는다(FFmpeg DLL은 넣지 않는다 — 사용자의 FFmpeg shared 빌드를 쓴다).
+    기본 스티커 모음(assets\stickers의 SVG와 출처·라이선스 목록 LICENSES.md — 직접 그린 것, MIT)은 stickers\에 넣는다.
   -->
   <Target Name="PackPlugin" AfterTargets="Build">
     <PropertyGroup>
@@ -49,14 +50,17 @@
       <PluginNative Include="@(ReferenceCopyLocalPaths)" Condition="'%(Extension)' == '.dll' AND '%(ReferenceCopyLocalPaths.AssetType)' == 'native' AND '%(ReferenceCopyLocalPaths.RuntimeIdentifier)' == 'win-x64'" />
       <PluginLicense Include="$(OnnxRuntimePackage)LICENSE;$(OnnxRuntimePackage)ThirdPartyNotices.txt" />
       <HelperFile Include="$(HelperOutput)**\*" Exclude="$(HelperOutput)**\*.pdb;$(HelperOutput)**\*.xml" />
+      <StickerFile Include="$(MSBuildThisFileDirectory)..\..\assets\stickers\*.svg;$(MSBuildThisFileDirectory)..\..\assets\stickers\LICENSES.md" />
     </ItemGroup>
     <Error Condition="'@(PluginNative)' == ''" Text="zip에 넣을 ONNX Runtime 네이티브 DLL(runtimes\win-x64\native)을 찾지 못했습니다." />
     <Error Condition="!Exists('$(HelperOutput)VideoEditor.Helper.exe')" Text="zip에 넣을 미리 보기 도우미(VideoEditor.Helper.exe)를 찾지 못했습니다: $(HelperOutput)" />
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\assets\stickers\LICENSES.md')" Text="zip에 넣을 스티커 출처·라이선스 목록(assets\stickers\LICENSES.md)을 찾지 못했습니다." />
     <RemoveDir Directories="$(PluginStage)" />
     <Copy SourceFiles="plugin.json;$(TargetPath);$(ProjectDepsFilePath);@(PluginDependency)" DestinationFolder="$(PluginStage)" />
     <Copy SourceFiles="@(PluginNative)" DestinationFolder="$(PluginStage)runtimes\win-x64\native\" />
     <Copy SourceFiles="@(PluginLicense)" DestinationFiles="@(PluginLicense->'$(PluginStage)licenses\onnxruntime-%(Filename)%(Extension)')" Condition="Exists('$(OnnxRuntimePackage)LICENSE')" />
     <Copy SourceFiles="@(HelperFile)" DestinationFiles="@(HelperFile->'$(PluginStage)helper\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Copy SourceFiles="@(StickerFile)" DestinationFolder="$(PluginStage)stickers\" />
     <Copy SourceFiles="$(AutoGenPackage)LICENSE.txt" DestinationFiles="$(PluginStage)licenses\ffmpeg-autogen-LICENSE.txt" Condition="Exists('$(AutoGenPackage)LICENSE.txt')" />
     <ZipDirectory SourceDirectory="$(PluginStage)" DestinationFile="$(OutDir)$(AssemblyName).zip" Overwrite="true" />
     <Message Importance="high" Text="Folderss 플러그인: $(OutDir)$(AssemblyName).zip" />

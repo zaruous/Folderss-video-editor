@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>하트</title>
+  <path d="M64 114 C24 86 8 62 10 42 C12 22 30 10 48 14 C56 16 61 22 64 30 C67 22 72 16 80 14 C98 10 116 22 118 42 C120 62 104 86 64 114 Z" fill="#E53935" stroke="#B71C1C" stroke-width="4" stroke-linejoin="round"/>
+  <ellipse cx="34" cy="40" rx="12" ry="7" fill="#FFFFFF" fill-opacity="0.5" transform="rotate(-40 34 40)"/>
+</svg>

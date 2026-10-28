@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>활짝 웃음</title>
+  <circle cx="64" cy="64" r="58" fill="#FFCC33" stroke="#E0A100" stroke-width="4"/>
+  <path d="M32 54 Q44 40 56 54" fill="none" stroke="#4A2C12" stroke-width="6" stroke-linecap="round"/>
+  <path d="M72 54 Q84 40 96 54" fill="none" stroke="#4A2C12" stroke-width="6" stroke-linecap="round"/>
+  <path d="M32 70 H96 Q96 108 64 108 Q32 108 32 70 Z" fill="#7A1F1F"/>
+  <path d="M32 70 H96 Q95 78 92 82 H36 Q33 78 32 70 Z" fill="#FFFFFF"/>
+  <path d="M46 98 Q64 84 82 98 Q76 108 64 108 Q52 108 46 98 Z" fill="#FF6B6B"/>
+</svg>

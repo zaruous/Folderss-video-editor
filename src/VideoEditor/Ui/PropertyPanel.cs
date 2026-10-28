@@ -137,8 +137,9 @@ namespace VideoEditor.Ui
             {
                 if (clip.Kind == ClipKind.Art)
                 {
-                    tabs.Items.Add(new TabItem { Header = "모양", Content = ShapeTab(id, clip.Art?.Kind ?? ArtKind.Rectangle) });
-                    var styleTab = new TabItem { Header = "꾸미기", Content = StyleTab(id, true) };
+                    var artKind = clip.Art?.Kind ?? ArtKind.Rectangle;
+                    tabs.Items.Add(new TabItem { Header = "모양", Content = ShapeTab(id, artKind) });
+                    var styleTab = new TabItem { Header = "꾸미기", Content = StyleTab(id, true, ArtShape.HoldsText(artKind), artKind == ArtKind.Sticker) };
                     AutomationProperties.SetAutomationId(styleTab, "StyleTab");
                     tabs.Items.Add(styleTab);
                 }
@@ -804,16 +805,20 @@ namespace VideoEditor.Ui
         /// 채우기 묶음(단색·선형·원형 그라데이션·없음, 색 1~4, 각도), 윤곽선 묶음(켜기·색·두께·이음), 그림자 묶음(켜기·색·거리·방향·흐림·불투명도),
         /// 광선 묶음(켜기·색·크기·불투명도), 반사 묶음(켜기·크기·간격·불투명도), 맨 끝에 휘기 묶음(종류·정도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
+        /// 아트 요소(art)는 글꼴·휘기 묶음을 숨기고, 글을 넣는 모양(artText — 말풍선 등)은 글꼴 묶음만 보인다(안의 글에 씀).
+        /// 스티커(sticker)는 채우기 묶음도 숨긴다(그린 색 그대로 — 윤곽선·그림자·광선·반사만 스티커 둘레에).
         /// </summary>
-        private UIElement StyleTab(string id, bool art = false)
+        private UIElement StyleTab(string id, bool art = false, bool artText = false, bool sticker = false)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             if (!art)
                 panel.Children.Add(LongTextNotice(id, "StyleLongTextNotice"));
             panel.Children.Add(Section("스타일 모음"));
-            panel.Children.Add(PresetGallery(id));
-            panel.Children.Add(MyStyles(id));
-            // 아트 요소는 글꼴·휘기 묶음을 숨긴다(모양에는 쓰지 않음 — 스타일은 글자와 같은 것을 쓴다)
+            // 아트 요소는 썸네일을 글자 대신 도형 견본(둥근 사각형)으로 — 모양에 쓰는 꾸미기만 보인다
+            var sample = art ? ArtShape.StyleSample() : null;
+            panel.Children.Add(PresetGallery(id, sample));
+            panel.Children.Add(MyStyles(id, sample));
+            // 아트 요소는 글꼴·휘기 묶음을 숨긴다(모양에는 쓰지 않음 — 스타일은 글자와 같은 것을 쓴다). 말풍선 등은 글꼴 묶음을 안의 글에 쓴다
             var fontFrom = panel.Children.Count;
             var warning = UiKit.Label("이 PC에 없는 글꼴이라 맑은 고딕으로 그립니다.", true);
             warning.TextWrapping = TextWrapping.Wrap;
@@ -910,8 +915,8 @@ namespace VideoEditor.Ui
                         while (fill.Colors.Count <= index)
                             fill.Colors.Add(fill.Colors.LastOrDefault() ?? "#FFFFFF");
                         fill.Colors[index] = hex;
-                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
-                        if (index == 0)
+                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게) — 아트 요소의 글자 색(말풍선 안 글)은 따로
+                        if (index == 0 && c.Kind != ClipKind.Art)
                             c.TextColor = hex;
                     }, null));
                 colorRows.Add(row);
@@ -967,6 +972,7 @@ namespace VideoEditor.Ui
                 }
             });
 
+            var fillTo = panel.Children.Count;
             // 윤곽선: 켜기 · 색 · 두께(0~50px) · 이음(둥글게·각지게·깎아서) — 색·두께·이음은 켰을 때만 고친다
             panel.Children.Add(Section("윤곽선"));
             var outlineOn = new CheckBox { Content = "윤곽선 그리기", VerticalAlignment = VerticalAlignment.Center };
@@ -1155,7 +1161,7 @@ namespace VideoEditor.Ui
                 {
                     var family = c.Style?.FontFamily ?? TextStyle.DefaultFont;
                     fonts.SelectedItem = StyledTextRasterizer.Fonts.FirstOrDefault(f => f.Names.Contains(family, StringComparer.OrdinalIgnoreCase));
-                    warning.Visibility = art || StyledTextRasterizer.IsInstalled(family) ? Visibility.Collapsed : Visibility.Visible;
+                    warning.Visibility = art && !artText || StyledTextRasterizer.IsInstalled(family) ? Visibility.Collapsed : Visibility.Visible;
                     bold.IsChecked = c.Style?.Bold == true;
                     italic.IsChecked = c.Style?.Italic == true;
                     align.SelectedIndex = (int)(c.Style?.Align ?? TextAlign.Center);
@@ -1209,36 +1215,59 @@ namespace VideoEditor.Ui
             {
                 for (var i = fontFrom; i < panel.Children.Count; i++)
                 {
-                    if (i < fontTo || i >= warpFrom)
+                    if (i < fontTo && !artText || i >= warpFrom || sticker && i >= fontTo && i < fillTo)
                         panel.Children[i].Visibility = Visibility.Collapsed;
                 }
+            }
+            if (sticker)
+            {
+                var note = UiKit.Label("스티커는 그린 색 그대로 그립니다. 윤곽선·그림자·광선·반사는 스티커 둘레에 그립니다(흰 윤곽선이면 오려 붙인 스티커처럼).", true);
+                note.TextWrapping = TextWrapping.Wrap;
+                note.Margin = new Thickness(0, 4, 0, 4);
+                AutomationProperties.SetAutomationId(note, "StyleStickerNote");
+                panel.Children.Insert(fontFrom, note);
             }
             return panel;
         }
 
         /// <summary>
-        /// [모양] 아트 요소의 상자(너비·높이)와 종류별 값 — 사각형: 모서리 반경, 다각형·별: 변·뿔 수, 별: 안쪽 비율, 선·화살표: 두께·점선, 화살표: 머리 크기.
-        /// 길이는 프로젝트 픽셀(크기 배율 전). 모양 손잡이(미리 보기에서 끌기)는 다음 단계.
+        /// [모양] 아트 요소의 값 — 글을 넣는 모양(말풍선·아래 자막 띠·배경 판)은 맨 위에 글·글자 크기·글자 색, 그다음 상자(너비·높이)와 종류별 값:
+        /// 모서리 반경(사각형·각진 말풍선·테두리 상자·배경 판, 화면 테두리는 안쪽 모서리), 변·뿔 수, 별 안쪽·집중선의 빈 가운데, 두께, 점선, 화살표 머리, 말풍선 꼬리 끝.
+        /// 길이는 프로젝트 픽셀(크기 배율 전). 미리 보기 틀의 노란 점(모양 손잡이)으로도 바꾼다 — 모서리 반경, 선·화살표 양 끝, 별 안쪽, 말풍선 꼬리.
         /// </summary>
         private UIElement ShapeTab(string id, ArtKind kind)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             ArtShape Shape(Clip c) => c.Art ??= ArtShape.Default(kind);
             var line = kind == ArtKind.Line || kind == ArtKind.Arrow;
+            if (kind == ArtKind.Sticker)
+                return StickerRows(id, panel, Shape);
+            if (ArtShape.HoldsText(kind))
+            {
+                // 안의 글: 모양과 같은 그림에 그린다(꼬리·크기를 바꾸면 따라간다). 글꼴은 [꾸미기]의 글꼴 묶음
+                panel.Children.Add(ContentBox(id, "ArtText", "요소 안 글"));
+                panel.Children.Add(NumberRow("글자 크기", "ArtFontSize", 8, 400, "px", id, c => c.FontSize, (c, v) => c.FontSize = Math.Max(4, Math.Min(1000, v))));
+                var textColor = UiKit.ColorRow("글자 색", "ArtTextColor", () => _session.Project.FindClip(id)?.TextColor ?? "#FFFFFF", hex => Edit(id, c => c.TextColor = hex, null));
+                _refreshers.Add(textColor.Refresh);
+                panel.Children.Add(textColor);
+            }
             panel.Children.Add(NumberRow("너비", "ArtWidth", 1, 4000, "px", id, c => c.Art?.Width ?? 400, (c, v) => Shape(c).Width = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
             panel.Children.Add(NumberRow("높이", "ArtHeight", 1, 4000, "px", id, c => c.Art?.Height ?? 300, (c, v) => Shape(c).Height = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
-            if (kind == ArtKind.Rectangle)
-                panel.Children.Add(NumberRow("모서리", "ArtCornerRadius", 0, 1000, "px", id, c => c.Art?.CornerRadius ?? 0, (c, v) => Shape(c).CornerRadius = Math.Max(0, v)));
+            if (ArtShape.UsesCornerRadius(kind))
+                panel.Children.Add(NumberRow(kind == ArtKind.ScreenBorder ? "안쪽 모서리" : "모서리", "ArtCornerRadius", 0, 1000, "px", id, c => c.Art?.CornerRadius ?? 0, (c, v) => Shape(c).CornerRadius = Math.Max(0, v)));
             if (kind == ArtKind.Polygon || kind == ArtKind.Star)
                 panel.Children.Add(NumberRow(kind == ArtKind.Star ? "뿔 수" : "변 수", "ArtSides", 3, 12, "", id, c => c.Art?.Sides ?? 5,
                     (c, v) => Shape(c).Sides = (int)Math.Round(Math.Max(3, Math.Min(12, v)))));
-            if (kind == ArtKind.Star)
-                panel.Children.Add(NumberRow("안쪽", "ArtInnerRatio", 10, 95, "%", id, c => (c.Art?.InnerRatio ?? 0.5) * 100,
+            if (kind == ArtKind.Star || kind == ArtKind.FocusLines)
+                panel.Children.Add(NumberRow(kind == ArtKind.Star ? "안쪽" : "빈 가운데", "ArtInnerRatio", 10, 95, "%", id, c => (c.Art?.InnerRatio ?? 0.5) * 100,
                     (c, v) => Shape(c).InnerRatio = Math.Max(0.1, Math.Min(0.95, v / 100))));
-            if (line)
+            if (ArtShape.UsesThickness(kind))
             {
                 panel.Children.Add(NumberRow("두께", "ArtThickness", 1, 200, "px", id, c => c.Art?.Thickness ?? 12,
                     (c, v) => Shape(c).Thickness = Math.Max(1, Math.Min(ArtShape.MaxThickness, v))));
+            }
+            if (line)
+            {
                 var dashed = new CheckBox { Content = "점선" };
                 AutomationProperties.SetAutomationId(dashed, "ArtDashed");
                 dashed.Click += (s, e) => Edit(id, c => Shape(c).Dashed = dashed.IsChecked == true, null);
@@ -1247,7 +1276,62 @@ namespace VideoEditor.Ui
             }
             if (kind == ArtKind.Arrow)
                 panel.Children.Add(NumberRow("머리", "ArtHeadSize", 1.5, 10, "×", id, c => c.Art?.HeadSize ?? 3, (c, v) => Shape(c).HeadSize = Math.Max(1.5, Math.Min(10, v))));
-            var hint = UiKit.Label(line ? "선·화살표는 상자 가운데 높이에서 왼쪽 끝 → 오른쪽 끝으로 긋습니다. 방향은 [화면] 탭의 회전으로 바꿉니다." : "색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.", true);
+            if (ArtShape.IsBubble(kind))
+            {
+                // 꼬리 끝: 상자 가운데에서 상자 너비·높이의 %(상자를 키우면 꼬리도 따라 커진다)
+                panel.Children.Add(NumberRow("꼬리 X", "ArtTailX", -400, 400, "%", id, c => (c.Art?.TailX ?? 0) * 100,
+                    (c, v) => Shape(c).TailX = Math.Max(-ArtShape.MaxTail, Math.Min(ArtShape.MaxTail, v / 100))));
+                panel.Children.Add(NumberRow("꼬리 Y", "ArtTailY", -400, 400, "%", id, c => (c.Art?.TailY ?? 0) * 100,
+                    (c, v) => Shape(c).TailY = Math.Max(-ArtShape.MaxTail, Math.Min(ArtShape.MaxTail, v / 100))));
+            }
+            string text;
+            if (line)
+                text = "선·화살표는 상자 가운데 높이에서 왼쪽 끝 → 오른쪽 끝으로 긋습니다. 미리 보기에서 양 끝의 노란 점을 끌면 길이·방향이 바뀌고 반대쪽 끝은 그대로입니다([화면] 탭의 회전으로도).";
+            else if (ArtShape.IsBubble(kind))
+                text = "미리 보기에서 꼬리 끝의 노란 점을 끌어 꼬리를 옮깁니다. 글은 말풍선 안에서 줄을 나눠 가운데에 놓입니다(글꼴은 [꾸미기]).";
+            else if (ArtShape.HoldsText(kind))
+                text = "글은 띠·판 안에서 줄을 나눠 놓입니다(글꼴·정렬은 [꾸미기]). 색·윤곽선·그림자도 [꾸미기]에서 고칩니다.";
+            else if (ArtHandles.For(kind).Count > 0)
+                text = "미리 보기 틀의 노란 점을 끌어 " + (kind == ArtKind.Star ? "안쪽 비율" : kind == ArtKind.ScreenBorder ? "안쪽 모서리 반경" : "모서리 반경") + "을 바꿀 수도 있습니다. 색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.";
+            else
+                text = "색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.";
+            var hint = UiKit.Label(text, true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Margin = new Thickness(0, 4, 0, 4);
+            panel.Children.Add(hint);
+            return panel;
+        }
+
+        /// <summary>
+        /// [모양] 스티커: 이름(그림을 읽지 못했으면 알림), 너비·높이(늘이기 — 크기 %는 [화면] 탭), [원래 비율로](높이를 SVG 비율에 맞춤 — 실행 취소 한 단계).
+        /// </summary>
+        private UIElement StickerRows(string id, StackPanel panel, Func<Clip, ArtShape> shape)
+        {
+            var name = UiKit.Label("", true);
+            name.TextWrapping = TextWrapping.Wrap;
+            name.Margin = new Thickness(0, 2, 0, 6);
+            AutomationProperties.SetAutomationId(name, "ArtStickerName");
+            panel.Children.Add(name);
+            _refreshers.Add(() =>
+            {
+                var art = _session.Project.FindClip(id)?.Art;
+                if (art == null)
+                    return;
+                name.Text = StickerSvg.Cached(art.StickerSvg) != null
+                    ? "스티커: " + art.Label
+                    : "스티커: " + art.Label + " — 그림을 읽지 못해 그리지 않습니다(프로젝트 파일이 깨졌을 수 있습니다).";
+            });
+            panel.Children.Add(NumberRow("너비", "ArtWidth", 1, 4000, "px", id, c => c.Art?.Width ?? 300, (c, v) => shape(c).Width = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
+            panel.Children.Add(NumberRow("높이", "ArtHeight", 1, 4000, "px", id, c => c.Art?.Height ?? 300, (c, v) => shape(c).Height = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
+            var aspect = UiKit.TextButton("원래 비율로", "ArtStickerAspect", () => Edit(id, c =>
+            {
+                var sticker = StickerSvg.Cached(c.Art?.StickerSvg);
+                if (sticker != null && sticker.Width > 0)
+                    shape(c).Height = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, Math.Round(shape(c).Width * sticker.Height / sticker.Width, 2)));
+            }, null));
+            aspect.HorizontalAlignment = HorizontalAlignment.Left;
+            panel.Children.Add(aspect);
+            var hint = UiKit.Label("스티커는 벡터라 크게 키워도 그 크기로 다시 그립니다. 너비·높이를 따로 바꾸면 늘어납니다 — 비율을 지켜 키우려면 [화면] 탭의 크기나 미리 보기 모서리를 끄세요.", true);
             hint.TextWrapping = TextWrapping.Wrap;
             hint.Margin = new Thickness(0, 4, 0, 4);
             panel.Children.Add(hint);
@@ -1256,9 +1340,9 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// 스타일 모음: 미리 만든 스타일 단추(<see cref="TextStylePresets"/>). 누르면 글자 내용·크기는 그대로 두고 스타일을 통째로 바꾼다(실행 취소 한 단계).
-        /// 단추 그림은 그리개로 그린 썸네일 — 탭이 처음 보일 때 배경에서 그리고, 다 그리기 전이나 실패하면 이름 글자만 보인다.
+        /// 단추 그림은 그리개로 그린 썸네일 — 탭이 처음 보일 때 배경에서 그리고, 다 그리기 전이나 실패하면 이름 글자만 보인다. sample이 있으면(아트 요소) 그 도형 견본으로 그린다.
         /// </summary>
-        private UIElement PresetGallery(string id)
+        private UIElement PresetGallery(string id, ArtShape sample)
         {
             var gallery = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
             AutomationProperties.SetAutomationId(gallery, "StylePresets");
@@ -1271,8 +1355,9 @@ namespace VideoEditor.Ui
                 button.Click += (s, e) => Edit(id, c =>
                 {
                     c.Style = style.Clone();
-                    // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
-                    c.TextColor = c.Style.Fill.Colors[0];
+                    // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게) — 아트 요소의 글자 색은 따로
+                    if (c.Kind != ClipKind.Art)
+                        c.TextColor = c.Style.Fill.Colors[0];
                 }, null);
                 tiles.Add((frame, style, "StylePreset" + i + "Image"));
                 gallery.Children.Add(button);
@@ -1285,7 +1370,7 @@ namespace VideoEditor.Ui
                     return;
                 requested = true;
                 foreach (var tile in tiles)
-                    StyleTiles.ShowThumbnail(_services, tile.Frame, tile.Style, tile.ImageId);
+                    StyleTiles.ShowThumbnail(_services, tile.Frame, tile.Style, tile.ImageId, sample);
             };
             return gallery;
         }
@@ -1295,7 +1380,7 @@ namespace VideoEditor.Ui
         /// 누르면 스타일 모음처럼 글자 내용·크기는 그대로 두고 스타일을 통째로 바꾼다(실행 취소 한 단계). 오른쪽 클릭 [지우기]로 지운다 —
         /// 저장·지우기는 프로젝트가 아닌 플러그인 설정이라 실행 취소에 남지 않는다. 탭이 보일 때마다, 그리고 어느 편집 창에서든 내 스타일이 바뀌면 곧바로 설정을 다시 읽는다.
         /// </summary>
-        private UIElement MyStyles(string id)
+        private UIElement MyStyles(string id, ArtShape sample)
         {
             var box = new StackPanel();
             box.Children.Add(Section("내 스타일"));
@@ -1320,8 +1405,9 @@ namespace VideoEditor.Ui
                     button.Click += (s, e) => Edit(id, c =>
                     {
                         c.Style = style.Clone();
-                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게)
-                        c.TextColor = c.Style.Fill.Colors[0];
+                        // 색 1은 [글자] 탭의 글자 색과 같은 값(두 탭이 어긋나지 않게) — 아트 요소의 글자 색은 따로
+                        if (c.Kind != ClipKind.Art)
+                            c.TextColor = c.Style.Fill.Colors[0];
                     }, null);
                     var index = i;
                     var rename = new MenuItem { Header = new TextBlock { Text = "이름 바꾸기…" } };
@@ -1345,7 +1431,7 @@ namespace VideoEditor.Ui
                     button.ContextMenu.Items.Add(remove);
                     row.Children.Add(button);
                     if (shown)
-                        StyleTiles.ShowThumbnail(_services, frame, style, "StyleMine" + i + "Image");
+                        StyleTiles.ShowThumbnail(_services, frame, style, "StyleMine" + i + "Image", sample);
                 }
                 row.Visibility = styles.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
                 hint.Visibility = styles.Count > 0 ? Visibility.Collapsed : Visibility.Visible;

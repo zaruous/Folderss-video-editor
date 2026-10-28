@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>눈물</title>
+  <circle cx="64" cy="64" r="58" fill="#FFCC33" stroke="#E0A100" stroke-width="4"/>
+  <path d="M32 44 Q42 50 54 46" fill="none" stroke="#4A2C12" stroke-width="5" stroke-linecap="round"/>
+  <path d="M74 46 Q86 50 96 44" fill="none" stroke="#4A2C12" stroke-width="5" stroke-linecap="round"/>
+  <path d="M36 56 Q44 64 52 56" fill="none" stroke="#4A2C12" stroke-width="6" stroke-linecap="round"/>
+  <path d="M76 56 Q84 64 92 56" fill="none" stroke="#4A2C12" stroke-width="6" stroke-linecap="round"/>
+  <path d="M42 92 Q64 76 86 92" fill="none" stroke="#4A2C12" stroke-width="7" stroke-linecap="round"/>
+  <path d="M40 64 Q30 82 34 90 A8 8 0 0 0 48 88 Q50 80 40 64 Z" fill="#4FC3F7" stroke="#0288D1" stroke-width="2"/>
+  <path d="M90 64 Q80 82 84 90 A8 8 0 0 0 98 88 Q100 80 90 64 Z" fill="#4FC3F7" stroke="#0288D1" stroke-width="2"/>
+</svg>
