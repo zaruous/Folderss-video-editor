@@ -133,7 +133,8 @@ namespace VideoEditor.Core
                 // 같은 트랙은 늦게 시작한 것이 위
                 foreach (var clip in track.Clips.Where(c => c.IsVisual && c.Contains(frame)).OrderByDescending(c => c.Start))
                 {
-                    if (Contains(Area(project, clip, textBox), x, y))
+                    // 키프레임이 있으면 그 시각의 자리·크기·회전으로
+                    if (Contains(Area(project, ClipKeyframes.Pose(clip, frame - clip.Start), textBox), x, y))
                         return clip;
                 }
             }

@@ -186,6 +186,29 @@ namespace VideoEditor.Tests
             Assert.NotNull(clip.Keyframes);
         }
 
+        [Fact]
+        public void PreviewPick_And_GroupMove_UseTheValueAtThePlayhead()
+        {
+            // 640×360 화면에 200×80 글자 상자: 0장 X −200 → 20장 X 200
+            var project = TestProjects.Empty(magnetic: false);
+            var title = TimelineEdits.CreateText("제목", 0, 60);
+            TimelineEdits.Place(project, project.MainTrack, title, 0);
+            title.Keyframes = new List<ClipKeyframe> { Key(KeyframeProperty.Position, 0, -200, 0), Key(KeyframeProperty.Position, 20, 200, 0) };
+            (double, double) Box(Clip c) => (200, 80);
+            Assert.Same(title, ClipLayout.HitTest(project, 0, 120, 180, Box));
+            Assert.Null(ClipLayout.HitTest(project, 0, 520, 180, Box));
+            Assert.Same(title, ClipLayout.HitTest(project, 25, 520, 180, Box));
+            // 붙을 선도 그 시각의 자리
+            Assert.Contains(420.0, PreviewSnap.Targets(project, 20, null, Box).X);
+
+            // 함께 옮기기: 재생 헤드(10장)의 키프레임을 만들고, 재생 헤드가 없으면 위치 키프레임을 모두 옮긴다
+            PreviewSelection.Move(project, new[] { title }, 15, -4, 10);
+            Assert.Equal((15.0, -4.0), (ClipKeyframes.Find(title, KeyframeProperty.Position, 10).Value, ClipKeyframes.Find(title, KeyframeProperty.Position, 10).Y));
+            Assert.Equal((0.0, 0.0), (title.X, title.Y));
+            PreviewSelection.Move(project, new[] { title }, 1, 2);
+            Assert.Equal(new[] { (-199.0, 2.0), (16.0, -2.0), (201.0, 2.0) }, ClipKeyframes.Track(title, KeyframeProperty.Position).Select(k => (k.Value, k.Y)));
+        }
+
         // ---------- 저장·나누기 ----------
 
         [Fact]

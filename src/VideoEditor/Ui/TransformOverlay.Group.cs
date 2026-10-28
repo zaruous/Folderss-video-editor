@@ -75,7 +75,7 @@ namespace VideoEditor.Ui
         private (Point Center, double Width, double Height, double Rotation) GroupFrame(Clip clip, double dx, double dy)
         {
             var project = _session.Project;
-            var probe = clip.CloneWithNewId();
+            var probe = Pose(clip).CloneWithNewId();
             probe.X += dx;
             probe.Y += dy;
             var content = ClipLayout.Content(project, probe);
@@ -104,9 +104,11 @@ namespace VideoEditor.Ui
             if (picked == null || !_group.Any(c => c.Id == picked.Id))
                 return false;
             _clip = picked;
-            _x = picked.X;
-            _y = picked.Y;
-            _scale = picked.Scale;
+            var pose = Pose(picked);
+            _x = pose.X;
+            _y = pose.Y;
+            _scale = pose.Scale;
+            _rotation = pose.Rotation;
             _boxWidth = picked.TextBoxWidth;
             _boxHeight = picked.TextBoxHeight;
             _groupMoving = true;
@@ -124,11 +126,13 @@ namespace VideoEditor.Ui
             _groupMoving = false;
             var ids = _group.Select(c => c.Id).ToList();
             var (dx, dy) = (Math.Round(_x - _startX), Math.Round(_y - _startY));
+            // 위치 키프레임이 있는 클립은 재생 헤드 시각의 키프레임을 고친다
+            var playhead = _session.Playhead;
             if (!moved || dx == 0 && dy == 0)
                 return () => { };
             return () =>
             {
-                if (_commands.EditClips(ids, (p, clips) => PreviewSelection.Move(p, clips, dx, dy), null))
+                if (_commands.EditClips(ids, (p, clips) => PreviewSelection.Move(p, clips, dx, dy, playhead), null))
                     _commands.Status(ids.Count + "개 클립을 함께 옮겼습니다(가로 " + Signed(dx) + " · 세로 " + Signed(dy) + "px).");
             };
         }
@@ -172,7 +176,7 @@ namespace VideoEditor.Ui
             var step = large ? 10 : 1;
             if (!repeat || _nudgeKey == null)
                 _nudgeKey = "nudge:group:" + ++_nudges;
-            if (_commands.EditClips(ids, (p, clips) => PreviewSelection.Move(p, clips, dx * step, dy * step), _nudgeKey))
+            if (_commands.EditClips(ids, (p, clips) => PreviewSelection.Move(p, clips, dx * step, dy * step, _session.Playhead), _nudgeKey))
                 _commands.Status(ids.Count + "개 클립을 함께 옮겼습니다(화살표 1px, Shift+화살표 10px).");
             return true;
         }
@@ -202,7 +206,7 @@ namespace VideoEditor.Ui
         /// </summary>
         private Cursor DragCursor(Point point)
         {
-            var rotation = _clip != null && double.IsFinite(_clip.Rotation) ? _clip.Rotation : 0;
+            var rotation = _clip != null && double.IsFinite(_rotation) ? _rotation : 0;
             switch (_drag)
             {
                 case 1:

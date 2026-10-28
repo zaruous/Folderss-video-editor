@@ -128,7 +128,7 @@ namespace VideoEditor.Ui
             EndDrag();
             if (!moved)
                 return true;
-            _commands.EditClip(id, (p, c) => c.Rotation = rotation, null);
+            _commands.EditClip(id, (p, c) => SetValue(c, KeyframeProperty.Rotation, rotation, true), null);
             _commands.Status("회전 " + UiKit.Number(rotation) + "°");
             return true;
         }

@@ -120,12 +120,14 @@ namespace VideoEditor.Ui
                 return;
             }
             _clip = clip;
-            _x = clip.X;
-            _y = clip.Y;
-            _scale = clip.Scale;
+            // 키프레임이 있으면 재생 헤드 시각의 값(TransformOverlay.Keyframes.cs)
+            var pose = Pose(clip);
+            _x = pose.X;
+            _y = pose.Y;
+            _scale = pose.Scale;
             _boxWidth = clip.TextBoxWidth;
             _boxHeight = clip.TextBoxHeight;
-            _rotation = clip.Rotation;
+            _rotation = pose.Rotation;
             _art = clip.Kind == ClipKind.Art ? (clip.Art ?? new ArtShape()).Clone() : null;
             _shapeKinds = _art != null ? ArtHandles.For(_art.Kind) : Array.Empty<ArtHandle>();
             Show(true);
@@ -343,7 +345,7 @@ namespace VideoEditor.Ui
                 return Cursors.Hand;
             if (hit >= FirstShape)
                 return Cursors.Cross;
-            var angle = HandleAngles[hit] + (_clip?.Rotation ?? 0);
+            var angle = HandleAngles[hit] + _rotation;
             var step = (int)Math.Round(((angle % 180) + 180) % 180 / 45) % 4;
             return step == 0 ? Cursors.SizeWE : step == 1 ? Cursors.SizeNWSE : step == 2 ? Cursors.SizeNS : Cursors.SizeNESW;
         }
@@ -496,7 +498,7 @@ namespace VideoEditor.Ui
             {
                 // 반대쪽 옆은 그대로: 끈 거리를 클립 축에 투영해 상자 크기와 가운데를 함께 바꾼다
                 var min = ClipLayout.MinTextBox(_clip);
-                var moved = ClipLayout.DragEdge(_edge, _startX, _startY, _startMeasuredWidth, _startMeasuredHeight, _scale, _clip.Rotation,
+                var moved = ClipLayout.DragEdge(_edge, _startX, _startY, _startMeasuredWidth, _startMeasuredHeight, _scale, _rotation,
                     (point.X - _dragFrom.X) / zoom, (point.Y - _dragFrom.Y) / zoom, min.Width, min.Height);
                 _x = moved.X;
                 _y = moved.Y;
@@ -555,11 +557,12 @@ namespace VideoEditor.Ui
             }
             else if (moved)
             {
+                var (startX, startY, startScale) = (_startX, _startY, _startScale);
                 _commands.EditClip(id, (p, c) =>
                 {
-                    c.X = Math.Round(x);
-                    c.Y = Math.Round(y);
-                    c.Scale = Math.Round(scale, 3);
+                    // 키프레임이 있는 값은 재생 헤드 시각의 키프레임을 고치거나 만든다 — 바꾼 값만(TransformOverlay.Keyframes.cs)
+                    SetPosition(c, Math.Round(x), Math.Round(y), x != startX || y != startY);
+                    SetValue(c, KeyframeProperty.Scale, Math.Round(scale, 3), scale != startScale);
                     // 끈 방향의 상자 크기만(끈 쪽은 적어도 1px이라 반올림해도 자동(0)이 되지 않는다)
                     if (horizontal)
                         c.TextBoxWidth = ClipLayout.TextBoxLength(Math.Round(boxWidth));
@@ -578,6 +581,7 @@ namespace VideoEditor.Ui
         {
             var handle = _shapeHandle;
             var (id, x, y, rotation, art) = (_clip.Id, _x, _y, _rotation, _art?.Clone());
+            var (startX, startY, startRotation) = (_startX, _startY, _startRotation);
             var moved = _pointerMoved && art != null && _startArt != null
                 && (x != _startX || y != _startY || rotation != _startRotation || art.Width != _startArt.Width || art.CornerRadius != _startArt.CornerRadius
                     || art.InnerRatio != _startArt.InnerRatio || art.TailX != _startArt.TailX || art.TailY != _startArt.TailY);
@@ -588,9 +592,8 @@ namespace VideoEditor.Ui
             {
                 if (c.Art == null)
                     return;
-                c.X = Math.Round(x, 2);
-                c.Y = Math.Round(y, 2);
-                c.Rotation = Math.Round(rotation, 2);
+                SetPosition(c, Math.Round(x, 2), Math.Round(y, 2), x != startX || y != startY);
+                SetValue(c, KeyframeProperty.Rotation, Math.Round(rotation, 2), rotation != startRotation);
                 switch (handle)
                 {
                     case ArtHandle.LineStart:
@@ -653,12 +656,12 @@ namespace VideoEditor.Ui
                 _nudgeKey = "nudge:" + id + ":" + ++_nudges;
             _commands.EditClip(id, (p, c) =>
             {
-                c.X = Math.Round(c.X) + dx * step;
-                c.Y = Math.Round(c.Y) + dy * step;
+                var at = Pose(c);
+                SetPosition(c, Math.Round(at.X) + dx * step, Math.Round(at.Y) + dy * step, true);
             }, _nudgeKey);
             var clip = _session.Project.FindClip(id);
             if (clip != null)
-                _commands.Status("위치 X " + Math.Round(clip.X) + " · Y " + Math.Round(clip.Y) + " (화살표 1px, Shift+화살표 10px)");
+                _commands.Status("위치 X " + Math.Round(Pose(clip).X) + " · Y " + Math.Round(Pose(clip).Y) + " (화살표 1px, Shift+화살표 10px)");
             return true;
         }
 

@@ -29,7 +29,7 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// 붙을 선: 화면 가장자리·가운데, 그리고 frame에 보이는 다른 화면 클립(동영상 트랙, 숨김·자막 트랙 제외 — 잠긴 트랙은 보이므로 넣음)의 상자 가장자리·가운데.
-        /// moving(옮기는 클립 — 여럿이면 모두)은 뺀다.
+        /// moving(옮기는 클립 — 여럿이면 모두)은 빼고, 클립 값은 그 시각의 값(키프레임 — <see cref="ClipKeyframes.Pose"/>)으로.
         /// </summary>
         public static Lines Targets(Project project, long frame, IEnumerable<string> moving, Func<Clip, (double Width, double Height)> textBox)
         {
@@ -41,7 +41,7 @@ namespace VideoEditor.Core
             {
                 foreach (var clip in track.Clips.Where(c => c.IsVisual && c.Contains(frame) && !skip.Contains(c.Id)))
                 {
-                    var area = ClipLayout.Area(project, clip, textBox);
+                    var area = ClipLayout.Area(project, ClipKeyframes.Pose(clip, frame - clip.Start), textBox);
                     var (halfWidth, halfHeight) = HalfExtents(area.Width, area.Height, area.Rotation);
                     if (!double.IsFinite(area.CenterX) || !double.IsFinite(area.CenterY) || !double.IsFinite(halfWidth) || !double.IsFinite(halfHeight))
                         continue;
