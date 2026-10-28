@@ -123,6 +123,22 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
+        public void ChooseBuild_WithMajor_PicksThatMajorOnly_NoMaster()
+        {
+            // 미리 보기 도우미의 DLL 이름(avcodec-63 등)은 주 버전에 묶여 있다 — 더 새 판(n10)이 나와도 n9의 가장 높은 것을 고르고, master는 고르지 않는다
+            const string json = @"{""assets"":[
+                {""name"":""checksums.sha256"",""browser_download_url"":""https://github.com/x/checksums.sha256"",""size"":1},
+                {""name"":""ffmpeg-master-latest-win64-gpl-shared.zip"",""browser_download_url"":""https://github.com/x/m.zip"",""size"":9},
+                {""name"":""ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip"",""browser_download_url"":""https://github.com/x/90.zip"",""size"":90},
+                {""name"":""ffmpeg-n9.1-latest-win64-gpl-shared-9.1.zip"",""browser_download_url"":""https://github.com/x/91.zip"",""size"":91},
+                {""name"":""ffmpeg-n10.0-latest-win64-gpl-shared-10.0.zip"",""browser_download_url"":""https://github.com/x/100.zip"",""size"":100},
+                {""name"":""ffmpeg-n9.1-latest-win64-gpl-9.1.zip"",""browser_download_url"":""https://github.com/x/s91.zip"",""size"":5}]}";
+            Assert.Equal("ffmpeg-n10.0-latest-win64-gpl-shared-10.0.zip", FfmpegText.ChooseBuild(json).Name);
+            Assert.Equal("ffmpeg-n9.1-latest-win64-gpl-shared-9.1.zip", FfmpegText.ChooseBuild(json, 9).Name);
+            Assert.Null(FfmpegText.ChooseBuild(json, 11));
+        }
+
+        [Fact]
         public void FindChecksum()
         {
             var text = "2516ae4aa3a7f4c8143d8e3d7254ec8ebc3657a476d89840039face9c8d0bf44  ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip\n"

@@ -52,6 +52,7 @@
 `FOLDERSS_VE_FFMPEG_SEARCH=off` 환경 변수를 주면 설정한 폴더와 내려받은 폴더만 봅니다(설치본이 여럿일 때 하나로 고정).
 
 **미리 보기 도우미**: FFmpeg 폴더에 공유 DLL(`avcodec-63.dll` 등 — 내려받아 설치한 shared 빌드에 들어 있음)이 있으면, 편집기를 여는 동안 작은 도우미 프로세스(`helper\VideoEditor.Helper.exe`, [FFmpeg.AutoGen](https://github.com/Ruslan-B/FFmpeg.AutoGen) MIT)를 하나 띄워 두고 재생 헤드 이동·재생·효과 미리 보기·스냅샷을 그 안에서 그립니다. 프로세스 시작이 느린 PC에서 매번 `ffmpeg.exe`를 띄우던 1~2초 지연이 없어집니다. 도우미가 없거나(ffmpeg.exe만 있는 빌드) 실패하면 예전처럼 `ffmpeg.exe`로 그리고, 가져오기·내보내기는 늘 `ffmpeg.exe`를 씁니다. 상태 줄의 FFmpeg 단추에 "· 도우미"가 붙으면 쓰는 중입니다.
+설치된 FFmpeg 9에 공유 DLL이 없으면(winget `Gyan.FFmpeg` full_build 등) 편집기를 열 때 한 번 알리고, FFmpeg 단추 창의 **[미리 보기용 DLL 받기]**로 같은 주 버전의 BtbN 공유 빌드(약 85MB)를 받아 체크섬을 확인한 뒤 도우미가 쓸 DLL 6개만 플러그인 데이터 폴더(`ffmpeg-preview\bin`)에 둡니다. 설치된 FFmpeg는 그대로 가져오기·내보내기에 씁니다. 알림은 같은 창에서 끌 수 있습니다.
 
 ### URL·유튜브에서 가져오기 (yt-dlp)
 

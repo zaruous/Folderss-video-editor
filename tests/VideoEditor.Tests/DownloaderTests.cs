@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -112,6 +113,45 @@ namespace VideoEditor.Tests
         {
             var zip = MakeZip(("x/bin/readme.txt", "no exe"));
             await Assert.ThrowsAsync<InvalidDataException>(() => FfmpegDownloader.Download(_folder, null, CancellationToken.None, Server(zip)));
+        }
+
+        [Fact]
+        public async Task DownloadPreviewLibraries_ExtractsOnlyTheHelperDlls_FromTheHelperMajor()
+        {
+            // 설치된 FFmpeg에 공유 DLL이 없을 때 도우미용 DLL만 받는다 — ffmpeg.exe·다른 DLL은 두지 않고, 더 새 주 버전(n10)이 있어도 도우미와 같은 n9를 받는다
+            var entries = new List<(string, string)>
+            {
+                ("ffmpeg-n9.0/bin/" + Exe("ffmpeg"), "ff"),
+                ("ffmpeg-n9.0/bin/avdevice-63.dll", "dev"),
+                ("ffmpeg-n9.0/LICENSE.txt", "GPL"),
+                ("ffmpeg-n9.0/bin/../../evil.dll", "x")
+            };
+            foreach (var name in PreviewHelper.Libraries)
+                entries.Add(("ffmpeg-n9.0/bin/" + name, name));
+            var zip = MakeZip(entries.ToArray());
+            var server = Server(zip);
+            const string newer = "ffmpeg-n10.0-latest-win64-gpl-shared-10.0.zip";
+            var release = Encoding.UTF8.GetString(server.Files[FfmpegDownloader.ReleaseApi]);
+            server.Files[FfmpegDownloader.ReleaseApi] = Encoding.UTF8.GetBytes(release.Replace("]}",
+                ",{\"name\":\"" + newer + "\",\"browser_download_url\":\"https://github.com/dl/" + newer + "\",\"size\":1}]}"));
+
+            var bin = await FfmpegDownloader.DownloadPreviewLibraries(_folder, null, CancellationToken.None, server);
+            Assert.Equal(Path.Combine(_folder, "bin"), bin);
+            Assert.Equal(PreviewHelper.Libraries.OrderBy(n => n), Directory.GetFiles(bin).Select(Path.GetFileName).OrderBy(n => n));
+            Assert.Equal(OperatingSystem.IsWindows(), PreviewHelper.HasLibraries(bin));
+            Assert.True(File.Exists(Path.Combine(_folder, "LICENSE.txt")));
+            Assert.DoesNotContain(server.Requested, url => url.EndsWith(newer, StringComparison.Ordinal));
+            Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(_folder), "evil.dll")));
+            Assert.False(File.Exists(Path.Combine(_folder, "download.zip.part")));
+        }
+
+        [Fact]
+        public async Task DownloadPreviewLibraries_MissingDll_Throws_AndLeavesNoBin()
+        {
+            var zip = MakeZip(("x/bin/" + Exe("ffmpeg"), "ff"), ("x/bin/" + PreviewHelper.Libraries[0], "one"));
+            await Assert.ThrowsAsync<InvalidDataException>(() => FfmpegDownloader.DownloadPreviewLibraries(_folder, null, CancellationToken.None, Server(zip)));
+            Assert.False(Directory.Exists(Path.Combine(_folder, "bin")));
+            Assert.False(Directory.Exists(Path.Combine(_folder, "bin.new")));
         }
 
         /// <summary>Progress&lt;T&gt;는 스레드 풀로 넘겨 순서가 섞이므로 바로 부르는 것.</summary>

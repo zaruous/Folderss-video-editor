@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
@@ -271,13 +272,7 @@ namespace VideoEditor.Ui
             if (tool != null && remember)
                 SaveSetting(FfmpegPathKey, tool.Folder);
             // FFmpeg가 바뀌면 도우미도 그 FFmpeg의 DLL로 다시 띄운다(거듭 실패해 꺼 둔 것도 다시)
-            lock (_helperGate)
-            {
-                _helperRetryAt = DateTime.MinValue;
-                _helperCrashes = 0;
-                _helperFailures = 0;
-            }
-            EnsureHelper();
+            ResetHelper();
             Raise(ToolChanged);
         }
 
@@ -327,6 +322,63 @@ namespace VideoEditor.Ui
         /// <summary>도우미 상태 글(FFmpeg 단추 도움말): 쓰는 중인지, 아니면 왜 ffmpeg.exe로 그리는지.</summary>
         public string HelperStatus { get; private set; } = "미리 보기 도우미: 아직 시작하지 않음";
 
+        /// <summary>"off"면 공유 DLL이 없는 FFmpeg로 편집기를 열 때 미리 보기용 DLL 받기를 알리지 않는다(FFmpeg 창에서 고름).</summary>
+        public const string PreviewLibrariesNoticeKey = "previewLibrariesNotice";
+        private int _previewLibrariesNoticed;
+
+        /// <summary>미리 보기 도우미 전용으로 받은 공유 DLL을 두는 곳(데이터 폴더\ffmpeg-preview — DLL은 그 아래 bin). 설치된 FFmpeg는 그대로 둔다.</summary>
+        public string PreviewLibrariesFolder { get { return Path.Combine(Manager.DataDirectory, "ffmpeg-preview"); } }
+
+        /// <summary>
+        /// 도우미가 쓸 공유 DLL 폴더: 지금 FFmpeg 폴더에 있으면 그것. 없으면 지금 FFmpeg가 도우미와 같은 주 버전일 때만 — 미리 보기와 내보내기가 같게 —
+        /// 도우미용으로 받은 것, 플러그인이 받아 둔 FFmpeg의 것. 없으면 null.
+        /// </summary>
+        public string HelperLibraryFolder(FfmpegTool tool)
+        {
+            if (tool == null)
+                return null;
+            if (PreviewHelper.HasLibraries(tool.Folder))
+                return tool.Folder;
+            if (tool.MajorVersion != PreviewHelper.FfmpegMajor)
+                return null;
+            return new[] { Path.Combine(PreviewLibrariesFolder, "bin"), Path.Combine(DownloadFolder, "bin") }.FirstOrDefault(PreviewHelper.HasLibraries);
+        }
+
+        /// <summary>도우미용 공유 DLL을 받으면 도우미를 쓸 수 있는지: 지금 FFmpeg가 도우미와 같은 주 버전인데 쓸 DLL이 없을 때(winget Gyan full_build 등).</summary>
+        public bool CanDownloadPreviewLibraries(FfmpegTool tool)
+        {
+            return tool != null && tool.MajorVersion == PreviewHelper.FfmpegMajor && HelperLibraryFolder(tool) == null
+                   && PreviewHelper.FindExecutable(Manager.PluginDirectory) != null;
+        }
+
+        /// <summary>편집기를 열 때 미리 보기용 DLL 받기를 알릴지 — Folderss를 켠 동안 한 번만 true("알리지 않기"를 골랐으면 늘 false).</summary>
+        public bool TakePreviewLibrariesNotice()
+        {
+            if (!CanDownloadPreviewLibraries(Tool) || Setting(PreviewLibrariesNoticeKey) == "off")
+                return false;
+            return Interlocked.Exchange(ref _previewLibrariesNoticed, 1) == 0;
+        }
+
+        /// <summary>도우미용 공유 DLL만 받는다(FFmpeg 창에서 사용자가 누름 — 설치된 FFmpeg는 그대로). 받으면 도우미를 다시 띄운다. bin 경로를 돌려준다.</summary>
+        public async Task<string> DownloadPreviewLibraries(IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation)
+        {
+            var bin = await FfmpegDownloader.DownloadPreviewLibraries(PreviewLibrariesFolder, progress, cancellation).ConfigureAwait(false);
+            ResetHelper();
+            return bin;
+        }
+
+        /// <summary>FFmpeg나 도우미 DLL이 바뀜 — 거듭 실패해 꺼 둔 것도 되돌리고 (다시) 띄운다.</summary>
+        private void ResetHelper()
+        {
+            lock (_helperGate)
+            {
+                _helperRetryAt = DateTime.MinValue;
+                _helperCrashes = 0;
+                _helperFailures = 0;
+            }
+            EnsureHelper();
+        }
+
         /// <summary>편집 창이 열림 — 도우미를 띄워 둔다. 창이 다 닫히면(<see cref="ReleaseHelper"/>) 끝낸다.</summary>
         public void AcquireHelper()
         {
@@ -358,7 +410,7 @@ namespace VideoEditor.Ui
         public PreviewHelper HelperFor(FfmpegTool tool)
         {
             var helper = Helper;
-            if (helper != null && tool != null && string.Equals(helper.Folder, tool.Folder, StringComparison.OrdinalIgnoreCase))
+            if (helper != null && tool != null && string.Equals(helper.Folder, HelperLibraryFolder(tool), StringComparison.OrdinalIgnoreCase))
                 return helper;
             EnsureHelper();
             return null;
@@ -398,7 +450,7 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
-        /// 필요하면 도우미를 띄운다: 편집 창이 있고, FFmpeg를 찾았고 그 폴더에 공유 DLL이 있고, 도우미가 없거나 죽었거나 다른 FFmpeg의 것일 때. 뒤에서 돈다.
+        /// 필요하면 도우미를 띄운다: 편집 창이 있고, FFmpeg를 찾았고 쓸 공유 DLL이 있고(<see cref="HelperLibraryFolder"/>), 도우미가 없거나 죽었거나 다른 DLL의 것일 때. 뒤에서 돈다.
         /// </summary>
         public void EnsureHelper()
         {
@@ -407,8 +459,9 @@ namespace VideoEditor.Ui
             {
                 if (_helperUsers <= 0 || tool == null)
                     return;
+                var folder = HelperLibraryFolder(tool);
                 var current = _helper;
-                if (current != null && current.IsAlive && string.Equals(current.Folder, tool.Folder, StringComparison.OrdinalIgnoreCase))
+                if (current != null && current.IsAlive && folder != null && string.Equals(current.Folder, folder, StringComparison.OrdinalIgnoreCase))
                     return;
                 if (_helperStarting != null && !_helperStarting.IsCompleted)
                     return;
@@ -421,14 +474,17 @@ namespace VideoEditor.Ui
                     _helperRetryAt = DateTime.MaxValue;
                     return;
                 }
-                if (!PreviewHelper.HasLibraries(tool.Folder))
+                if (folder == null)
                 {
-                    SetHelperStatus("미리 보기 도우미: 이 FFmpeg에 공유 DLL(shared 빌드)이 없어 ffmpeg.exe로 그림");
+                    SetHelperStatus("미리 보기 도우미: 이 FFmpeg에 공유 DLL(shared 빌드)이 없어 ffmpeg.exe로 그림"
+                                    + (tool.MajorVersion == PreviewHelper.FfmpegMajor
+                                        ? " — FFmpeg 단추에서 미리 보기용 DLL을 받을 수 있음"
+                                        : " — 도우미는 FFmpeg " + PreviewHelper.FfmpegMajor + "의 공유 DLL을 씀"));
                     _helperRetryAt = DateTime.MaxValue;
                     return;
                 }
                 _helperRetryAt = DateTime.UtcNow.AddSeconds(5);
-                _helperStarting = Task.Run(() => StartHelper(exe, tool.Folder));
+                _helperStarting = Task.Run(() => StartHelper(exe, folder));
             }
         }
 

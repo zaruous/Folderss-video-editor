@@ -23,6 +23,8 @@ namespace VideoEditor.Media
     public sealed class PreviewHelper : IDisposable
     {
         public const string ExeName = "VideoEditor.Helper.exe";
+        /// <summary>도우미의 FFmpeg 바인딩(FFmpeg.AutoGen 9.0)이 맞는 FFmpeg 주 버전 — <see cref="Libraries"/>의 DLL 이름이 여기에 묶여 있다.</summary>
+        public const int FfmpegMajor = 9;
         /// <summary>도우미의 FFmpeg 바인딩(FFmpeg.AutoGen 9.0)이 맞는 공유 DLL — 다른 주 버전의 DLL이면 쓸 수 없다.</summary>
         public static readonly string[] Libraries = { "avutil-61.dll", "swresample-7.dll", "swscale-10.dll", "avcodec-63.dll", "avformat-63.dll", "avfilter-12.dll" };
 

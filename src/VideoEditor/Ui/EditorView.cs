@@ -162,7 +162,13 @@ namespace VideoEditor.Ui
             }));
             services.ToolChanged += _toolChanged;
             // 미리 보기 도우미: 편집 창이 있는 동안 띄워 둔다. 상태가 바뀌면 FFmpeg 단추에 보인다
-            _helperChanged = (s, e) => Dispatcher.BeginInvoke(new Action(UpdateInfo));
+            _helperChanged = (s, e) => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                UpdateInfo();
+                // 공유 DLL이 없는 FFmpeg 9면(winget Gyan full_build 등) 한 번 알린다 — 받을지는 FFmpeg 창에서 고른다
+                if (_services.TakePreviewLibrariesNotice())
+                    _commands.Status("미리 보기가 느릴 수 있습니다 — 이 FFmpeg에는 미리 보기 도우미가 쓸 공유 DLL이 없습니다. 오른쪽 아래 FFmpeg 단추에서 받을 수 있습니다(약 85MB).");
+            }));
             services.HelperChanged += _helperChanged;
             services.AcquireHelper();
             PreviewKeyDown += OnPreviewKeyDown;

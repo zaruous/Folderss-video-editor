@@ -207,9 +207,10 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// GitHub BtbN/FFmpeg-Builds 최신 릴리스(JSON)에서 Windows 64비트 GPL 공유 빌드 zip을 고른다 — 정식 버전(nX.Y)의 가장 높은 것,
-        /// 없으면 master. 이름·주소·크기와 checksums.sha256 주소를 돌려준다. 못 찾으면 null.
+        /// 없으면 master. major를 주면 그 주 버전(nmajor.Y)의 가장 높은 것만(master는 주 버전을 몰라 고르지 않는다 — 미리 보기 도우미의 DLL 이름이 주 버전에 묶여 있다).
+        /// 이름·주소·크기와 checksums.sha256 주소를 돌려준다. 못 찾으면 null.
         /// </summary>
-        public static FfmpegBuild ChooseBuild(string releaseJson)
+        public static FfmpegBuild ChooseBuild(string releaseJson, int? major = null)
         {
             using (var document = JsonDocument.Parse(releaseJson))
             {
@@ -223,12 +224,12 @@ namespace VideoEditor.Core
                 }).ToList();
                 var checksums = all.FirstOrDefault(a => a.Name == "checksums.sha256");
                 var best = all.Select(a => new { Asset = a, Match = Regex.Match(a.Name, @"^ffmpeg-n(\d+)\.(\d+)-latest-win64-gpl-shared-\d+\.\d+\.zip$") })
-                    .Where(x => x.Match.Success)
+                    .Where(x => x.Match.Success && (major == null || int.Parse(x.Match.Groups[1].Value, CultureInfo.InvariantCulture) == major))
                     .OrderByDescending(x => int.Parse(x.Match.Groups[1].Value, CultureInfo.InvariantCulture))
                     .ThenByDescending(x => int.Parse(x.Match.Groups[2].Value, CultureInfo.InvariantCulture))
                     .Select(x => x.Asset)
                     .FirstOrDefault()
-                    ?? all.FirstOrDefault(a => a.Name == "ffmpeg-master-latest-win64-gpl-shared.zip");
+                    ?? (major == null ? all.FirstOrDefault(a => a.Name == "ffmpeg-master-latest-win64-gpl-shared.zip") : null);
                 if (best == null || checksums == null || !FromGitHub(best.Url) || !FromGitHub(checksums.Url))
                     return null;
                 return new FfmpegBuild { Name = best.Name, Url = best.Url, Size = best.Size, ChecksumsUrl = checksums.Url };

@@ -36,6 +36,28 @@ namespace VideoEditor.UiTests
         }
     }
 
+    /// <summary>
+    /// 편집기 화면 시험 + FOLDERSS_VE_FFMPEG가 공유 DLL 없는 FFmpeg 9일 때만(winget Gyan full_build, BtbN win64 gpl static 등 — 도우미용 DLL을 받으라고 알리는 경우).
+    /// 시험 안에서 GitHub에서 실제로 받는다(약 85MB).
+    /// </summary>
+    public sealed class PreviewLibrariesEditorFactAttribute : FactAttribute
+    {
+        private static readonly Lazy<int> Major = new Lazy<int>(() =>
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(RunTool("ffmpeg", "-hide_banner", "-version"), @"ffmpeg version n?(\d+)\.");
+            return match.Success ? int.Parse(match.Groups[1].Value) : 0;
+        });
+
+        public PreviewLibrariesEditorFactAttribute()
+        {
+            var editor = new EditorFactAttribute();
+            if (editor.Skip != null)
+                Skip = editor.Skip;
+            else if (HelperEditorFactAttribute.HasLibraries || Major.Value != 9)
+                Skip = "FOLDERSS_VE_FFMPEG가 공유 DLL 없는 FFmpeg 9가 아니라 건너뜁니다(미리 보기용 DLL 받기를 알리는 경우만 보는 시험).";
+        }
+    }
+
     /// <summary>편집기 화면 시험 + FOLDERSS_VE_FFMPEG에 공유 DLL이 없을 때만(ffmpeg.exe만 있는 빌드 — winget Gyan full_build 등).</summary>
     public sealed class NoHelperEditorFactAttribute : FactAttribute
     {
@@ -247,7 +269,7 @@ namespace VideoEditor.UiTests
             try
             {
                 await ui.WaitUntil(() => HelperStatus(window) != "미리 보기 도우미: 아직 시작하지 않음", Wait, "도우미 상태");
-                Assert.Equal("미리 보기 도우미: 이 FFmpeg에 공유 DLL(shared 빌드)이 없어 ffmpeg.exe로 그림", ui.Run(() => HelperStatus(window)));
+                Assert.StartsWith("미리 보기 도우미: 이 FFmpeg에 공유 DLL(shared 빌드)이 없어 ffmpeg.exe로 그림", ui.Run(() => HelperStatus(window)));
                 Assert.False(ui.Run(() => FfmpegStatus(window)).EndsWith("· 도우미", StringComparison.Ordinal));
                 Assert.Contains("공유 DLL", ui.Run(() => (string)Ui.ById<Button>(window, "FfmpegStatusButton").ToolTip));
                 ui.Post(() => Key(window, System.Windows.Input.Key.I, ModifierKeys.Control));
@@ -273,5 +295,118 @@ namespace VideoEditor.UiTests
                 await CloseEditor(ui, window);
             }
         }
+
+        [PreviewLibrariesEditorFact]
+        public async Task NoSharedDllsFfmpeg9_NoticeThenDownloadPreviewDlls_HelperStarts_FfmpegStays()
+        {
+            // 공유 DLL이 없는 FFmpeg 9(winget Gyan full_build 등): 편집기를 열면 한 번 알리고, FFmpeg 창에서 [미리 보기용 DLL 받기]를 누르면
+            // 도우미용 DLL만 받아(GitHub, 약 85MB) 도우미가 뜬다. 가져오기·내보내기의 FFmpeg는 그대로다
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var libraries = Path.Combine(plugin.Manager.DataDirectory, "ffmpeg-preview");
+            Window window = null;
+            var pid = 0;
+            try
+            {
+                window = await Open(ui, plugin);
+                // "Folderss를 켠 동안 한 번" 알림 — 같은 실행의 다른 시험이 먼저 열었을 수 있어 되돌리고, 같은 FFmpeg를 다시 정해 도우미 상태를 새로 알리게 한다
+                var services = ui.Run(() => Field(View(window), "_services"));
+                ui.Run(() =>
+                {
+                    services.GetType().GetField("_previewLibrariesNoticed", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(services, 0);
+                    services.GetType().GetMethod("SetTool").Invoke(services, new[] { Get(services, "Tool"), (object)false });
+                });
+                await ui.WaitUntil(() => HelperStatus(window).Contains("FFmpeg 단추에서 미리 보기용 DLL을 받을 수 있음"), Wait, "받을 수 있다는 도우미 상태");
+                await ui.WaitUntil(() => Status(window).Contains("FFmpeg 단추에서 받을 수 있습니다"), TimeSpan.FromSeconds(10), "편집기를 열 때 알림");
+                Assert.False(ui.Run(() => FfmpegStatus(window)).EndsWith("· 도우미", StringComparison.Ordinal));
+
+                ui.Post(() => Ui.Click(Ui.ById<Button>(window, "FfmpegStatusButton")));
+                var dialog = await ui.WaitFor(() => Ui.Windows().FirstOrDefault(w => w.IsVisible && w.Title == "FFmpeg"), Wait, "FFmpeg 창");
+                ui.Run(() =>
+                {
+                    Assert.True(Ui.ById<Button>(dialog, "DownloadPreviewLibrariesButton").IsVisible, "[미리 보기용 DLL 받기]");
+                    // "편집기를 열 때 알리지 않기"는 설정에 남는다
+                    var quiet = Ui.ById<CheckBox>(dialog, "PreviewLibrariesQuietCheck");
+                    quiet.IsChecked = true;
+                    Assert.Equal("off", plugin.Manager.GetSetting("previewLibrariesNotice"));
+                    quiet.IsChecked = false;
+                    Assert.Null(plugin.Manager.GetSetting("previewLibrariesNotice"));
+                    Ui.Snap(dialog, plugin.ShotFolder, "preview-dlls-offer");
+                    Ui.Click(Ui.ById<Button>(dialog, "DownloadPreviewLibrariesButton"));
+                });
+                var watch = Stopwatch.StartNew();
+                await ui.WaitUntil(() => Ui.ById<TextBlock>(dialog, "FfmpegSetupStatus").Text.StartsWith("미리 보기용 DLL을 받았습니다", StringComparison.Ordinal)
+                                         || Ui.ById<TextBlock>(dialog, "FfmpegSetupStatus").Text.StartsWith("내려받지 못했습니다", StringComparison.Ordinal),
+                    TimeSpan.FromMinutes(10), "미리 보기용 DLL 받기");
+                _out.WriteLine(ui.Run(() => Ui.ById<TextBlock>(dialog, "FfmpegSetupStatus").Text) + " (" + watch.Elapsed.TotalSeconds.ToString("0") + "초)");
+                Assert.StartsWith("미리 보기용 DLL을 받았습니다", ui.Run(() => Ui.ById<TextBlock>(dialog, "FfmpegSetupStatus").Text));
+                await ui.WaitUntil(() => Ui.ById<TextBlock>(dialog, "FfmpegHelperStatus").Text.StartsWith("미리 보기 도우미: 쓰는 중", StringComparison.Ordinal), Wait, "창 안의 도우미 상태");
+                ui.Run(() =>
+                {
+                    Assert.False(Ui.ById<Button>(dialog, "DownloadPreviewLibrariesButton").IsVisible, "받은 뒤에는 묻지 않는다");
+                    Ui.Snap(dialog, plugin.ShotFolder, "preview-dlls-downloaded");
+                    Ui.Click(Ui.ById<Button>(dialog, "FfmpegLaterButton"));
+                });
+
+                // 도우미는 받은 DLL로, FFmpeg(가져오기·내보내기)는 그대로
+                await ui.WaitUntil(() => FfmpegStatus(window).EndsWith("· 도우미", StringComparison.Ordinal), Wait, "도우미 시작");
+                var status = ui.Run(() => HelperStatus(window));
+                _out.WriteLine(status);
+                Assert.Contains(Path.Combine(libraries, "bin"), status);
+                Assert.Equal(Path.GetFullPath(FfmpegFolder).TrimEnd('\\'), ((string)ui.Run(() => Get(Get(Field(View(window), "_services"), "Tool"), "Folder"))).TrimEnd('\\'));
+                Assert.Equal(PreviewHelperLibraries.OrderBy(n => n), Directory.GetFiles(Path.Combine(libraries, "bin")).Select(Path.GetFileName).OrderBy(n => n));
+                pid = ui.Run(() => HelperPid(window));
+                Assert.NotEqual(0, pid);
+
+                // 실제로 도우미가 그린다
+                ui.Post(() => Key(window, System.Windows.Input.Key.I, ModifierKeys.Control));
+                await NativeDialogs.Open(ui, Path.Combine(MediaFolder, "testsrc.mp4"), Wait);
+                await ui.WaitUntil(() => Ui.ById<ListBox>(window, "MediaList").Items.Cast<FrameworkElement>().Any(i => System.Windows.Automation.AutomationProperties.GetName(i) == "testsrc.mp4"), Wait, "가져오기");
+                ui.Run(() =>
+                {
+                    var list = Ui.ById<ListBox>(window, "MediaList");
+                    list.SelectedItem = list.Items.Cast<FrameworkElement>().First(i => System.Windows.Automation.AutomationProperties.GetName(i) == "testsrc.mp4");
+                    Ui.Click(Ui.ById<Button>(window, "AddToTimelineButton"));
+                });
+                await ui.WaitUntil(() => Clips(window).Count == 1 && PreviewHasPicture(window), Wait, "첫 화면");
+                var steps = new List<double>();
+                for (var i = 0; i < 4; i++)
+                    steps.Add(await StepAndWait(ui, window));
+                _out.WriteLine("받은 DLL의 도우미로 재생 헤드 이동: " + string.Join(" · ", steps.Select(v => v.ToString("0"))) + "ms");
+                Assert.Equal(pid, ui.Run(() => HelperPid(window)));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+                // 같은 실행의 다른 시험(공유 DLL 없는 경로)에 남지 않게: 도우미가 끝나 DLL을 놓은 뒤 지운다
+                if (pid != 0)
+                {
+                    try
+                    {
+                        using (var process = Process.GetProcessById(pid))
+                            process.WaitForExit(10000);
+                    }
+                    catch (ArgumentException)
+                    {
+                        // 이미 끝남
+                    }
+                }
+                for (var i = 0; i < 20 && Directory.Exists(libraries); i++)
+                {
+                    try
+                    {
+                        Directory.Delete(libraries, true);
+                    }
+                    catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+                    {
+                        await Task.Delay(250);
+                    }
+                }
+            }
+        }
+
+        // 플러그인의 PreviewHelper.Libraries와 같다
+        private static readonly string[] PreviewHelperLibraries = { "avutil-61.dll", "swresample-7.dll", "swscale-10.dll", "avcodec-63.dll", "avformat-63.dll", "avfilter-12.dll" };
     }
 }
