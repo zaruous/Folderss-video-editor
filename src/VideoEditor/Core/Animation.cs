@@ -14,7 +14,8 @@ namespace VideoEditor.Core
     }
 
     /// <summary>
-    /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기, 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기.
+    /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기·떠오르기·커지며 돌기·가운데서 갈라지기·흐림에서 선명하게,
+    /// 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기.
     /// 저장된 이름이 바뀌면 예전 프로젝트에서 효과가 빠지므로 이름을 바꾸지 않는다(뒤에만 더한다).
     /// </summary>
     public enum AnimationEffect
@@ -31,11 +32,17 @@ namespace VideoEditor.Core
         Shake,
         Rotate,
         Grow,
-        Transparency
+        Transparency,
+        // 2단계(#4): 남은 효과
+        Rise,
+        GrowTurn,
+        Split,
+        Unblur
     }
 
     /// <summary>
-    /// 방향: 나타나기는 들어오는 쪽, 사라지기는 나가는 쪽. 회전·돌며 나타나기는 왼쪽 = 시계 반대, 오른쪽 = 시계 방향, 흔들기는 왼쪽·오른쪽 = 가로, 위·아래 = 세로.
+    /// 방향: 나타나기는 들어오는 쪽, 사라지기는 나가는 쪽. 회전·돌며 나타나기·커지며 돌기는 왼쪽 = 시계 반대, 오른쪽 = 시계 방향,
+    /// 흔들기·가운데서 갈라지기는 왼쪽·오른쪽 = 가로(좌우로), 위·아래 = 세로(위아래로).
     /// </summary>
     public enum AnimationDirection
     {
@@ -199,6 +206,14 @@ namespace VideoEditor.Core
             new AnimationEffectDef { Effect = AnimationEffect.Scatter, Name = "모여들기", OutName = "흩어지기", Description = "글자가 사방에서 돌며 모여들고, 사방으로 흩어집니다(글자 클립).",
                 TextOnly = true, DefaultEase = AnimationEase.Out, DefaultSeconds = 1.0, DefaultUnit = AnimationUnit.Character, DefaultStagger = 30,
                 Amount = new AnimationAmount("거리", 20, 300, 100, "%") },
+            new AnimationEffectDef { Effect = AnimationEffect.Rise, Name = "떠오르기", OutName = "흐려지며 가라앉기", Description = "아래에서 떠오르며 서서히 보이고, 흐려지며 아래로 가라앉습니다.",
+                DefaultEase = AnimationEase.Out, DefaultSeconds = 0.7, Amount = new AnimationAmount("거리", 5, 500, 60, "px") },
+            new AnimationEffectDef { Effect = AnimationEffect.GrowTurn, Name = "커지며 돌기", OutName = "작아지며 돌기", Description = "작은 크기에서 돌며 커져 제자리에 서고, 돌며 작아져 사라집니다.",
+                Directions = Turns, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.7, Amount = new AnimationAmount("회전", 0, 1080, 90, "°") },
+            new AnimationEffectDef { Effect = AnimationEffect.Split, Name = "가운데서 갈라지기", OutName = "가운데로 닫히기", Description = "가운데에서 양쪽으로 열리며 드러나고, 양쪽에서 가운데로 닫히며 사라집니다.",
+                Directions = new[] { AnimationDirection.Left, AnimationDirection.Up }, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.6 },
+            new AnimationEffectDef { Effect = AnimationEffect.Unblur, Name = "흐림에서 선명하게", OutName = "흐릿하게 사라지기", Description = "흐릿하게 나타나 선명해지고, 흐려지며 사라집니다.",
+                DefaultEase = AnimationEase.Out, DefaultSeconds = 0.8, Amount = new AnimationAmount("흐림", 1, 100, 16, "px") },
             new AnimationEffectDef { Effect = AnimationEffect.Pulse, Name = "맥박", Description = "커졌다 작아지기를 되풀이합니다.", Emphasis = true, Repeats = true,
                 DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, DefaultRepeat = 2, Amount = new AnimationAmount("커지는 정도", 1, 100, 15, "%") },
             new AnimationEffectDef { Effect = AnimationEffect.Shake, Name = "흔들기", Description = "좌우(또는 위아래)로 흔들리다 멈춥니다.", Emphasis = true, Repeats = true,
@@ -231,10 +246,12 @@ namespace VideoEditor.Core
         /// <summary>속성 패널에 보일 방향 이름(효과마다 뜻이 다르다).</summary>
         public static string DirectionName(AnimationEffect effect, AnimationDirection direction)
         {
-            if (effect == AnimationEffect.Spin || effect == AnimationEffect.Rotate)
+            if (effect == AnimationEffect.Spin || effect == AnimationEffect.Rotate || effect == AnimationEffect.GrowTurn)
                 return direction == AnimationDirection.Left ? "시계 반대" : "시계 방향";
             if (effect == AnimationEffect.Shake)
                 return direction == AnimationDirection.Up || direction == AnimationDirection.Down ? "세로" : "가로";
+            if (effect == AnimationEffect.Split)
+                return direction == AnimationDirection.Up || direction == AnimationDirection.Down ? "위아래로" : "좌우로";
             switch (direction)
             {
                 case AnimationDirection.Left: return "왼쪽";

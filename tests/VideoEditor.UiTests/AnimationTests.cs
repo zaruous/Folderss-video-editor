@@ -88,9 +88,9 @@ namespace VideoEditor.UiTests
                     var tops = tabs.Items.Cast<TabItem>().Select(t => t.TranslatePoint(new Point(0, 0), tabs).Y).ToList();
                     _out.WriteLine("탭: " + string.Join(", ", tabs.Items.Cast<TabItem>().Select(t => t.Header)) + " · 윗변 " + string.Join(", ", tops.Select(y => y.ToString("0"))));
                     Assert.True(tops.Max() - tops.Min() < 1, "속성 탭 머리가 두 줄");
-                    Assert.Equal(8, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
+                    Assert.Equal(12, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
                     Assert.Equal(5, Ui.ById<WrapPanel>(window, "AnimationTilesEmphasis").Children.Count);
-                    Assert.Equal(8, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
+                    Assert.Equal(12, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
                     Ui.Snap(window, plugin.ShotFolder, "animation-tab-empty");
                     Ui.Click(Ui.ById<Button>(window, "AnimIn_Typewriter"));
                     Ui.Click(Ui.ById<Button>(window, "AnimEmphasis_Pulse"));
@@ -178,10 +178,34 @@ namespace VideoEditor.UiTests
                     tabs.SelectedItem = Ui.ById<TabItem>(window, "AnimationTab");
                     window.UpdateLayout();
                     Assert.Null(Ui.ById<Button>(window, "AnimIn_Typewriter"));
-                    Assert.Equal(6, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
+                    Assert.Equal(10, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
+                    // 좁은 속성 패널(1280×800 창에서 약 250px): 썸네일은 줄을 바꿔 패널 안에 들고, 긴 이름("흐려지며 가라앉기")은 칸 안에서 줄을 바꾼다
+                    foreach (var id in new[] { "AnimationTilesIn", "AnimationTilesEmphasis", "AnimationTilesOut" })
+                    {
+                        var wrap = Ui.ById<WrapPanel>(window, id);
+                        foreach (FrameworkElement tile in wrap.Children)
+                        {
+                            var left = tile.TranslatePoint(new Point(0, 0), wrap).X;
+                            Assert.True(left + tile.ActualWidth <= wrap.ActualWidth + 0.5, id + " 썸네일이 패널 밖으로: " + System.Windows.Automation.AutomationProperties.GetName(tile));
+                        }
+                    }
+                    var sink = Ui.ById<Button>(window, "AnimOut_Rise");
+                    _out.WriteLine("속성 패널 " + Ui.ById<WrapPanel>(window, "AnimationTilesOut").ActualWidth.ToString("0") + "px · 사라지기 썸네일 " + sink.ActualWidth.ToString("0") + "×" + sink.ActualHeight.ToString("0"));
+                    Assert.Equal("흐려지며 가라앉기", System.Windows.Automation.AutomationProperties.GetName(sink));
                     Ui.Click(Ui.ById<Button>(window, "AnimIn_Zoom"));
                 });
                 await ui.WaitUntil(() => Animations(ProjectClips(window)[0]).Count == 1, Wait, "확대 넣기");
+                // 가운데서 갈라지기로 바꾸면 방향 칸이 좌우로·위아래로, 위아래로를 고르면 저장된다
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "AnimIn_Split")));
+                await ui.WaitUntil(() => Describe(ProjectClips(window)[0]).StartsWith("In/Split", StringComparison.Ordinal), Wait, "갈라지기로 바꾸기");
+                await ui.WaitFor(() => Ui.ById<ComboBox>(window, "AnimIn_Direction"), Wait, "방향 칸");
+                ui.Run(() =>
+                {
+                    var direction = Ui.ById<ComboBox>(window, "AnimIn_Direction");
+                    Assert.Equal(new[] { "좌우로", "위아래로" }, direction.Items.Cast<object>().Select(i => i.ToString()));
+                    direction.SelectedIndex = 1;
+                });
+                await ui.WaitUntil(() => Get(Animations(ProjectClips(window)[0])[0], "Direction").ToString() == "Up", Wait, "위아래로");
                 Assert.Empty(ui.TakeErrors());
             }
             finally
@@ -306,6 +330,46 @@ namespace VideoEditor.UiTests
             Assert.True(scattered[0].Width > still.Width && scattered[0].Height > still.Height);
             Assert.Equal(still.Ink(), scattered[0].Ink());
             Assert.Equal(0, scattered[^1].Ink());
+        }
+
+        /// <summary>반투명 픽셀 수(흐림이 번진 곳).</summary>
+        private static int Soft(Png png)
+        {
+            var count = 0;
+            for (var i = 3; i < png.Bgra.Length; i += 4)
+            {
+                if (png.Bgra[i] > 8 && png.Bgra[i] < 247)
+                    count++;
+            }
+            return count;
+        }
+
+        [UiFact]
+        public async Task Rasterizer_SplitFromTheMiddle_UnblurSpreads_FramesSameSize()
+        {
+            var rasterizer = NewRasterizer();
+            var still = await Render(rasterizer, Request(rasterizer, "안녕 ABC", null), "split-still");
+            // 가운데서 갈라지기(글자별, 함께): 처음엔 없고, 반쯤 글자마다 가운데 절반, 끝 장은 정지 그림과 같다
+            string Split(int frame) => "{\"In\":{\"Kind\":\"In\",\"Effect\":\"Split\",\"Unit\":\"Character\",\"Stagger\":0,\"Duration\":10},\"InStart\":0,\"InLength\":10,\"Frame\":" + frame + "}";
+            var split = new List<Png>();
+            foreach (var f in new[] { 0, 5, 10 })
+                split.Add(await Render(rasterizer, Request(rasterizer, "안녕 ABC", Split(f)), "split-" + f));
+            _out.WriteLine("갈라지기 칠함 " + string.Join(", ", split.Select(p => p.Ink() + "/" + p.Blobs())) + " · 정지 " + still.Ink() + "/" + still.Blobs());
+            Assert.All(split, p => Assert.Equal((still.Width, still.Height), (p.Width, p.Height)));
+            Assert.Equal(0, split[0].Ink());
+            Assert.InRange(split[1].Ink(), still.Ink() * 0.3, still.Ink() * 0.7);
+            Assert.Equal(still.Ink(), split[2].Ink());
+
+            // 흐릿하게 사라지기(단어별, 흐림 10px): 모든 장이 같은 크기(번질 자리까지 넓힘), 흐린 장은 반투명 픽셀이 많고, 시작 장은 정지 그림과 같이 칠한다
+            string Unblur(int frame) => "{\"Out\":{\"Kind\":\"Out\",\"Effect\":\"Unblur\",\"Unit\":\"Word\",\"Stagger\":0,\"Duration\":10,\"Amount\":10},\"OutStart\":10,\"OutLength\":10,\"Frame\":" + frame + "}";
+            var blurred = new List<Png>();
+            foreach (var f in new[] { 10, 14, 17 })
+                blurred.Add(await Render(rasterizer, Request(rasterizer, "안녕 ABC", Unblur(f)), "unblur-" + f));
+            _out.WriteLine("흐림 " + string.Join(", ", blurred.Select(p => p.Width + "×" + p.Height + " 칠함 " + p.Ink() + " 반투명 " + Soft(p))) + " · 정지 반투명 " + Soft(still));
+            Assert.All(blurred, p => Assert.Equal((blurred[0].Width, blurred[0].Height), (p.Width, p.Height)));
+            Assert.True(blurred[0].Width > still.Width, "흐림이 번질 자리");
+            Assert.Equal(still.Ink(), blurred[0].Ink());
+            Assert.True(Soft(blurred[1]) > Soft(blurred[0]) * 2, "흐린 장의 반투명 픽셀");
         }
     }
 }

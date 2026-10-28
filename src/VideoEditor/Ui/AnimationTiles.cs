@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using VideoEditor.Core;
 
@@ -134,7 +135,7 @@ namespace VideoEditor.Ui
             if (text != null)
             {
                 Reset(_word);
-                var poses = text.Poses(_clip.Text, LetterSize, frame);
+                var poses = text.Poses(_clip.Text, LetterSize, frame, ScreenScale);
                 for (var i = 0; i < _letters.Length; i++)
                     Apply(_letters[i], poses[i]);
                 return;
@@ -172,6 +173,14 @@ namespace VideoEditor.Ui
                 clip = clip == null ? new RectangleGeometry(rect) : (Geometry)new CombinedGeometry(GeometryCombineMode.Intersect, clip, new RectangleGeometry(rect));
             }
             _word.Clip = clip;
+            _word.Effect = Blur((motion.Blur?.Eval(frame) ?? 0) * ScreenScale);
+        }
+
+        /// <summary>흐림(썸네일 픽셀 시그마)의 흐림 효과(없으면 null).</summary>
+        private static Effect Blur(double sigma)
+        {
+            var radius = Math.Max(0, sigma) * 3;
+            return radius > 0.05 ? new BlurEffect { Radius = radius } : null;
         }
 
         private static void Reset(UIElement element)
@@ -179,6 +188,7 @@ namespace VideoEditor.Ui
             element.RenderTransform = Transform.Identity;
             element.Opacity = 1;
             element.Clip = null;
+            element.Effect = null;
         }
 
         private static void Apply(TextBlock letter, UnitPose pose)
@@ -189,6 +199,7 @@ namespace VideoEditor.Ui
             group.Children.Add(new TranslateTransform(pose.X, pose.Y));
             letter.RenderTransform = group;
             letter.Opacity = Math.Max(0, Math.Min(1, pose.Opacity));
+            letter.Effect = Blur(pose.Blur);
             if (pose.Visible >= 1)
             {
                 letter.Clip = null;
@@ -197,10 +208,20 @@ namespace VideoEditor.Ui
             letter.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             var size = letter.DesiredSize;
             var rect = new Rect(0, 0, size.Width, size.Height);
+            var visible = Math.Max(0, pose.Visible);
+            if (pose.Split)
+            {
+                if (pose.WipeX != 0)
+                    rect = new Rect(size.Width * (1 - visible) / 2, 0, size.Width * visible, size.Height);
+                if (pose.WipeY != 0)
+                    rect = new Rect(rect.Left, size.Height * (1 - visible) / 2, rect.Width, size.Height * visible);
+                letter.Clip = new RectangleGeometry(rect);
+                return;
+            }
             if (pose.WipeX != 0)
-                rect = new Rect(pose.WipeX < 0 ? 0 : size.Width * (1 - pose.Visible), 0, size.Width * pose.Visible, size.Height);
+                rect = new Rect(pose.WipeX < 0 ? 0 : size.Width * (1 - visible), 0, size.Width * visible, size.Height);
             if (pose.WipeY != 0)
-                rect = new Rect(rect.Left, pose.WipeY < 0 ? 0 : size.Height * (1 - pose.Visible), rect.Width, size.Height * pose.Visible);
+                rect = new Rect(rect.Left, pose.WipeY < 0 ? 0 : size.Height * (1 - visible), rect.Width, size.Height * visible);
             letter.Clip = new RectangleGeometry(rect);
         }
     }

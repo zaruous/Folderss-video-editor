@@ -71,10 +71,10 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// frame 장에서 글자 요소(<see cref="TextUnits.Elements"/> 차례)마다의 모습. size = 글자 크기(출력 픽셀).
+        /// frame 장에서 글자 요소(<see cref="TextUnits.Elements"/> 차례)마다의 모습. size = 글자 크기(출력 픽셀), pixel = 프로젝트 픽셀 하나의 출력 픽셀.
         /// 나타나기는 구간 앞에서 "없음", 사라지기는 구간 뒤에서 "없음"이다.
         /// </summary>
-        public UnitPose[] Poses(string text, double size, long frame)
+        public UnitPose[] Poses(string text, double size, long frame, double pixel = 1)
         {
             var count = TextUnits.Elements(text).Count;
             var poses = Enumerable.Repeat(UnitPose.Rest, count).ToArray();
@@ -83,14 +83,14 @@ namespace VideoEditor.Core
                 var (units, total) = TextUnits.Split(text, In.Unit);
                 var p = Progress(frame, InStart, InLength);
                 for (var i = 0; i < count; i++)
-                    poses[i] = AnimationMotion.InPose(In, p, units[i], total, size);
+                    poses[i] = AnimationMotion.InPose(In, p, units[i], total, size, pixel);
             }
             if (Out != null)
             {
                 var (units, total) = TextUnits.Split(text, Out.Unit);
                 var p = Progress(frame, OutStart, OutLength);
                 for (var i = 0; i < count; i++)
-                    poses[i] = poses[i].Then(AnimationMotion.OutPose(Out, p, units[i], total, size));
+                    poses[i] = poses[i].Then(AnimationMotion.OutPose(Out, p, units[i], total, size, pixel));
             }
             return poses;
         }

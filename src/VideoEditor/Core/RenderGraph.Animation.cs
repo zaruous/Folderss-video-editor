@@ -65,11 +65,23 @@ namespace VideoEditor.Core
             return ",pad=" + pad1 + ":color=black@0,crop=" + crop1 + ",pad=" + pad2 + ":color=black@0,crop=" + crop2;
         }
 
-        /// <summary>회전(앞에 ","): 클립 회전 + 움직임(도). 출력은 대각선 크기로 고정(각도가 바뀌어도 잘리지 않게, 가운데는 그대로).</summary>
-        private static string RotateChain(ObjectMotion motion, double rotation, string time)
+        /// <summary>
+        /// 회전(앞에 ","): 클립 회전 + 움직임(도). 출력은 대각선 크기로 고정(각도가 바뀌어도 잘리지 않게, 가운데는 그대로).
+        /// - 넓히는 폭은 4의 배수: 가운데가 픽셀 사이에 걸리면 0°에서도 반 픽셀 흐려지고, 바탕(yuv420)의 overlay는 자리를 짝수로 내리므로 반폭도 짝수여야
+        ///   움직이지 않는 그림과 같은 자리다. 먼저 투명하게 2픽셀씩 넓힌다 — rotate는 가장자리 밖 한 픽셀을 가장자리 색으로 칠한다.
+        /// - 빈 곳은 투명하게 칠한다(c=none은 칠하지 않아 버퍼에 남은 앞 장의 그림이 꼬리처럼 남는다).
+        /// - 그리는 구간(offset부터 frames장) 내내 각도가 같으면 그 각도 하나로(0이면 넣지 않는다) — 다 돈 뒤의 한 장이 정지 그림·내보내기와 같게.
+        /// </summary>
+        private static string RotateChain(ObjectMotion motion, double rotation, string time, long offset, long frames)
         {
-            var degrees = rotation + motion.Rotation;
-            return ",rotate=a='" + degrees.ToFfmpeg(time) + "*PI/180':c=none:ow='hypot(iw,ih)':oh=ow";
+            var first = motion.Rotation.Eval(offset);
+            var steady = true;
+            for (long i = 1; i < frames && steady; i++)
+                steady = motion.Rotation.Eval(offset + i) == first;
+            if (steady && Math.Abs(rotation + first) <= 0.01)
+                return "";
+            var degrees = steady ? N(rotation + first) : (rotation + motion.Rotation).ToFfmpeg(time);
+            return ",pad=w=iw+4:h=ih+4:x=2:y=2:color=black@0,rotate=a='" + degrees + "*PI/180':c=black@0:ow='iw+4*ceil((hypot(iw,ih)-iw)/4)':oh='ih+4*ceil((hypot(iw,ih)-ih)/4)'";
         }
 
         /// <summary>
@@ -95,6 +107,73 @@ namespace VideoEditor.Core
                 return first == "1" ? "" : ",colorchannelmixer=aa=" + first;
             commands.Length--;
             return ",sendcmd=c='" + commands + "'," + name + "=aa=" + first;
+        }
+
+        /// <summary>
+        /// 모습(앞에 ","): 흐림 — 닦아내기 뒤·회전 앞(틀 크기의 그림)에서. 지금은 흐림 하나다.
+        /// k = 출력 픽셀 / 프로젝트 픽셀(재생 축소 포함), offset = 이 흐름이 시작한 클립 안 장, frames = 그리는 장 수, length = 클립 길이(장).
+        /// </summary>
+        private static string LookChain(ObjectMotion motion, double k, FrameRate rate, long offset, long frames, long length, int n)
+        {
+            return BlurChain(motion, k, rate, offset, frames, length, n);
+        }
+
+        /// <summary>
+        /// 흐림(앞에 ","): 장마다 시그마(출력 픽셀)를 계산해 바뀌는 장에서만 sendcmd로 gblur에 보낸다(불투명도와 같은 방법 — 세로 시그마도 함께).
+        /// - 번질 자리(클립 전체에서 가장 큰 시그마 × 3, 짝수)만큼 투명하게 넓힌다(가운데는 그대로). 그리는 구간과 상관없이 같은 크기라
+        ///   한 장(재생 헤드)과 내보내기가 같은 자리에 놓인다 — 반폭이 짝수라 바탕(yuv420)의 overlay가 짝수로 내리는 자리도 정지 그림과 같다.
+        /// - 알파를 곱한 색으로 흐린다(투명한 곳의 검은색이 번져 가장자리가 어두워지지 않게). 알파 곱하기는 흐린 장에서만 켠다 —
+        ///   불투명한 255가 254가 되어 다 나타난 장이 정지 그림과 달라지지 않게(시그마 0의 gblur는 그림 그대로다). 그리는 구간 내내 0이면 넓히기만 한다.
+        /// </summary>
+        private static string BlurChain(ObjectMotion motion, double k, FrameRate rate, long offset, long frames, long length, int n)
+        {
+            if (motion.Blur == null || frames <= 0)
+                return "";
+            double Sigma(long frame) => Math.Round(Math.Max(0, Math.Min(1000, motion.Blur.Eval(frame) * k)), 2);
+            double widest = 0;
+            for (long f = 0; f < length; f++)
+                widest = Math.Max(widest, Sigma(f));
+            if (widest <= 0)
+                return "";
+            var margin = 2 * (int)Math.Ceiling(widest * 3 / 2);
+            var pad = string.Format(CultureInfo.InvariantCulture, ",pad=w=iw+{0}:h=ih+{0}:x={1}:y={1}:color=black@0", margin * 2, margin);
+            var values = new double[frames];
+            for (long i = 0; i < frames; i++)
+                values[i] = Sigma(offset + i);
+            if (values.Max() <= 0)
+                return pad;
+            var name = "gblur@bl" + n;
+            var commands = new StringBuilder();
+            var enable = new StringBuilder();
+            long run = -1;
+            for (long i = 0; i <= frames; i++)
+            {
+                if (i > 0 && i < frames && values[i] != values[i - 1])
+                {
+                    var value = N(values[i]);
+                    commands.Append(N((i - 0.5) / rate.Fps)).Append(' ').Append(name).Append(" sigma ").Append(value)
+                        .Append(", ").Append(name).Append(" sigmaV ").Append(value).Append(';');
+                }
+                // 흐린 장이 이어진 구간마다 between(장 사이 시각)
+                var blurred = i < frames && values[i] > 0;
+                if (blurred && run < 0)
+                    run = i;
+                if (!blurred && run >= 0)
+                {
+                    enable.Append(enable.Length > 0 ? "+" : "").Append("between(t,").Append(N((run - 0.5) / rate.Fps)).Append(',').Append(N((i - 0.5) / rate.Fps)).Append(')');
+                    run = -1;
+                }
+            }
+            var text = new StringBuilder(pad);
+            text.AppendFormat(CultureInfo.InvariantCulture, ",format=gbrap,premultiply=inplace=1:enable='{0}'", enable);
+            if (commands.Length > 0)
+            {
+                commands.Length--;
+                text.Append(",sendcmd=c='").Append(commands).Append('\'');
+            }
+            text.Append(',').Append(name).Append("=sigma=").Append(N(values[0])).Append(":sigmaV=").Append(N(values[0]));
+            text.AppendFormat(CultureInfo.InvariantCulture, ",unpremultiply=inplace=1:enable='{0}',format=rgba", enable);
+            return text.ToString();
         }
 
         /// <summary>크기(앞에 ","): 장마다 크기를 바꾼다(eval=frame) — 체인 맨 끝에만(뒤의 overlay는 장마다 그림 크기로 가운데를 맞춘다).</summary>

@@ -295,14 +295,18 @@ namespace VideoEditor.Core
         public List<(MotionExpr Visible, int Dx, int Dy)> Wipes { get; } = new List<(MotionExpr, int, int)>();
         /// <summary>크기가 0까지 가는지(확대·돌며 나타나기) — 0이면 그래프가 화면 밖으로 치운다(1픽셀 점이 남지 않게).</summary>
         public bool CanVanish { get; set; }
+        /// <summary>흐림(가우스 시그마, 프로젝트 픽셀 — 0이면 선명). 그래프가 장마다 값을 보낸다.</summary>
+        public MotionExpr Blur { get; set; }
 
         public bool IsEmpty
         {
-            get { return Scale == null && Rotation == null && Opacity == null && ShiftX == null && ShiftY == null && Fly.Count == 0 && Wipes.Count == 0; }
+            get { return Scale == null && Rotation == null && Opacity == null && ShiftX == null && ShiftY == null && Fly.Count == 0 && Wipes.Count == 0 && Blur == null; }
         }
     }
 
-    /// <summary>글자 단위 하나의 모습(출력 픽셀): 옮김·크기·회전(도, 단위 가운데 기준)·불투명도·닦아내기(보이는 비율과 쪽).</summary>
+    /// <summary>
+    /// 글자 단위 하나의 모습(출력 픽셀): 옮김·크기·회전(도, 단위 가운데 기준)·불투명도·닦아내기(보이는 비율과 쪽 — Split이면 가운데에서 그 축으로)·흐림(가우스 시그마).
+    /// </summary>
     public struct UnitPose
     {
         public double X;
@@ -313,15 +317,17 @@ namespace VideoEditor.Core
         public double Visible;
         public int WipeX;
         public int WipeY;
+        public bool Split;
+        public double Blur;
 
         public static UnitPose Rest { get { return new UnitPose { Scale = 1, Opacity = 1, Visible = 1 }; } }
 
         public bool IsRest
         {
-            get { return X == 0 && Y == 0 && Scale == 1 && Rotation == 0 && Opacity == 1 && Visible >= 1; }
+            get { return X == 0 && Y == 0 && Scale == 1 && Rotation == 0 && Opacity == 1 && Visible >= 1 && Blur == 0; }
         }
 
-        /// <summary>두 모습을 겹친다(옮김·회전은 더하고 크기·불투명도는 곱함, 닦아내기는 덜 보이는 쪽).</summary>
+        /// <summary>두 모습을 겹친다(옮김·회전·흐림은 더하고 크기·불투명도는 곱함, 닦아내기는 덜 보이는 쪽).</summary>
         public UnitPose Then(UnitPose other)
         {
             var wipe = other.Visible < Visible ? other : this;
@@ -334,7 +340,9 @@ namespace VideoEditor.Core
                 Opacity = Opacity * other.Opacity,
                 Visible = wipe.Visible,
                 WipeX = wipe.WipeX,
-                WipeY = wipe.WipeY
+                WipeY = wipe.WipeY,
+                Split = wipe.Split,
+                Blur = Blur + other.Blur
             };
         }
     }
@@ -345,6 +353,9 @@ namespace VideoEditor.Core
     /// </summary>
     public static class AnimationMotion
     {
+        /// <summary>커지며 돌기가 시작하는 크기(제자리의 몇 배).</summary>
+        public const double GrowTurnStart = 0.2;
+
         // ---------- 이징 ----------
 
         /// <summary>이징(p: 0~1 → 0~1). 서서히 시작 p², 서서히 끝 1 − (1 − p)², 둘 다 smoothstep(전환 효과의 이징과 같은 식), 튕김·탄성은 끝에서 튀거나 출렁인다.</summary>
@@ -500,6 +511,10 @@ namespace VideoEditor.Core
             {
                 opacity = opacity == null ? factor : opacity * factor;
             }
+            void Blur(MotionExpr sigma)
+            {
+                motion.Blur = motion.Blur == null ? sigma : motion.Blur + sigma;
+            }
             foreach (var animation in clip.Animations)
             {
                 var def = ClipAnimations.Def(animation.Effect);
@@ -548,6 +563,30 @@ namespace VideoEditor.Core
                         Scale(e);
                         Rotate((animation.Direction == AnimationDirection.Left ? 1 : -1) * animation.Amount * (1 - e));
                         motion.CanVanish = true;
+                        break;
+                    case AnimationEffect.Rise:
+                        // 거리(프로젝트 픽셀)만큼 아래에서
+                        shiftY = shiftY == null ? animation.Amount * (1 - e) : shiftY + animation.Amount * (1 - e);
+                        Fade(e);
+                        break;
+                    case AnimationEffect.GrowTurn:
+                        Scale(1 - (1 - GrowTurnStart) * (1 - e));
+                        Rotate((animation.Direction == AnimationDirection.Left ? 1 : -1) * animation.Amount * (1 - e));
+                        Fade(e);
+                        break;
+                    case AnimationEffect.Split:
+                    {
+                        // 가운데에서 열림 = 왼쪽부터 (1 + e) / 2 와 오른쪽부터 (1 + e) / 2 가 겹친 곳. 처음(e = 0)은 반씩이 맞닿아 한 줄이 남을 수 있어 0으로
+                        var half = MotionExpr.If(MotionExpr.Lte(e, 0), 0, (1 + e) / 2);
+                        var vertical = animation.Direction == AnimationDirection.Up || animation.Direction == AnimationDirection.Down;
+                        motion.Wipes.Add((half, vertical ? 0 : -1, vertical ? -1 : 0));
+                        motion.Wipes.Add((half, vertical ? 0 : 1, vertical ? 1 : 0));
+                        break;
+                    }
+                    case AnimationEffect.Unblur:
+                        Blur(animation.Amount * MotionExpr.Max(0, 1 - e));
+                        // 흐린 동안 먼저 보이기 시작한다(반쯤에 다 보임)
+                        Fade(MotionExpr.Min(1, 2 * e));
                         break;
                 }
             }
@@ -603,10 +642,11 @@ namespace VideoEditor.Core
         // ---------- 단어·글자별 ----------
 
         /// <summary>
-        /// 단위 하나의 나타나기 모습(p = 구간 진행 0~1, index/count = 단위 차례·수, size = 글자 크기(출력 픽셀) — 옮기는 거리의 기준).
+        /// 단위 하나의 나타나기 모습(p = 구간 진행 0~1, index/count = 단위 차례·수, size = 글자 크기(출력 픽셀) — 옮기는 거리의 기준,
+        /// pixel = 프로젝트 픽셀 하나의 출력 픽셀 — 정도가 픽셀인 효과(떠오르기 거리·흐림)가 한 번에 움직일 때와 같은 크기로).
         /// 단위마다 지연(%)만큼 늦게 시작하고 그 몫의 시간 동안 움직인다 — 마지막 단위도 구간 끝에 끝난다. 사라지기는 <see cref="OutPose"/>(시간을 거꾸로).
         /// </summary>
-        public static UnitPose InPose(ClipAnimation animation, double p, int index, int count, double size)
+        public static UnitPose InPose(ClipAnimation animation, double p, int index, int count, double size, double pixel = 1)
         {
             count = Math.Max(1, count);
             index = Math.Max(0, Math.Min(count - 1, index));
@@ -658,14 +698,37 @@ namespace VideoEditor.Core
                     pose.Opacity = Math.Min(1, q * 2);
                     break;
                 }
+                case AnimationEffect.Rise:
+                    // 거리(프로젝트 픽셀)만큼 아래에서
+                    pose.Y = (1 - e) * animation.Amount * pixel;
+                    pose.Opacity = Math.Max(0, Math.Min(1, e));
+                    break;
+                case AnimationEffect.GrowTurn:
+                    pose.Scale = 1 - (1 - GrowTurnStart) * (1 - e);
+                    pose.Rotation = (animation.Direction == AnimationDirection.Left ? 1 : -1) * animation.Amount * (1 - e);
+                    pose.Opacity = Math.Max(0, Math.Min(1, e));
+                    break;
+                case AnimationEffect.Split:
+                {
+                    var vertical = animation.Direction == AnimationDirection.Up || animation.Direction == AnimationDirection.Down;
+                    pose.Visible = Math.Max(0, e);
+                    pose.Split = true;
+                    pose.WipeX = vertical ? 0 : 1;
+                    pose.WipeY = vertical ? 1 : 0;
+                    break;
+                }
+                case AnimationEffect.Unblur:
+                    pose.Blur = animation.Amount * Math.Max(0, 1 - e) * pixel;
+                    pose.Opacity = Math.Max(0, Math.Min(1, 2 * e));
+                    break;
             }
             return pose;
         }
 
         /// <summary>사라지기 = 나타나기를 거꾸로(p = 구간 진행 0~1) — 타자기는 뒤 글자부터 지워진다.</summary>
-        public static UnitPose OutPose(ClipAnimation animation, double p, int index, int count, double size)
+        public static UnitPose OutPose(ClipAnimation animation, double p, int index, int count, double size, double pixel = 1)
         {
-            return InPose(animation, 1 - p, index, count, size);
+            return InPose(animation, 1 - p, index, count, size, pixel);
         }
 
         /// <summary>단위 차례로 정해지는 0~1 값(흩어지는 방향·거리·회전) — 어느 PC에서나 같다.</summary>

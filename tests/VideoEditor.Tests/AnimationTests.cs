@@ -263,11 +263,28 @@ namespace VideoEditor.Tests
             Assert.Equal((6L, 12L, 60L), AnimationMotion.EmphasisWindow(clip, pulse));
         }
 
-        /// <summary>시간 τ의 모습: (크기, 회전, 불투명도, 흔들림 x, 날아오기 무게 합, 닦아내기 보이는 비율 곱).</summary>
-        private static (double Scale, double Rotation, double Opacity, double ShiftX, double Fly, double Visible) Pose(ObjectMotion motion, double time)
+        /// <summary>
+        /// 시간 τ의 모습: (크기, 회전, 불투명도, 흔들림 x, 날아오기 무게 합, 닦아내기로 보이는 넓이 비율, 흐림, 옮김 y).
+        /// 닦아내기는 축마다 보이는 구간(왼쪽·위부터 v = [0, v], 오른쪽·아래부터 v = [1 − v, 1])을 겹친 길이의 곱 — 가운데서 갈라지기는 양쪽 닦아내기가 겹친 곳.
+        /// </summary>
+        private static (double Scale, double Rotation, double Opacity, double ShiftX, double Fly, double Visible, double Blur, double ShiftY) Pose(ObjectMotion motion, double time)
         {
+            double left = 0, right = 1, top = 0, bottom = 1;
+            foreach (var (visible, dx, dy) in motion.Wipes)
+            {
+                var v = visible.Eval(time);
+                if (dx < 0)
+                    right = Math.Min(right, v);
+                if (dx > 0)
+                    left = Math.Max(left, 1 - v);
+                if (dy < 0)
+                    bottom = Math.Min(bottom, v);
+                if (dy > 0)
+                    top = Math.Max(top, 1 - v);
+            }
             return (motion.Scale?.Eval(time) ?? 1, motion.Rotation?.Eval(time) ?? 0, motion.Opacity?.Eval(time) ?? 1, motion.ShiftX?.Eval(time) ?? 0,
-                motion.Fly.Sum(f => f.Weight.Eval(time)), motion.Wipes.Aggregate(1.0, (v, w) => v * w.Visible.Eval(time)));
+                motion.Fly.Sum(f => f.Weight.Eval(time)), Math.Max(0, right - left) * Math.Max(0, bottom - top),
+                motion.Blur?.Eval(time) ?? 0, motion.ShiftY?.Eval(time) ?? 0);
         }
 
         [Fact]
@@ -287,7 +304,7 @@ namespace VideoEditor.Tests
                     text.Animations = new List<ClipAnimation> { appear };
                     var motion = AnimationMotion.ObjectMotion(text, false);
                     Assert.False(motion.IsEmpty, def.Name);
-                    var rest = (1.0, 0.0, 1.0, 0.0, 0.0, 1.0);
+                    var rest = (1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
                     Assert.Equal(rest, Pose(motion, 12));
                     Assert.Equal(rest, Pose(motion, 40));
                     var start = Pose(motion, 0);
@@ -335,6 +352,72 @@ namespace VideoEditor.Tests
             Assert.Equal(1.5, grow.Scale.Eval(50), 9);
             var fade = With(AnimationEffect.Transparency, 1, 40);
             Assert.Equal(0.4, fade.Opacity.Eval(18), 9);
+        }
+
+        [Fact]
+        public void NewEntrances_RiseGrowTurnSplitUnblur_Midway_AndReversedOut()
+        {
+            var (_, clip) = VideoProject();
+            ObjectMotion With(AnimationEffect effect, AnimationKind kind, double amount, AnimationDirection direction = AnimationDirection.Left)
+            {
+                var animation = Make(effect, kind, 10);
+                animation.Ease = AnimationEase.Linear;
+                animation.Amount = amount;
+                animation.Direction = direction;
+                clip.Animations = new List<ClipAnimation> { animation };
+                return AnimationMotion.ObjectMotion(clip, false);
+            }
+            // 떠오르기: 40px 아래에서 서서히 — 반쯤 20px·반투명, 흐려지며 가라앉기는 끝에 40px 아래·투명(옮김은 프로젝트 픽셀)
+            var rise = With(AnimationEffect.Rise, AnimationKind.In, 40);
+            Assert.Null(rise.ShiftX);
+            Assert.Equal(20, rise.ShiftY.Eval(5), 9);
+            Assert.Equal(0.5, rise.Opacity.Eval(5), 9);
+            var sink = With(AnimationEffect.Rise, AnimationKind.Out, 40);
+            Assert.Equal((40.0, 0.0), (sink.ShiftY.Eval(60), sink.Opacity.Eval(60)));
+            Assert.Equal("흐려지며 가라앉기", ClipAnimations.Def(AnimationEffect.Rise).DisplayName(AnimationKind.Out));
+            // 커지며 돌기(시계 방향): 20% 크기·90° 덜 돈 자리에서
+            var turn = With(AnimationEffect.GrowTurn, AnimationKind.In, 90, AnimationDirection.Right);
+            Assert.Equal((0.2, -90.0, 0.0), (Math.Round(turn.Scale.Eval(0), 9), turn.Rotation.Eval(0), turn.Opacity.Eval(0)));
+            Assert.Equal(0.6, turn.Scale.Eval(5), 9);
+            // 가운데서 갈라지기: 처음엔 아무것도(반씩 맞닿은 한 줄도 없이), 반쯤 가운데 절반 — 좌우로는 가로 닦아내기 둘, 위아래로는 세로 둘
+            var split = With(AnimationEffect.Split, AnimationKind.In, 0);
+            Assert.Equal(new[] { -1, 1 }, split.Wipes.Select(w => w.Dx));
+            Assert.Equal(0, Pose(split, 0).Visible);
+            Assert.Equal(0, split.Wipes[0].Visible.Eval(0));
+            Assert.Equal(0.5, Pose(split, 5).Visible, 9);
+            Assert.Equal(0.75, split.Wipes[0].Visible.Eval(5), 9);
+            var closing = With(AnimationEffect.Split, AnimationKind.Out, 0, AnimationDirection.Up);
+            Assert.Equal(new[] { -1, 1 }, closing.Wipes.Select(w => w.Dy));
+            Assert.Equal((1.0, 0.0), (Pose(closing, 50).Visible, Pose(closing, 60).Visible));
+            // 흐림에서 선명하게: 16px에서 0으로, 반쯤에 이미 다 보인다
+            var unblur = With(AnimationEffect.Unblur, AnimationKind.In, 16);
+            Assert.Equal((16.0, 8.0, 0.0), (unblur.Blur.Eval(0), unblur.Blur.Eval(5), unblur.Blur.Eval(10)));
+            Assert.Equal((0.0, 0.6, 1.0), (unblur.Opacity.Eval(0), Math.Round(unblur.Opacity.Eval(3), 9), unblur.Opacity.Eval(5)));
+        }
+
+        [Fact]
+        public void Graph_RiseUsesOwnHeight_UnblurSendsSigmaOnlyWhileBlurred()
+        {
+            var (project, video) = VideoProject();
+            var rise = Make(AnimationEffect.Rise, AnimationKind.In);
+            var unblur = Make(AnimationEffect.Unblur, AnimationKind.Out);
+            unblur.Ease = AnimationEase.Linear;
+            unblur.Amount = 16;
+            video.Animations = new List<ClipAnimation> { rise, unblur };
+            var filter = RenderGraph.Build(project, Options()).Filter;
+            // 떠오르기: overlay y에 거리(프로젝트 픽셀 × 출력 배율 1)
+            Assert.Contains("y='(main_h-overlay_h)/2+0+(60*(1-", filter);
+            // 흐림: 사라지기 구간(50~59장, 시그마 0 → 14.4)에서만 — 번질 자리 14.4 × 3을 짝수로 올린 44, 알파 곱하기는 흐린 장(51~59)에서만
+            Assert.Contains(",pad=w=iw+88:h=ih+88:x=44:y=44:color=black@0,format=gbrap,premultiply=inplace=1:enable='between(t,1.683333,1.983333)'", filter);
+            var commands = Regex.Match(filter, "sendcmd=c='([^']*)'").Groups[1].Value.Split(';');
+            Assert.Equal("1.683333 gblur@bl0 sigma 1.6, gblur@bl0 sigmaV 1.6", commands[0]);
+            Assert.Equal("1.95 gblur@bl0 sigma 14.4, gblur@bl0 sigmaV 14.4", commands[^1]);
+            Assert.Contains("gblur@bl0=sigma=0:sigmaV=0,unpremultiply=inplace=1:enable='between(t,1.683333,1.983333)',format=rgba", filter);
+            // 흐리지 않는 구간만 그리면 넓히기만 한다(재생 헤드 한 장도 내보내기와 같은 자리에)
+            var rest = RenderGraph.Build(project, Options(null, 20, 40)).Filter;
+            Assert.DoesNotContain("gblur", rest);
+            Assert.Contains(",pad=w=iw+88:h=ih+88:x=44:y=44:color=black@0,", rest);
+            Assert.Contains("gblur@bl0=sigma=8:sigmaV=8,", RenderGraph.Build(project, Options(null, 55, 56)).Filter);
         }
 
         // ---------- 글자 나누기·글자별 모습 ----------
@@ -394,6 +477,40 @@ namespace VideoEditor.Tests
             Assert.All(frame.Poses(text.Text, 50, 20), p => Assert.True(p.IsRest));
         }
 
+        [Fact]
+        public void UnitPoses_SplitOpensFromTheMiddle_UnblurSharpens_RiseLifts()
+        {
+            var (project, text) = TextProject("가나");
+            ClipAnimation Unit(AnimationEffect effect, AnimationKind kind, AnimationUnit unit, double amount)
+            {
+                var animation = Make(effect, kind, 10, text);
+                animation.Unit = unit;
+                animation.Stagger = 0;
+                animation.Ease = AnimationEase.Linear;
+                animation.Amount = amount;
+                text.Animations = new List<ClipAnimation> { animation };
+                return animation;
+            }
+            Unit(AnimationEffect.Split, AnimationKind.In, AnimationUnit.Character, 0);
+            var frame = TextAnimationFrame.Of(text, project.Rate);
+            Assert.All(frame.Poses(text.Text, 40, 0), p => Assert.Equal(0, p.Visible));
+            Assert.All(frame.Poses(text.Text, 40, 5), p => Assert.Equal((true, 0.5, 1, 0), (p.Split, p.Visible, p.WipeX, p.WipeY)));
+            Assert.All(frame.Poses(text.Text, 40, 10), p => Assert.True(p.IsRest));
+
+            // 흐릿하게 사라지기(단어별): 사라지기 구간 반쯤(55장)에 시그마 10 — 흐림은 프로젝트 픽셀(그리개가 효과 배율을 곱한다)
+            Unit(AnimationEffect.Unblur, AnimationKind.Out, AnimationUnit.Word, 20);
+            frame = TextAnimationFrame.Of(text, project.Rate);
+            Assert.All(frame.Poses(text.Text, 40, 55), p => Assert.Equal((10.0, 1.0), (p.Blur, p.Opacity)));
+            Assert.All(frame.Poses(text.Text, 40, 49), p => Assert.True(p.IsRest));
+            Assert.False(new UnitPose { Scale = 1, Opacity = 1, Visible = 1, Blur = 0.5 }.IsRest);
+
+            // 떠오르기: 50px(프로젝트 픽셀) 아래에서 — 출력이 두 배면 100픽셀
+            Unit(AnimationEffect.Rise, AnimationKind.In, AnimationUnit.Character, 50);
+            frame = TextAnimationFrame.Of(text, project.Rate);
+            Assert.All(frame.Poses(text.Text, 40, 0), p => Assert.Equal((50.0, 0.0), (p.Y, p.Opacity)));
+            Assert.All(frame.Poses(text.Text, 40, 0, 2), p => Assert.Equal(100.0, p.Y));
+        }
+
         // ---------- 렌더 그래프 ----------
 
         [Fact]
@@ -426,11 +543,14 @@ namespace VideoEditor.Tests
             fly.Delay = 15;
             var transparency = Make(AnimationEffect.Transparency, AnimationKind.Emphasis);
             transparency.Delay = 30;
+            var rotate = Make(AnimationEffect.Rotate, AnimationKind.Emphasis);
+            rotate.Delay = 20;
             video.Animations = new List<ClipAnimation>
             {
-                fly, Make(AnimationEffect.Wipe, AnimationKind.Out), Make(AnimationEffect.Pulse, AnimationKind.Emphasis),
-                Make(AnimationEffect.Rotate, AnimationKind.Emphasis), transparency
+                fly, Make(AnimationEffect.Wipe, AnimationKind.Out), Make(AnimationEffect.Pulse, AnimationKind.Emphasis), rotate, transparency
             };
+            // 다 돈 뒤(30장부터 370°)만 그리면 각도 하나로
+            Assert.Contains(",pad=w=iw+4:h=ih+4:x=2:y=2:color=black@0,rotate=a='370*PI/180':c=black@0:", RenderGraph.Build(project, Options(null, 30, 60)).Filter);
             var filter = RenderGraph.Build(project, Options(null, 15, 60)).Filter;
             // 날아오기(아래에서): 화면 밖은 main_h, 시각은 장 번호 — 그리는 구간 시작이 클립 안 15장
             Assert.Contains("*(main_h-((main_h-overlay_h)/2+0))", filter);
@@ -438,7 +558,7 @@ namespace VideoEditor.Tests
             // 닦아내기(왼쪽): 두 배로 넓혀 자른다
             Assert.Contains(",pad=w=iw*2:h=ih:x=iw:y=0:color=black@0,crop=w=iw/2:h=ih:x='round(iw/2*", filter);
             Assert.Contains(",rotate=a='(10+", filter);
-            Assert.Contains(":c=none:ow='hypot(iw,ih)':oh=ow", filter);
+            Assert.Contains(":c=black@0:ow='iw+4*ceil((hypot(iw,ih)-iw)/4)':oh='ih+4*ceil((hypot(iw,ih)-ih)/4)'", filter);
             Assert.Contains(",sendcmd=c='", filter);
             Assert.Contains("colorchannelmixer@an0=aa=0.8", filter);
             Assert.Contains(":eval=frame", filter);

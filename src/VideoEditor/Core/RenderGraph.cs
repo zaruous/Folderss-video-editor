@@ -249,10 +249,13 @@ namespace VideoEditor.Core
                     var motion = Motion(project, clip, options);
                     var local = TimeText(rate, segStart - clip.Start);
                     if (motion != null)
+                    {
                         chain.Append(WipeChain(motion, local));
+                        chain.Append(LookChain(motion, k / shrink, rate, segStart - clip.Start, segEnd - segStart, clip.Duration, n));
+                    }
                     if (motion?.Rotation != null)
                     {
-                        chain.Append(RotateChain(motion, clip.Rotation, local));
+                        chain.Append(RotateChain(motion, clip.Rotation, local, segStart - clip.Start, segEnd - segStart));
                     }
                     else if (Math.Abs(clip.Rotation) > 0.01)
                     {
