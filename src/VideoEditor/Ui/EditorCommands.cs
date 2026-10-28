@@ -185,6 +185,12 @@ namespace VideoEditor.Ui
             }, null, mergeKey);
         }
 
+        /// <summary>여러 클립을 한 번에 고친다(실행 취소 한 단계 — 미리 보기에서 함께 옮기기). 없어진 클립은 건너뛴다. 거부되면 까닭을 상태 줄에 알리고 false.</summary>
+        public bool EditClips(IReadOnlyList<string> ids, Action<Project, List<Clip>> change, string mergeKey)
+        {
+            return Run(p => change(p, ids.Select(p.FindClip).Where(c => c != null).ToList()), null, mergeKey);
+        }
+
         public void SetSpeed(string id, double speed)
         {
             Run(p => TimelineEdits.SetSpeed(p, p.FindClip(id), speed), "속도 ×" + UiKit.Number(speed));

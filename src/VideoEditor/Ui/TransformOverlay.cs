@@ -17,7 +17,7 @@ namespace VideoEditor.Ui
     /// 틀 밖에서 보이는 클립을 누르면 그 클립을 고른다(맨 위 것, 빈 곳이면 고르기는 그대로). Esc는 끌기 취소.
     /// 끄는 동안은 틀만 움직이고, 놓을 때 한 번 편집한다(실행 취소 한 번). 미리 보기를 누른 뒤에는 화살표로 1px(Shift 10px)씩 옮긴다.
     /// </summary>
-    internal sealed class TransformOverlay : Canvas
+    internal sealed partial class TransformOverlay : Canvas
     {
         private const double Handle = 10;
         private const double SnapPixels = 8;
@@ -92,6 +92,8 @@ namespace VideoEditor.Ui
             {
                 _clip = null;
                 Show(false);
+                // 여럿 골랐으면 고른 클립마다 점선 틀(TransformOverlay.Group.cs)
+                RefreshGroup();
                 return;
             }
             _clip = clip;
@@ -102,6 +104,7 @@ namespace VideoEditor.Ui
             _boxHeight = clip.TextBoxHeight;
             Show(true);
             Layout();
+            RefreshGroup();
         }
 
         /// <summary>틀을 그릴 수 있는 클립: 재생 헤드에 보이는 화면 클립이고 트랙이 동영상 트랙(숨김·잠금·자막 트랙 아님 — 자막 큐는 libass가 그린다).</summary>
@@ -201,6 +204,8 @@ namespace VideoEditor.Ui
                 SetLeft(_handles[i], points[i].X - Handle / 2);
                 SetTop(_handles[i], points[i].Y - Handle / 2);
             }
+            if (_groupMoving)
+                LayoutGroup();
         }
 
         /// <summary>점이 무엇 위에 있는지: 0~3 모서리 손잡이, 5~8 옆 손잡이(글자만), 4 틀 안, -1 밖.</summary>
@@ -254,6 +259,13 @@ namespace VideoEditor.Ui
             base.OnMouseLeftButtonDown(e);
             // 미리 보기를 누르면 화살표가 고른 클립을 옮긴다(재생 헤드 이동 대신)
             Focus();
+            // Ctrl+누르기: 고르기에 더하거나 뺀다(여럿 고르면 함께 옮김)
+            if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+            {
+                if (PointerToggle(e.GetPosition(this)))
+                    e.Handled = true;
+                return;
+            }
             if (e.ClickCount == 2 && PointerDoubleClick(e.GetPosition(this)))
             {
                 e.Handled = true;
@@ -280,7 +292,8 @@ namespace VideoEditor.Ui
         {
             if (_playing())
                 return false;
-            var hit = Hit(point);
+            // 여럿 골랐으면 누른 클립을 앞세워 함께 옮긴다
+            var hit = GroupLead(point) ? Inside : Hit(point);
             // 틀 안이라도 그 자리에 고른 클립보다 위에 보이는 클립이 있으면 그것을 고른다 — 화면 전체 배경을 고른 뒤에도 위의 글자를 누를 수 있게
             if (hit == Inside && Pick(point) is Clip above && above.Id != _clip.Id)
                 hit = -1;
@@ -333,7 +346,7 @@ namespace VideoEditor.Ui
         {
             if (_drag == 0)
             {
-                Cursor = CursorFor(Hit(point));
+                Cursor = CursorFor(Hit(point)) ?? GroupHoverCursor(point);
                 return;
             }
             if (point != _dragFrom)
@@ -366,7 +379,7 @@ namespace VideoEditor.Ui
                     _boxHeight = moved.Height;
             }
             Layout();
-            _commands.Status(_drag == 1 ? "위치 X " + Math.Round(_x) + " · Y " + Math.Round(_y) + " (놓으면 바뀝니다, Esc는 취소)"
+            _commands.Status(_groupMoving ? GroupStatus() : _drag == 1 ? "위치 X " + Math.Round(_x) + " · Y " + Math.Round(_y) + " (놓으면 바뀝니다, Esc는 취소)"
                 : _drag == 2 ? "크기 " + Math.Round(_scale * 100) + "% (놓으면 바뀝니다, Esc는 취소)"
                 : (_edge == BoxEdge.Left || _edge == BoxEdge.Right ? "상자 너비 " + Math.Round(_boxWidth) : "상자 높이 " + Math.Round(_boxHeight)) + "px (놓으면 바뀝니다, Esc는 취소)");
         }
@@ -381,8 +394,14 @@ namespace VideoEditor.Ui
             var horizontal = _drag == 3 && (_edge == BoxEdge.Left || _edge == BoxEdge.Right);
             var vertical = _drag == 3 && !horizontal;
             var (id, x, y, scale, boxWidth, boxHeight) = (_clip.Id, _x, _y, _scale, _boxWidth, _boxHeight);
+            // 여럿을 함께 끌던 중이면 모두 같은 거리만큼(편집 한 번)
+            var group = TakeGroupMove(moved);
             EndDrag();
-            if (moved)
+            if (group != null)
+            {
+                group();
+            }
+            else if (moved)
             {
                 _commands.EditClip(id, (p, c) =>
                 {
@@ -429,6 +448,9 @@ namespace VideoEditor.Ui
         /// </summary>
         public bool Nudge(int dx, int dy, bool large, bool repeat)
         {
+            // 여럿 골랐으면 모두 함께
+            if (_clip == null && _drag == 0 && !_playing() && GroupNudge(dx, dy, large, repeat))
+                return true;
             if (_clip == null || _drag != 0 || _playing())
                 return false;
             var id = _clip.Id;
