@@ -133,19 +133,27 @@ namespace VideoEditor.Core
                 // 같은 트랙은 늦게 시작한 것이 위
                 foreach (var clip in track.Clips.Where(c => c.IsVisual && c.Contains(frame)).OrderByDescending(c => c.Start))
                 {
-                    var rect = Content(project, clip);
-                    if (clip.Kind == ClipKind.Art && clip.Art != null)
-                        rect = TextBox(project, clip, clip.Art.Width, clip.Art.Height);
-                    else if (clip.Kind == ClipKind.Text)
-                    {
-                        var box = textBox(clip);
-                        rect = TextBox(project, clip, box.Width, box.Height);
-                    }
-                    if (Contains(rect, x, y))
+                    if (Contains(Area(project, clip, textBox), x, y))
                         return clip;
                 }
             }
             return null;
+        }
+
+        /// <summary>
+        /// 클립이 보이는 영역(회전 전 가운데·크기, 회전): 동영상·사진은 <see cref="Content"/>, 글자는 상자(<see cref="TextBox"/> — textBox가 크기 배율 전 상자 크기를 잰다),
+        /// 아트는 모양 상자. 고르기(<see cref="HitTest"/>)와 붙기(<see cref="PreviewSnap"/>)가 같은 영역을 쓴다.
+        /// </summary>
+        public static (double CenterX, double CenterY, double Width, double Height, double Rotation) Area(Project project, Clip clip, Func<Clip, (double Width, double Height)> textBox)
+        {
+            if (clip.Kind == ClipKind.Art && clip.Art != null)
+                return TextBox(project, clip, clip.Art.Width, clip.Art.Height);
+            if (clip.Kind == ClipKind.Text)
+            {
+                var box = textBox(clip);
+                return TextBox(project, clip, box.Width, box.Height);
+            }
+            return Content(project, clip);
         }
     }
 }

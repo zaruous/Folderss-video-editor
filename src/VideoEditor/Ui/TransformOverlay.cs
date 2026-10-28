@@ -13,7 +13,7 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// 미리 보기 위의 틀: 고른 동영상·사진·글자 클립 하나가 재생 헤드에 보이면 그 영역(글자는 글자 상자)에 틀과 손잡이를 그린다.
-    /// 안쪽을 끌면 옮기고(X·Y, 화면 가운데 가까이 가면 붙음) 모서리를 끌면 가운데를 두고 크기를 바꾼다(크기 %).
+    /// 안쪽을 끌면 옮기고(X·Y, 화면 가운데·가장자리와 다른 클립의 가장자리·가운데에 붙음 — Alt는 붙지 않음) 모서리를 끌면 가운데를 두고 크기를 바꾼다(크기 %).
     /// 글자는 옆 손잡이가 넷 더 있다: 왼쪽·오른쪽은 상자 너비, 위·아래는 상자 높이 — 반대쪽 옆은 그대로 두고, 두 번 누르면 자동(0)으로.
     /// 아트 요소는 모양 손잡이(노란 둥근 점 — <see cref="ArtHandles"/>)가 더 있다: 모서리 반경, 선·화살표 양 끝(반대쪽 끝은 그대로), 별 안쪽, 말풍선 꼬리 끝.
     /// 틀 위쪽의 둥근 점을 끌면 돌린다(15° 단위, Shift는 자유롭게 — <c>TransformOverlay.Rotate.cs</c>).
@@ -411,6 +411,7 @@ namespace VideoEditor.Ui
             _drag = hit == RotationHit ? RotateDrag : hit == Inside ? 1 : hit < 4 ? 2 : hit >= FirstShape ? 4 : 3;
             _dragFrom = point;
             _pointerMoved = false;
+            _snapLines = null;
             _startX = _x;
             _startY = _y;
             _startScale = _scale;
@@ -461,10 +462,8 @@ namespace VideoEditor.Ui
             var (zoom, _, _) = Screen();
             if (_drag == 1)
             {
-                // 화면 가운데 가까이 가면 붙는다(가로·세로 따로)
-                _x = ClipLayout.Snap(_startX + (point.X - _dragFrom.X) / zoom, SnapPixels / zoom);
-                _y = ClipLayout.Snap(_startY + (point.Y - _dragFrom.Y) / zoom, SnapPixels / zoom);
-                ShowGuides(_x == 0, _y == 0);
+                // 화면 가운데·가장자리, 다른 클립의 가장자리·가운데 가까이 가면 붙는다(가로·세로 따로, Alt는 붙지 않음 — TransformOverlay.Snap.cs)
+                SnapMove(_startX + (point.X - _dragFrom.X) / zoom, _startY + (point.Y - _dragFrom.Y) / zoom);
             }
             else if (_drag == 2)
             {
