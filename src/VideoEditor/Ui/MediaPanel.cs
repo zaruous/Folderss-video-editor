@@ -202,8 +202,10 @@ namespace VideoEditor.Ui
             // 사운드 분리: 소리가 있는 동영상에서만
             if (selected.Any(ClipLinks.CanSplit))
                 menu.Items.Add(Item("사운드 분리해서 배치", () => _commands.PlaceSoundSplit(selected)));
-            if (selected.Length == 1 && ClipLinks.CanSplit(selected[0]))
-                menu.Items.Add(Item("사운드를 파일로 저장…", () => _ = _commands.SaveSound(selected[0])));
+            // 사운드를 파일로 저장: 소리가 있는 동영상·오디오 파일(여럿이면 고른 폴더에 하나씩 — 소리가 없는 것은 건너뜀)
+            var sounds = selected.Count(SoundExtract.HasSound);
+            if (sounds > 0)
+                menu.Items.Add(Item(sounds == 1 ? "사운드를 파일로 저장…" : "사운드를 파일로 저장… (" + sounds + "개)", () => _ = _commands.SaveSounds(selected)));
             // 인물 마스크: 동영상·사진 하나
             if (selected.Length == 1 && (selected[0].Kind == MediaKind.Video || selected[0].Kind == MediaKind.Image))
                 menu.Items.Add(Item("인물 마스크 만들기", () => _ = _commands.BuildPersonMaskFor(selected[0])));

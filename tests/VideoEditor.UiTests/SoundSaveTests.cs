@@ -13,7 +13,7 @@ using static VideoEditor.UiTests.EditorTestKit;
 
 namespace VideoEditor.UiTests
 {
-    /// <summary>사운드를 파일로 저장(#34): 진행 창과 취소.</summary>
+    /// <summary>사운드를 파일로 저장(#34): 진행 창과 취소, 미디어 패널에서 여러 개·오디오 파일.</summary>
     public class SoundSaveTests
     {
         private readonly ITestOutputHelper _out;
@@ -44,6 +44,59 @@ namespace VideoEditor.UiTests
         private static string Codec(string path)
         {
             return RunTool("ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", path).Trim();
+        }
+
+        /// <summary>
+        /// 미디어 패널에서 여럿(#34): 동영상·오디오 파일·사진을 함께 고르면 [사운드를 파일로 저장… (2개)] — 폴더를 고르면 "원본 이름 사운드.확장자"로
+        /// 하나씩 저장하고(있는 파일은 덮지 않고 " (2)"), 사진은 건너뛴다. 저장한 파일은 미디어에, 상태 줄에 개수와 건너뛴 수.
+        /// </summary>
+        [EditorFact]
+        public async Task SaveSounds_SeveralFromMediaPanel_AudioFileToo_UniqueNames()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                foreach (var name in new[] { "testsrc.mp4", "tone.wav", "red.png" })
+                    await Import(ui, window, Path.Combine(MediaFolder, name));
+                var folder = Path.Combine(plugin.Root, "sounds-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+                Directory.CreateDirectory(folder);
+                // 같은 이름이 이미 있으면 덮지 않는다
+                File.WriteAllText(Path.Combine(folder, "testsrc 사운드.m4a"), "있던 파일");
+                ui.Run(() =>
+                {
+                    var list = Ui.ById<ListBox>(window, "MediaList");
+                    // 사진 하나만이면 사운드 항목이 없고, 오디오 파일 하나면 있다
+                    list.SelectedItem = MediaItem(window, "red.png");
+                    Assert.DoesNotContain(Ui.ContextMenu(list, null), n => n.StartsWith("사운드를 파일로 저장", StringComparison.Ordinal));
+                    list.SelectedItem = MediaItem(window, "tone.wav");
+                    Assert.Contains("사운드를 파일로 저장…", Ui.ContextMenu(list, null));
+                    list.SelectAll();
+                    Assert.Contains("사운드를 파일로 저장… (2개)", Ui.ContextMenu(list, null));
+                });
+                ui.Post(() => Ui.ContextMenu(Ui.ById<ListBox>(window, "MediaList"), "사운드를 파일로 저장… (2개)"));
+                // 폴더 고르기(Windows 폴더 대화상자 — 폴더 칸에 경로를 넣고 [폴더 선택])
+                var title = await NativeDialogs.Open(ui, folder, Wait);
+                _out.WriteLine("폴더 창: " + title);
+                await ui.WaitUntil(() => MediaItem(window, "testsrc 사운드 (2).m4a") != null && MediaItem(window, "tone 사운드.wav") != null, Wait, "저장한 둘이 미디어에");
+                var status = ui.Run(() => Status(window));
+                _out.WriteLine(status);
+                Assert.StartsWith("사운드 2개를 저장하고 미디어에 더했습니다", status);
+                Assert.Contains("소리가 없는 1개는 건너뜀", status);
+                Assert.Equal("있던 파일", File.ReadAllText(Path.Combine(folder, "testsrc 사운드.m4a")));
+                Assert.Equal("aac", Codec(Path.Combine(folder, "testsrc 사운드 (2).m4a")));
+                Assert.Equal("pcm_s16le", Codec(Path.Combine(folder, "tone 사운드.wav")));
+                Assert.InRange(Duration(Path.Combine(folder, "tone 사운드.wav")), 3.9, 4.1);
+                // 임시 파일이 남지 않는다
+                Assert.Empty(Directory.GetFiles(folder, "*.part-*"));
+                Assert.Null(ui.Run(Progress));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
         }
 
         /// <summary>

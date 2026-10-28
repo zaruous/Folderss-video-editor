@@ -595,6 +595,36 @@ namespace VideoEditor.Core
             }
         }
 
+        /// <summary>미디어 패널에서 사운드를 파일로 저장할 수 있는 미디어: 소리가 있는 동영상·오디오 파일(사진·소리 없는 동영상은 아님).</summary>
+        public static bool HasSound(MediaInfo media)
+        {
+            return media != null && media.HasAudio && (media.Kind == MediaKind.Video || media.Kind == MediaKind.Audio);
+        }
+
+        /// <summary>미디어 패널에서 저장할 파일 이름: "원본 이름 사운드" + 코덱에 맞는 확장자(<see cref="ExtensionFor"/>).</summary>
+        public static string FileName(string source, string codec)
+        {
+            var name = System.IO.Path.GetFileNameWithoutExtension(source ?? "");
+            return (string.IsNullOrWhiteSpace(name) ? "사운드" : name + " 사운드") + ExtensionFor(codec);
+        }
+
+        /// <summary>
+        /// 여러 개를 한 폴더에 저장할 때 겹치지 않는 이름: taken(이미 있는 파일이거나 이번에 쓸 이름 — 대소문자 무시는 부르는 쪽이)이면 "이름 (2).확장자", "이름 (3).확장자"…
+        /// </summary>
+        public static string Unique(string fileName, Func<string, bool> taken)
+        {
+            if (!taken(fileName))
+                return fileName;
+            var stem = System.IO.Path.GetFileNameWithoutExtension(fileName);
+            var extension = System.IO.Path.GetExtension(fileName);
+            for (var n = 2; ; n++)
+            {
+                var candidate = stem + " (" + n.ToString(CultureInfo.InvariantCulture) + ")" + extension;
+                if (!taken(candidate))
+                    return candidate;
+            }
+        }
+
         /// <summary>
         /// 진행률의 분모 — 저장할 소리의 길이(출력 초): (seconds가 있으면 seconds, 없으면 원본 길이 − from) ÷ 속도. 모르면 0(진행률 없이 돈다).
         /// </summary>

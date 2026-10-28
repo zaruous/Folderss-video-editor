@@ -11,7 +11,7 @@ using Xunit.Abstractions;
 
 namespace VideoEditor.Tests
 {
-    /// <summary>사운드를 파일로 저장 — 진행률·취소(#34).</summary>
+    /// <summary>사운드를 파일로 저장 — 진행률·취소, 미디어 패널에서 여러 개·오디오 파일(#34).</summary>
     public class SoundSaveTests
     {
         private readonly ITestOutputHelper _out;
@@ -22,6 +22,34 @@ namespace VideoEditor.Tests
         }
 
         // ---------- Core ----------
+
+        [Fact]
+        public void HasSound_VideoWithSoundAndAudioFiles()
+        {
+            Assert.True(SoundExtract.HasSound(TestProjects.Video()));
+            Assert.True(SoundExtract.HasSound(TestProjects.Audio()));
+            Assert.False(SoundExtract.HasSound(TestProjects.Video(audio: false)));
+            Assert.False(SoundExtract.HasSound(TestProjects.Image()));
+            Assert.False(SoundExtract.HasSound(null));
+        }
+
+        [Fact]
+        public void FileName_IsSourceNamePlusCodecExtension()
+        {
+            Assert.Equal("여행 사운드.m4a", SoundExtract.FileName(@"C:\영상\여행.mp4", "aac"));
+            Assert.Equal("노래 사운드.mp3", SoundExtract.FileName(@"C:\음악\노래.mp3", "mp3"));
+            Assert.Equal("녹음 사운드.wav", SoundExtract.FileName("녹음.wav", "pcm_s16le"));
+            Assert.Equal("사운드.mka", SoundExtract.FileName("", null));
+        }
+
+        [Fact]
+        public void Unique_AddsANumberWhileTaken()
+        {
+            var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "a 사운드.m4a", "A 사운드 (2).M4A" };
+            Assert.Equal("a 사운드 (3).m4a", SoundExtract.Unique("a 사운드.m4a", taken.Contains));
+            Assert.Equal("b 사운드.m4a", SoundExtract.Unique("b 사운드.m4a", taken.Contains));
+            Assert.Equal("c (2)", SoundExtract.Unique("c", name => name == "c"));
+        }
 
         [Fact]
         public void OutputSeconds_RangeOrRestOfSource_DividedBySpeed()
@@ -125,6 +153,19 @@ namespace VideoEditor.Tests
                     SoundExtractor.Extract(FfmpegMedia.Tool, FfmpegMedia.TestVideo, "aac", Path.Combine(folder, "b.m4a"), 0, 0, 1, cancel.Token));
             }
             Assert.Empty(Directory.GetFiles(folder));
+        }
+
+        [FfmpegFact]
+        public async Task Extract_AudioFile_CopiesItsSound()
+        {
+            // 미디어 패널의 오디오 파일: 소리를 그대로 꺼낸다(PCM → .wav)
+            var folder = Folder();
+            var name = SoundExtract.FileName(FfmpegMedia.Tone, "pcm_s16le");
+            var saved = await SoundExtractor.Extract(FfmpegMedia.Tool, FfmpegMedia.Tone, "pcm_s16le", Path.Combine(folder, name), 0, 0, 1, CancellationToken.None, sourceSeconds: 3);
+            Assert.Equal(Path.Combine(folder, "tone 사운드.wav"), saved);
+            var probe = await MediaProbe.Probe(FfmpegMedia.Tool, saved, CancellationToken.None);
+            Assert.Equal("pcm_s16le", probe.AudioCodec);
+            Assert.InRange(probe.DurationSeconds, 2.9, 3.1);
         }
     }
 }
