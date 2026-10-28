@@ -1308,7 +1308,7 @@ namespace VideoEditor.UiTests
             var drawn = new System.Collections.Generic.List<Png>();
             for (var i = 0; i < presets.Count; i++)
             {
-                var request = services.GetMethod("StylePreviewRequest").Invoke(null, new[] { presets[i].Style });
+                var request = Call(services.GetMethod("StylePreviewRequest"), null, presets[i].Style);
                 Assert.Equal("가나Ab", (string)Get(request, "Text"));
                 var png = await Render(rasterizer, request, "preset-" + i);
                 _out.WriteLine(presets[i].Name + " " + png.Width + "×" + png.Height + " · 칠한 픽셀 " + png.PaintedCount());
@@ -1351,7 +1351,7 @@ namespace VideoEditor.UiTests
                 var index = presets.FindIndex(p => p.Name == name);
                 var style = Presets()[index].Style;
                 SetPart(style, part, property, value);
-                return await Render(rasterizer, services.GetMethod("StylePreviewRequest").Invoke(null, new[] { style }), "preset-" + index + "-without-" + part);
+                return await Render(rasterizer, Call(services.GetMethod("StylePreviewRequest"), null, style), "preset-" + index + "-without-" + part);
             }
 
             // 네온: 광선 색(#0EA5E9 — 윤곽선 #BAE6FD보다 빨강이 훨씬 적다) 픽셀이 광선을 끈 그림에서 비어 있는 곳(글자 윤곽선 밖)에 있다
@@ -2513,10 +2513,7 @@ namespace VideoEditor.UiTests
                 var rasterizer = NewRasterizer();
 
                 var frame = assembly.GetType("VideoEditor.Media.PreviewRenderer", true).GetMethod("Frame");
-                // 뒤의 선택 인수(미리 보기 도우미 등)는 기본값으로 — 리플렉션은 선택 인수도 다 넘겨야 해서, 인수가 늘면 개수가 어긋난다
-                var arguments = new[] { tool, copy, (object)15L, 320, 180, CancellationToken.None, rasterizer };
-                arguments = arguments.Concat(Enumerable.Repeat(Type.Missing, frame.GetParameters().Length - arguments.Length)).ToArray();
-                var preview = await (Task<byte[]>)frame.Invoke(null, arguments);
+                var preview = await (Task<byte[]>)Call(frame, null, tool, copy, 15L, 320, 180, CancellationToken.None, rasterizer);
                 Assert.NotNull(preview);
                 var bright = 0;
                 for (var i = 0; i < preview.Length; i += 4)
@@ -2537,7 +2534,7 @@ namespace VideoEditor.UiTests
                 settingsType.GetProperty("From").SetValue(settings, 0L);
                 settingsType.GetProperty("To").SetValue(settings, (long)Get(copy, "Duration"));
                 var export = assembly.GetType("VideoEditor.Media.Exporter", true).GetMethod("Export");
-                await (Task)export.Invoke(null, new[] { tool, copy, settings, null, CancellationToken.None, rasterizer });
+                await (Task)Call(export, null, tool, copy, settings, null, CancellationToken.None, rasterizer);
 
                 var raw = output + ".bgra";
                 RunTool("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", "0.5", "-i", output, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", raw);

@@ -192,6 +192,16 @@ namespace VideoEditor.UiTests
             return target.GetType().GetProperty(property).GetValue(target);
         }
 
+        /// <summary>
+        /// 플러그인 메서드를 리플렉션으로 부른다 — 뒤에 빠진 선택 인수는 기본값(<see cref="Type.Missing"/>)으로 채운다.
+        /// 리플렉션은 선택 인수도 다 넘겨야 해서, 메서드에 선택 인수가 늘면 개수가 어긋난다(Parameter count mismatch).
+        /// </summary>
+        public static object Call(MethodInfo method, object target, params object[] arguments)
+        {
+            var count = method.GetParameters().Length;
+            return method.Invoke(target, arguments.Concat(Enumerable.Repeat(Type.Missing, Math.Max(0, count - arguments.Length))).ToArray());
+        }
+
         public static List<object> ProjectClips(Window window)
         {
             var project = Get(Session(window), "Project");

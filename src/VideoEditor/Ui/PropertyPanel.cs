@@ -170,9 +170,13 @@ namespace VideoEditor.Ui
             if (clip.Kind == ClipKind.Media && clip.HasAudio)
                 tabs.Items.Add(new TabItem { Header = "소리", Content = AudioTab(id) });
             tabs.Items.Add(new TabItem { Header = clip.HasSourceLimit ? "속도" : "길이", Content = TimeTab(id, clip.HasSourceLimit) });
-            // 탭이 다섯 이상이면 머리글 여백을 줄여 좁은 패널에서도 한 줄에(두 줄이면 고를 때마다 줄이 자리를 바꾼다 — 미디어 패널과 같은 5)
+            // 탭이 다섯 이상이면 머리글 여백을 줄여 좁은 패널에서도 한 줄에(두 줄이면 고를 때마다 줄이 자리를 바꾼다 — 미디어 패널과 같은 5).
+            // 1280×800 창의 속성 패널(약 250px)에는 "애니메이션"이 든 다섯·여섯 탭이 5로도 넘쳐, 글 폭을 재서 남는 만큼만 준다
             if (tabs.Items.Count >= 5)
+            {
                 UiKit.StyleTabs(tabs, 5);
+                tabs.SizeChanged += (s, e) => FitTabHeaders(tabs);
+            }
             tabs.SelectedIndex = 0;
             panel.Children.Add(tabs);
             // 처음 값을 채우는 것은 편집이 아니다 — 콤보의 SelectionChanged 등이 Edit를 부르지 않게(고르기만 해도 실행 취소 단계·덮어쓰기가 생기지 않게)
@@ -1663,6 +1667,26 @@ namespace VideoEditor.Ui
         private static TextBlock Section(string text)
         {
             return new TextBlock { Text = text, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 4, 0, 4) };
+        }
+
+        /// <summary>
+        /// 탭 머리가 한 줄에 들도록 머리글 여백을 고른다: 지금 글꼴로 잰 머리글 폭과 탭 사이(2px)를 빼고 남는 폭을 탭 양쪽에 나눈다(5에서 1까지).
+        /// 1로도 넘치면 1(두 줄). 여백이 바뀔 때만 다시 꾸민다.
+        /// </summary>
+        private static void FitTabHeaders(TabControl tabs)
+        {
+            if (tabs.ActualWidth <= 0 || tabs.Items.Count == 0)
+                return;
+            var typeface = new System.Windows.Media.Typeface(tabs.FontFamily, tabs.FontStyle, tabs.FontWeight, tabs.FontStretch);
+            var pixels = System.Windows.Media.VisualTreeHelper.GetDpi(tabs).PixelsPerDip;
+            var text = tabs.Items.OfType<TabItem>().Sum(t => new System.Windows.Media.FormattedText(t.Header as string ?? "", System.Globalization.CultureInfo.CurrentUICulture,
+                tabs.FlowDirection, typeface, tabs.FontSize, System.Windows.Media.Brushes.Black, pixels).WidthIncludingTrailingWhitespace + 1);
+            var count = tabs.Items.Count;
+            var padding = Math.Max(1, Math.Min(5, Math.Floor((tabs.ActualWidth - text - count * 2 - 4) / (count * 2))));
+            if (tabs.Tag is double current && current == padding)
+                return;
+            tabs.Tag = padding;
+            UiKit.StyleTabs(tabs, padding);
         }
 
         /// <summary>글이 잘리지 않고 다 보이는 폭(지금 글꼴로 잰 글 폭 + 바깥 여백).</summary>

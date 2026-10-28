@@ -492,7 +492,7 @@ namespace VideoEditor.UiTests
                 settingsType.GetProperty("From").SetValue(settings, 0L);
                 settingsType.GetProperty("To").SetValue(settings, (long)Get(copy, "Duration"));
                 var export = assembly.GetType("VideoEditor.Media.Exporter", true).GetMethod("Export");
-                await (Task)export.Invoke(null, new[] { tool, copy, settings, null, CancellationToken.None, rasterizer });
+                await (Task)Call(export, null, tool, copy, settings, null, CancellationToken.None, rasterizer);
 
                 var raw = output + ".bgra";
                 RunTool("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", "0.5", "-i", output, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", raw);
