@@ -73,6 +73,13 @@ namespace VideoEditor.Core
                     animation.Delay = Math.Min(ClipAnimations.MaxFrames, Convert(animation.Delay));
                 }
             }
+            if (clip.Keyframes != null)
+            {
+                // 키프레임 시각도 초 기준으로(두 키프레임이 한 장에 모이면 뒤의 것)
+                foreach (var key in clip.Keyframes.Where(k => k != null))
+                    key.Frame = Convert(key.Frame);
+                clip.Keyframes = ClipKeyframes.Clean(clip);
+            }
             // 타임라인 끝이 초 기준 위치에 오도록 원본 끝을 맞춘다(속도 반올림 보정)
             if (end > clip.Start)
                 TimelineEdits.SetDuration(clip, end - clip.Start);

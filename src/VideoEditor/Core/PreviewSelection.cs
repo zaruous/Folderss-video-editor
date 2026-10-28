@@ -28,17 +28,35 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// clips를 (dx, dy)(프로젝트 픽셀)만큼 함께 옮긴다 — 자리는 정수로 반올림. 잠긴 트랙의 클립이 있으면 <see cref="EditException"/>(부르는 쪽 편집이 모두 되돌린다).
-        /// 잘못된 거리(NaN·무한대)는 0.
+        /// 잘못된 거리(NaN·무한대)는 0. 위치 키프레임이 있는 클립은 frame(재생 헤드 — 타임라인 프레임)의 키프레임을 고치거나 만들고(#4),
+        /// frame이 없으면 위치 키프레임을 모두 같은 거리만큼 옮긴다.
         /// </summary>
-        public static void Move(Project project, IEnumerable<Clip> clips, double dx, double dy)
+        public static void Move(Project project, IEnumerable<Clip> clips, double dx, double dy, long? frame = null)
         {
             dx = double.IsFinite(dx) ? dx : 0;
             dy = double.IsFinite(dy) ? dy : 0;
             foreach (var clip in clips ?? Enumerable.Empty<Clip>())
             {
                 TimelineEdits.EnsureEditable(project.TrackOf(clip));
-                clip.X = Math.Round(clip.X + dx);
-                clip.Y = Math.Round(clip.Y + dy);
+                if (!ClipKeyframes.Has(clip, KeyframeProperty.Position))
+                {
+                    clip.X = Math.Round(clip.X + dx);
+                    clip.Y = Math.Round(clip.Y + dy);
+                }
+                else if (frame.HasValue)
+                {
+                    var at = Math.Max(0, Math.Min(clip.Duration - 1, frame.Value - clip.Start));
+                    ClipKeyframes.SetPosition(clip, at, Math.Round(ClipKeyframes.At(clip, KeyframeProperty.Position, at) + dx),
+                        Math.Round(ClipKeyframes.At(clip, KeyframeProperty.Position, at, true) + dy));
+                }
+                else
+                {
+                    foreach (var key in ClipKeyframes.Track(clip, KeyframeProperty.Position))
+                    {
+                        key.Value = Math.Round(key.Value + dx);
+                        key.Y = Math.Round(key.Y + dy);
+                    }
+                }
             }
         }
     }

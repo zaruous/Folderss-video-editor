@@ -252,6 +252,7 @@ namespace VideoEditor.Core
             clip.Scale = clip.Opacity = 1;
             clip.Effects = null;
             clip.Animations = null;
+            clip.Keyframes = null;
         }
 
         // ---------- 놓기·옮기기 ----------
@@ -404,6 +405,8 @@ namespace VideoEditor.Core
             clip.Start = newStart;
             clip.ShiftWords(delta);
             SetDuration(clip, end - newStart);
+            // 키프레임도 같은 장면에 남게 당긴다
+            ClipKeyframes.Shift(clip, delta);
         }
 
         /// <summary>원본 제한이 없는 클립(이미지·글자)은 원본 구간을 0부터로 맞춘다.</summary>
@@ -435,6 +438,7 @@ namespace VideoEditor.Core
             right.TransitionIn = 0;
             clip.FadeOut = 0;
             ClipAnimations.Split(clip, right);
+            ClipKeyframes.Split(clip, right, frame - clip.Start);
             return right;
         }
 

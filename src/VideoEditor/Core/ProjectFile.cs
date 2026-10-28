@@ -40,8 +40,8 @@ namespace VideoEditor.Core
         {
             var folder = Path.GetDirectoryName(Path.GetFullPath(path));
             var copy = FromSnapshot(Snapshot(project));
-            // 예전 형식 파일을 열어 저장해도 지금 형식으로 쓴다 — 애니메이션·아트 클립이 있을 때만 새 형식(없으면 예전 플러그인에서도 열린다)
-            copy.Version = ClipAnimations.Any(copy) ? Project.AnimationVersion
+            // 예전 형식 파일을 열어 저장해도 지금 형식으로 쓴다 — 애니메이션·키프레임·아트 클립이 있을 때만 새 형식(없으면 예전 플러그인에서도 열린다)
+            copy.Version = ClipAnimations.Any(copy) || ClipKeyframes.Any(copy) ? Project.AnimationVersion
                 : copy.AllClips.Any(c => c.Kind == ClipKind.Art) ? Project.ArtVersion : Project.CurrentVersion;
             foreach (var media in copy.Media)
                 media.Path = Project.Relative(folder, media.Path);
@@ -166,10 +166,15 @@ namespace VideoEditor.Core
                 clip.Effects = VideoEffects.Clean(clip);
                 // 애니메이션: 화면 클립에만, 효과·분류·값을 규칙 안으로(예전 파일은 없음)
                 clip.Animations = ClipAnimations.Clean(clip);
+                // 사용자 키프레임: 화면 클립에만, 아는 값·범위 안 숫자만(예전 파일은 없음)
+                clip.Keyframes = ClipKeyframes.Clean(clip);
             }
             // 자막 트랙의 큐는 트랙 공통 모양으로 입히므로 움직이지 않는다
             foreach (var clip in project.VideoTracks.Where(t => t.Subtitles).SelectMany(t => t.Clips))
+            {
                 clip.Animations = null;
+                clip.Keyframes = null;
+            }
             // 사운드 분리 링크: 같은 원본의 영상·사운드 짝만(예전 프로젝트는 링크 없음)
             ClipLinks.Normalize(project);
             foreach (var track in project.AllTracks)

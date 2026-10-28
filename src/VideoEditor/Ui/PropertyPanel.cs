@@ -37,6 +37,8 @@ namespace VideoEditor.Ui
             Children.Add(scroll);
             session.SelectionChanged += (s, e) => Update();
             session.Changed += (s, e) => Update();
+            // 키프레임이 있는 값은 재생 헤드 시각의 값을 보인다(PropertyPanel.Keyframes.cs)
+            session.PlayheadChanged += (s, e) => RefreshKeyframes();
             // 효과 탭에서 동영상 효과를 넣으면 그 클립의 [효과] 탭을 연다(값을 바로 조절하게)
             commands.VideoEffectsApplied += ids =>
             {
@@ -73,6 +75,7 @@ namespace VideoEditor.Ui
             }
             _shownKey = key;
             _refreshers.Clear();
+            _keyRefreshers.Clear();
             _effectsTab = null;
             _body.Content = clip != null ? ClipView(clip) : clips.Count > 1 ? Note(clips.Count + "개 클립을 골랐습니다. 하나를 고르면 속성을 바꿀 수 있습니다.") : ProjectView();
         }
@@ -212,9 +215,10 @@ namespace VideoEditor.Ui
         private UIElement VisualTab(string id)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
-            panel.Children.Add(NumberRow("위치 X", "PropX", -4000, 4000, "px", id, c => c.X, (c, v) => c.X = v));
-            panel.Children.Add(NumberRow("위치 Y", "PropY", -4000, 4000, "px", id, c => c.Y, (c, v) => c.Y = v));
-            panel.Children.Add(NumberRow("크기", "PropScale", 5, 400, "%", id, c => c.Scale * 100, (c, v) => c.Scale = Math.Max(0.05, v / 100)));
+            // 위치·크기·회전·불투명도는 줄마다 키프레임 단추(◆ — PropertyPanel.Keyframes.cs): 키프레임이 있으면 재생 헤드 시각의 값을 보이고 고친다
+            panel.Children.Add(KeyRow("위치 X", "PropX", -4000, 4000, "px", id, KeyframeProperty.Position, false, 1, v => v));
+            panel.Children.Add(KeyRow("위치 Y", "PropY", -4000, 4000, "px", id, KeyframeProperty.Position, true, 1, v => v));
+            panel.Children.Add(KeyRow("크기", "PropScale", 5, 400, "%", id, KeyframeProperty.Scale, false, 100, v => Math.Max(0.05, v / 100)));
             // 맞춤 방식(동영상·사진): 화면에 맞춤 · 화면 채우기 · 늘이기
             if (_session.Project.FindClip(id)?.Kind == ClipKind.Media)
             {
@@ -256,8 +260,10 @@ namespace VideoEditor.Ui
                 fitRow.Children.Add(fits);
                 panel.Children.Add(fitRow);
             }
-            panel.Children.Add(NumberRow("회전", "PropRotation", -360, 360, "°", id, c => c.Rotation, (c, v) => c.Rotation = v));
-            panel.Children.Add(NumberRow("불투명도", "PropOpacity", 0, 100, "%", id, c => c.Opacity * 100, (c, v) => c.Opacity = Math.Max(0, Math.Min(1, v / 100))));
+            panel.Children.Add(KeyRow("회전", "PropRotation", -360, 360, "°", id, KeyframeProperty.Rotation, false, 1, v => v));
+            panel.Children.Add(KeyRow("불투명도", "PropOpacity", 0, 100, "%", id, KeyframeProperty.Opacity, false, 100, v => Math.Max(0, Math.Min(1, v / 100))));
+            // 재생 헤드에 키프레임이 있으면 그 이징, 앞뒤 키프레임으로 가기
+            panel.Children.Add(KeyframeTools(id));
             // 전환 효과 종류(길이는 아래 줄) — [전환] 탭에서 고르거나 끌어 놓아도 된다
             var kinds = new ComboBox { Margin = new Thickness(0, 3, 0, 3) };
             AutomationProperties.SetAutomationId(kinds, "PropTransitionKind");
@@ -318,6 +324,7 @@ namespace VideoEditor.Ui
             {
                 c.X = c.Y = c.Rotation = 0;
                 c.Scale = c.Opacity = 1;
+                c.Keyframes = null;
             }, null));
             reset.HorizontalAlignment = HorizontalAlignment.Left;
             panel.Children.Add(reset);
@@ -1750,7 +1757,7 @@ namespace VideoEditor.Ui
         /// 이름 · 슬라이더 · 숫자 칸 · 단위 한 줄(좁으면 슬라이더만 아랫줄). edit이 있으면 그것으로(프로젝트 편집), 없으면 set으로 클립 값을 바꾼다.
         /// </summary>
         private UIElement NumberRow(string label, string automationId, double min, double max, string unit, string id,
-            Func<Clip, double> get, Action<Clip, double> set, Action<Project, Clip, double> edit = null)
+            Func<Clip, double> get, Action<Clip, double> set, Action<Project, Clip, double> edit = null, List<Action> refreshAlso = null)
         {
             var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3) };
             var name = UiKit.Label(label);
@@ -1779,7 +1786,8 @@ namespace VideoEditor.Ui
             outer.Children.Add(lower);
             outer.SizeChanged += (s, e) =>
             {
-                var fixedWidth = name.ActualWidth + box.ActualWidth + box.Margin.Left + unitText.ActualWidth + unitText.Margin.Left;
+                // 슬라이더 말고 줄에 있는 것(이름·숫자 칸·단위, 키프레임 단추가 있으면 그것도)의 폭
+                var fixedWidth = row.Children.OfType<FrameworkElement>().Where(c => c != slider).Sum(c => c.ActualWidth + c.Margin.Left + c.Margin.Right);
                 var fold = outer.ActualWidth - fixedWidth < MinSlider;
                 if (fold == lower.Children.Contains(slider) || name.ActualWidth <= 0)
                     return;
@@ -1853,6 +1861,7 @@ namespace VideoEditor.Ui
                 }
             }
             (_collect ?? _refreshers).Add(Refresh);
+            refreshAlso?.Add(Refresh);
             return outer;
         }
     }

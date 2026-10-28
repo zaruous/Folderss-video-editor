@@ -65,20 +65,22 @@ namespace VideoEditor.Core
             return ",pad=" + pad1 + ":color=black@0,crop=" + crop1 + ",pad=" + pad2 + ":color=black@0,crop=" + crop2;
         }
 
-        /// <summary>회전(앞에 ","): 클립 회전 + 움직임(도). 출력은 대각선 크기로 고정(각도가 바뀌어도 잘리지 않게, 가운데는 그대로).</summary>
-        private static string RotateChain(ObjectMotion motion, double rotation, string time)
+        /// <summary>
+        /// 회전(앞에 ","): 기준 회전(키프레임·고정 — <see cref="TransformBase"/>) + 움직임(도, 없으면 null). 출력은 대각선 크기로 고정(각도가 바뀌어도 잘리지 않게, 가운데는 그대로).
+        /// </summary>
+        private static string RotateChain(ObjectMotion motion, MotionExpr rotation, string time)
         {
-            var degrees = rotation + motion.Rotation;
+            var degrees = motion?.Rotation == null ? rotation : rotation + motion.Rotation;
             return ",rotate=a='" + degrees.ToFfmpeg(time) + "*PI/180':c=none:ow='hypot(iw,ih)':oh=ow";
         }
 
         /// <summary>
-        /// 불투명도(앞에 ","): 클립 불투명도 × 움직임을 장마다 계산해 바뀌는 장에서만 sendcmd로 colorchannelmixer에 보낸다(시간식을 받는 알파 필터가 없다).
+        /// 불투명도(앞에 ","): 기준 불투명도(키프레임·고정) × 움직임(없으면 1)을 장마다 계산해 바뀌는 장에서만 sendcmd로 colorchannelmixer에 보낸다(시간식을 받는 알파 필터가 없다).
         /// 명령 시각은 장 사이(반 장 앞)라 소수 오차에도 그 장부터 바뀐다. 그리는 구간에서 값이 바뀌지 않으면 고정 값 하나(1이면 넣지 않음).
         /// </summary>
-        private static string OpacityChain(ObjectMotion motion, double opacity, FrameRate rate, long offset, long frames, int n)
+        private static string OpacityChain(ObjectMotion motion, MotionExpr opacity, FrameRate rate, long offset, long frames, int n)
         {
-            string Value(long k) => N(Math.Max(0, Math.Min(1, Math.Max(0, opacity) * motion.Opacity.Eval(offset + k))));
+            string Value(long k) => N(Math.Max(0, Math.Min(1, Math.Max(0, opacity.Eval(offset + k)) * (motion?.Opacity?.Eval(offset + k) ?? 1))));
             var name = "colorchannelmixer@an" + n;
             var first = Value(0);
             var last = first;
@@ -97,34 +99,36 @@ namespace VideoEditor.Core
             return ",sendcmd=c='" + commands + "'," + name + "=aa=" + first;
         }
 
-        /// <summary>크기(앞에 ","): 장마다 크기를 바꾼다(eval=frame) — 체인 맨 끝에만(뒤의 overlay는 장마다 그림 크기로 가운데를 맞춘다).</summary>
-        private static string ScaleChain(ObjectMotion motion, string time)
+        /// <summary>
+        /// 장마다 더 바꿀 크기 배율(없으면 null): 기준 크기가 키프레임으로 바뀌면 그 값 ÷ 틀 크기(<see cref="TransformBase.BoxScale"/> — 틀은 가장 큰 값으로 만들어 줄이기만),
+        /// 그리고 움직임의 크기를 곱한다. 고정 크기·움직임 없음이면 null(예전 그래프 그대로).
+        /// </summary>
+        private static MotionExpr Resize(ObjectMotion motion, TransformBase basis)
         {
-            var scale = motion.Scale.ToFfmpeg(time);
+            var factor = basis.Scale.Constant == null ? basis.Scale / basis.BoxScale : null;
+            if (motion?.Scale != null)
+                factor = factor == null ? motion.Scale : factor * motion.Scale;
+            return factor;
+        }
+
+        /// <summary>크기(앞에 ","): 장마다 크기를 바꾼다(eval=frame) — 체인 맨 끝에만(뒤의 overlay는 장마다 그림 크기로 가운데를 맞춘다).</summary>
+        private static string ScaleChain(MotionExpr factor, string time)
+        {
+            var scale = factor.ToFfmpeg(time);
             return ",scale=w='max(1,round(iw*" + scale + "))':h='max(1,round(ih*" + scale + "))':eval=frame";
         }
 
         /// <summary>
-        /// 합치기 이음매 — 기준 위치(프로젝트 픽셀, τ = 클립 안 장 번호의 시간식). 지금은 클립의 고정 X·Y다.
-        /// 키프레임을 넣으면 여기서 그 시각의 키프레임 값 식을 돌려준다(상수가 아니면 overlay 식에 그대로 들어간다).
-        /// 위치 = 기준 위치 + 이동 경로 변위(시작점 기준) + 나타나기·강조·사라지기 변위 — 모두 <see cref="OverlayPosition"/>에서 한 번에 더한다.
+        /// overlay 위치 식(가운데 + 기준 위치 + 움직임, 출력 픽셀). 기준 위치 x·y는 프로젝트 픽셀의 시간식(<see cref="TransformBase"/> — 키프레임 사이 값이나 고정 값)이고
+        /// k ÷ shrink(출력 배율 ÷ 재생 축소)를 곱한다 — 고정 값이면 예전처럼 숫자 하나. 움직임이 있으면 흔들기(프로젝트 픽셀 × k ÷ shrink),
+        /// 날아오기(무게만큼 그 방향 화면 밖 — 오른쪽 가장자리가 화면 왼쪽 끝 등), 크기가 0에 가까우면 화면 밖으로 치우기를 더한다. time은 overlay가 보는 시각(바탕 흐름)의 τ 글.
+        /// 위치 = 기준(키프레임·고정) + 이동 경로 변위 + 효과 변위 — 이동 경로 변위는 흔들기와 같이 motion의 ShiftX·Y로 들어와 여기서 더해진다.
         /// </summary>
-        internal static (MotionExpr X, MotionExpr Y) BasePosition(Clip clip)
+        private static (string X, string Y) OverlayPosition(ObjectMotion motion, MotionExpr x, MotionExpr y, double k, double shrink, string time)
         {
-            return (MotionExpr.Num(clip.X), MotionExpr.Num(clip.Y));
-        }
-
-        /// <summary>
-        /// overlay 위치 식(가운데 + x·y 출력 픽셀): 기준 위치(<see cref="BasePosition"/>)에 움직임이 있으면 이동 경로·흔들기(프로젝트 픽셀 × k / shrink),
-        /// 날아오기(무게만큼 그 방향 화면 밖 — 오른쪽 가장자리가 화면 왼쪽 끝 등), 크기가 0에 가까우면 화면 밖으로 치우기를 더한다.
-        /// time은 overlay가 보는 시각(바탕 흐름)의 τ 글. 기준 위치가 상수면 글이 예전과 같다(N(X × k / shrink)).
-        /// </summary>
-        private static (string X, string Y) OverlayPosition(Clip clip, ObjectMotion motion, double k, double shrink, string time)
-        {
-            var (baseX, baseY) = BasePosition(clip);
-            string Base(MotionExpr value) => value.Constant is double constant ? N(constant * k / shrink) : (value * k / shrink).ToFfmpeg(time);
-            var x0 = "(main_w-overlay_w)/2+" + Base(baseX);
-            var y0 = "(main_h-overlay_h)/2+" + Base(baseY);
+            string Base(MotionExpr value) => value.Constant is double c ? N(c * k / shrink) : (value * (k / shrink)).ToFfmpeg(time);
+            var x0 = "(main_w-overlay_w)/2+" + Base(x);
+            var y0 = "(main_h-overlay_h)/2+" + Base(y);
             k /= shrink;
             if (motion == null)
                 return (x0, y0);

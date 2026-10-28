@@ -200,6 +200,13 @@ namespace VideoEditor.Core
         [JsonConverter(typeof(LenientListConverter<ClipAnimation>))]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public List<ClipAnimation> Animations { get; set; }
+        /// <summary>
+        /// 사용자 키프레임(<see cref="ClipKeyframes"/> — 위치·크기·회전·불투명도를 클립 안 시각마다, 화면 클립만). 키프레임이 있는 값은 위의 고정 값 대신 쓴다.
+        /// 없으면 null(저장할 때 빠져 예전 형식 그대로).
+        /// </summary>
+        [JsonConverter(typeof(LenientListConverter<ClipKeyframe>))]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<ClipKeyframe> Keyframes { get; set; }
 
         // 글자
         public string Text { get; set; }
@@ -281,6 +288,7 @@ namespace VideoEditor.Core
             copy.Art = Art?.Clone();
             copy.Effects = Effects?.Select(e => e?.Clone()).ToList();
             copy.Animations = Animations?.Select(a => a?.Clone()).ToList();
+            copy.Keyframes = Keyframes?.Select(k => k?.Clone()).ToList();
             copy.Words = Words?.Select(w => new ClipWord { Text = w.Text, Start = w.Start, End = w.End }).ToList();
             return copy;
         }
