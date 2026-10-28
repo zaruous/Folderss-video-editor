@@ -207,8 +207,11 @@ namespace VideoEditor.Core
                         continue;
                     }
                     var chain = new StringBuilder(source);
-                    // 틀 = 화면 × 크기 배율. 맞춤(비율 유지, 다 보이게)·채우기(비율 유지, 넘치는 곳 가운데 기준으로 자름)·늘이기(비율 무시)
-                    var scale = Math.Max(0.01, clip.Scale);
+                    // 기준 값(#4): 위치·크기·회전·불투명도 — 키프레임이 있으면 그 사이 값의 시간식, 없으면 클립의 고정 값(상수라 아래 그래프 글이 예전 그대로).
+                    // 이동 경로·애니메이션 효과는 이 위에 더하고(위치·회전) 곱한다(크기·불투명도)
+                    var basis = ClipKeyframes.Base(clip);
+                    // 틀 = 화면 × 크기 배율(크기 키프레임이 있으면 가장 큰 값 — 장마다 맨 끝 scale로 더 줄인다). 맞춤(비율 유지, 다 보이게)·채우기(비율 유지, 넘치는 곳 가운데 기준으로 자름)·늘이기(비율 무시)
+                    var scale = basis.BoxScale;
                     var boxWidth = Math.Max(2, (int)Math.Round(options.Width * scale / shrink));
                     var boxHeight = Math.Max(2, (int)Math.Round(options.Height * scale / shrink));
                     var fit = clip.Kind == ClipKind.Media ? clip.Fit : ClipFit.Fit;
@@ -250,30 +253,36 @@ namespace VideoEditor.Core
                     var local = TimeText(rate, segStart - clip.Start);
                     if (motion != null)
                         chain.Append(WipeChain(motion, local));
-                    if (motion?.Rotation != null)
+                    // 회전 = 기준(키프레임·고정) + 효과. 바뀌지 않으면 예전처럼 고정 각도
+                    var rotation = basis.Rotation.Constant;
+                    if (motion?.Rotation != null || rotation == null)
                     {
-                        chain.Append(RotateChain(motion, clip.Rotation, local));
+                        chain.Append(RotateChain(motion, basis.Rotation, local));
                     }
-                    else if (Math.Abs(clip.Rotation) > 0.01)
+                    else if (Math.Abs(rotation.Value) > 0.01)
                     {
-                        var radians = N(clip.Rotation * Math.PI / 180);
+                        var radians = N(rotation.Value * Math.PI / 180);
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",rotate={0}:c=none:ow='rotw({0})':oh='roth({0})'", radians);
                     }
-                    if (motion?.Opacity != null)
-                        chain.Append(OpacityChain(motion, clip.Opacity, rate, segStart - clip.Start, segEnd - segStart, n));
-                    else if (clip.Opacity < 0.999)
-                        chain.AppendFormat(CultureInfo.InvariantCulture, ",colorchannelmixer=aa={0}", N(Math.Max(0, clip.Opacity)));
+                    // 불투명도 = 기준 × 효과
+                    var opacity = basis.Opacity.Constant;
+                    if (motion?.Opacity != null || opacity == null)
+                        chain.Append(OpacityChain(motion, basis.Opacity, rate, segStart - clip.Start, segEnd - segStart, n));
+                    else if (opacity.Value < 0.999)
+                        chain.AppendFormat(CultureInfo.InvariantCulture, ",colorchannelmixer=aa={0}", N(Math.Max(0, opacity.Value)));
                     // 디졸브: 앞 클립(밑에 더 그려짐) 위로 이 클립이 서서히 나타난다
                     if (transition > 0 && segStart == clip.Start && effect.IsDissolve)
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",fade=t=in:st=0:d={0}:alpha=1", N(rate.ToSeconds(transition)));
-                    if (motion?.Scale != null)
-                        chain.Append(ScaleChain(motion, local));
+                    // 크기 = 기준(틀 크기에 대한 배율) × 효과
+                    var resize = Resize(motion, basis);
+                    if (resize != null)
+                        chain.Append(ScaleChain(resize, local));
                     if (!xfadeIn && !xfadeOut)
                     {
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",setpts=PTS-STARTPTS+round({0}/TB)[c{1}]", N(rate.ToSeconds(segStart - options.From)), n);
                         filters.Add(chain.ToString());
-                        // overlay의 시각은 바탕 흐름(0 = 그리는 구간 시작)
-                        var (x, y) = OverlayPosition(motion, clip.X * k, clip.Y * k, k, TimeText(rate, options.From - clip.Start));
+                        // overlay의 시각은 바탕 흐름(0 = 그리는 구간 시작). 위치 = 기준(키프레임·고정) + 효과
+                        var (x, y) = OverlayPosition(motion, basis.X, basis.Y, k, 1, TimeText(rate, options.From - clip.Start));
                         filters.Add(string.Format(CultureInfo.InvariantCulture,
                             "[{0}][c{1}]overlay=x='{2}':y='{3}':eof_action=pass[o{1}]",
                             layer, n, x, y));
@@ -289,7 +298,7 @@ namespace VideoEditor.Core
                     filters.Add(chain.ToString());
                     filters.Add(string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba[g{4}]",
                         canvasWidth, canvasHeight, fps, N(rate.ToSeconds(segEnd - segStart)), n));
-                    var (gx, gy) = OverlayPosition(motion, clip.X * k / shrink, clip.Y * k / shrink, k / shrink, local);
+                    var (gx, gy) = OverlayPosition(motion, basis.X, basis.Y, k, shrink, local);
                     filters.Add(string.Format(CultureInfo.InvariantCulture,
                         "[g{0}][s{0}]overlay=x='{1}':y='{2}':eof_action=pass,format=gbrap,premultiply=inplace=1[k{0}]",
                         n, gx, gy));
@@ -606,6 +615,17 @@ namespace VideoEditor.Core
         /// </summary>
         internal static (double Width, double Height) VisibleHalf(Project project, RenderOptions options, Clip clip)
         {
+            // 키프레임이 있으면 키프레임 시각마다의 모습 가운데 가장 넓은 범위(사이 값은 키프레임 값 사이라 대개 그 안)
+            if (ClipKeyframes.Has(clip))
+            {
+                double widest = 0, tallest = 0;
+                foreach (var frame in ClipKeyframes.Frames(clip).Append(0))
+                {
+                    var (w, h) = VisibleHalf(project, options, ClipKeyframes.Pose(clip, frame));
+                    (widest, tallest) = (Math.Max(widest, w), Math.Max(tallest, h));
+                }
+                return (widest, tallest);
+            }
             var k = (double)options.Width / project.Width;
             var scale = double.IsFinite(clip.Scale) ? Math.Max(0.01, clip.Scale) : 1;
             var radians = (double.IsFinite(clip.Rotation) ? clip.Rotation : 0) * Math.PI / 180;
