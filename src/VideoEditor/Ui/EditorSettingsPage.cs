@@ -116,7 +116,8 @@ namespace VideoEditor.Ui
             open.Click += (s, e) => downloadStatus.Text = UiKit.OpenFolder(DownloadFolderToOpen()) ?? "";
             _youTube = new YouTubeSettingsSection(_services);
             panel.Children.Add(_youTube.View);
-            return panel;
+            // Folderss 설정 창은 플러그인 화면을 스크롤 없이 담는다 — 맨 아래 "유튜브에 올리기"가 창 높이(약 540) 밖으로 잘리지 않게 스스로 스크롤한다
+            return new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         }
 
         private string DownloadFolderToOpen()

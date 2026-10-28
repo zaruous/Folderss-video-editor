@@ -85,14 +85,23 @@ namespace VideoEditor.UiTests
                 var page = plugin.Manager.SettingsPages.Single(p => p.Title == "동영상 편집");
                 settings = ui.Run(() =>
                 {
-                    var host = new Window { Title = "설정 시험", Width = 720, Height = 900, Content = page.CreateView(), ShowActivated = false, ShowInTaskbar = false };
+                    // Folderss 설정 창과 같은 높이(540) — 플러그인 화면을 스크롤 없이 담으므로 화면이 스스로 스크롤해야 맨 아래 유튜브 칸에 닿는다
+                    var host = new Window { Title = "설정 시험", Width = 720, Height = 540, Content = page.CreateView(), ShowActivated = false, ShowInTaskbar = false };
                     host.SetResourceReference(Window.BackgroundProperty, "WindowBackground");
                     host.Show();
                     return host;
                 });
                 ui.Run(() =>
                 {
-                    Assert.Equal(ClientId, Ui.ById<TextBox>(settings, "SettingsYouTubeClientId").Text);
+                    // 유튜브 칸까지 스크롤하면 창 안에 보인다(예전에는 스크롤이 없어 창 아래로 잘렸다)
+                    var scroller = Assert.IsType<ScrollViewer>(settings.Content);
+                    var field = Ui.ById<TextBox>(settings, "SettingsYouTubeClientId");
+                    field.BringIntoView();
+                    settings.UpdateLayout();
+                    var top = field.TranslatePoint(new Point(0, 0), scroller).Y;
+                    Assert.True(scroller.ScrollableHeight > 0, "540 높이에서는 스크롤이 생긴다");
+                    Assert.InRange(top, 0, scroller.ViewportHeight - field.ActualHeight);
+                    Assert.Equal(ClientId, field.Text);
                     Assert.Equal(ClientSecret, Ui.ById<PasswordBox>(settings, "SettingsYouTubeClientSecret").Password);
                     Assert.Contains("로그인 안 됨", Ui.ById<TextBlock>(settings, "SettingsYouTubeAccount").Text);
                     Assert.False(Ui.ById<Button>(settings, "SettingsYouTubeSignOut").IsEnabled);
