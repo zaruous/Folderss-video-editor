@@ -47,17 +47,14 @@ namespace VideoEditor.UiTests
         /// </summary>
         private static async Task<MenuItem> OpenRecent(UiThread ui, Window window)
         {
-            ui.Run(() =>
-            {
-                Ui.ById<MenuItem>(window, "RecentProjectsMenu").IsSubmenuOpen = false;
-                Ui.Find<Menu>(window).Items.OfType<MenuItem>().First(m => Ui.HeaderText(m) == "파일").IsSubmenuOpen = true;
-            });
+            // 숨은 데스크톱에서는 메뉴 팝업이 화면에 열리지 않아 SubmenuOpened가 오지 않는다 — 논리 항목을 따라가(Ui.Menu와 같음)
+            // 하위 메뉴가 열릴 때와 같은 사건을 일으켜 목록을 새로 채운다
             return await ui.WaitFor(() =>
             {
-                var recent = Ui.ById<MenuItem>(window, "RecentProjectsMenu");
-                if (!recent.IsSubmenuOpen)
-                    recent.IsSubmenuOpen = true;
-                return recent.IsSubmenuOpen ? recent : null;
+                var file = Ui.Find<Menu>(window).Items.OfType<MenuItem>().First(m => Ui.HeaderText(m) == "파일");
+                var recent = file.Items.OfType<MenuItem>().FirstOrDefault(m => AutomationProperties.GetAutomationId(m) == "RecentProjectsMenu");
+                recent?.RaiseEvent(new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, recent));
+                return recent;
             }, Wait, "최근 프로젝트 하위 메뉴");
         }
 
