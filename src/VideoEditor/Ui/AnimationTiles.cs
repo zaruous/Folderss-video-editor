@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using VideoEditor.Core;
 
@@ -12,7 +13,7 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// 애니메이션 효과 썸네일(속성 패널 [애니메이션] 탭): 작은 화면에 "가나다"를 그 효과의 반쯤 모습으로 보이고, 마우스를 올리면 움직임을 되풀이해 보인다.
-    /// 움직임은 렌더와 같은 계산(<see cref="AnimationMotion"/>)이다 — 한 번에 움직이는 효과는 글 전체, 글자별 효과(타자기·흩어지기)는 글자마다,
+    /// 움직임은 렌더와 같은 계산(<see cref="AnimationMotion"/>)이다 — 한 번에 움직이는 효과는 글 전체, 글자 전용 효과(타자기·흩어지기·물결·굵게 깜빡이기)는 글자마다.
     /// 이동 경로는 "가" 한 글자가 점선 경로를 따라 움직인다.
     /// </summary>
     internal sealed class AnimationTile : Button
@@ -23,6 +24,7 @@ namespace VideoEditor.Ui
         // 썸네일의 "화면"은 320픽셀 폭으로 본다(흔들기 폭 등 프로젝트 픽셀 값을 줄여 보이게)
         private const double ScreenScale = StageWidth / 320;
         private static readonly string[] Letters = { "가", "나", "다" };
+        private static readonly Color LetterColor = Color.FromRgb(0xFB, 0xBF, 0x24);
 
         private readonly AnimationEffectDef _def;
         private readonly AnimationKind _kind;
@@ -55,7 +57,7 @@ namespace VideoEditor.Ui
                 Text = l,
                 FontSize = LetterSize,
                 FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(Color.FromRgb(0xFB, 0xBF, 0x24)),
+                Foreground = new SolidColorBrush(LetterColor),
                 RenderTransformOrigin = new Point(0.5, 0.5)
             }).ToArray();
             foreach (var letter in _letters)
@@ -167,7 +169,7 @@ namespace VideoEditor.Ui
             if (text != null)
             {
                 Reset(_word);
-                var poses = text.Poses(_clip.Text, LetterSize, frame);
+                var poses = text.Poses(_clip.Text, LetterSize, frame, ScreenScale);
                 for (var i = 0; i < _letters.Length; i++)
                     Apply(_letters[i], poses[i]);
                 return;
@@ -205,6 +207,34 @@ namespace VideoEditor.Ui
                 clip = clip == null ? new RectangleGeometry(rect) : (Geometry)new CombinedGeometry(GeometryCombineMode.Intersect, clip, new RectangleGeometry(rect));
             }
             _word.Clip = clip;
+            // 색 바꾸기: 글자 색을 렌더와 같은 식(밝기를 지키며 물들임)으로, 광선: 둘레 빛(흐림이 있으면 흐림이 먼저)
+            var color = LetterColor;
+            foreach (var (amount, tint) in motion.Tints)
+                color = Tinted(color, Math.Max(0, Math.Min(1, amount.Eval(frame))), UiKit.ParseColor(tint, Colors.White));
+            foreach (var letter in _letters)
+                letter.Foreground = new SolidColorBrush(color);
+            _word.Effect = Blur((motion.Blur?.Eval(frame) ?? 0) * ScreenScale);
+            foreach (var (strength, glowSize, glowColor) in motion.Glows)
+            {
+                var s = Math.Max(0, Math.Min(1, strength.Eval(frame)));
+                if (_word.Effect == null && s > 0.01)
+                    _word.Effect = new DropShadowEffect { ShadowDepth = 0, Color = UiKit.ParseColor(glowColor, Colors.White), BlurRadius = Math.Max(4, glowSize * ScreenScale * 2), Opacity = s };
+            }
+        }
+
+        /// <summary>렌더의 색 바꾸기와 같은 식: (1 − a) × 색 + a × 물들일 색 × 밝기.</summary>
+        private static Color Tinted(Color color, double a, Color tint)
+        {
+            var luma = (0.299 * color.R + 0.587 * color.G + 0.114 * color.B) / 255;
+            byte Mix(byte value, byte target) => (byte)Math.Round(Math.Max(0, Math.Min(255, (1 - a) * value + a * target * luma)));
+            return Color.FromRgb(Mix(color.R, tint.R), Mix(color.G, tint.G), Mix(color.B, tint.B));
+        }
+
+        /// <summary>흐림(썸네일 픽셀 시그마)의 흐림 효과(없으면 null).</summary>
+        private static Effect Blur(double sigma)
+        {
+            var radius = Math.Max(0, sigma) * 3;
+            return radius > 0.05 ? new BlurEffect { Radius = radius } : null;
         }
 
         private static void Reset(UIElement element)
@@ -212,6 +242,7 @@ namespace VideoEditor.Ui
             element.RenderTransform = Transform.Identity;
             element.Opacity = 1;
             element.Clip = null;
+            element.Effect = null;
         }
 
         private static void Apply(TextBlock letter, UnitPose pose)
@@ -222,6 +253,11 @@ namespace VideoEditor.Ui
             group.Children.Add(new TranslateTransform(pose.X, pose.Y));
             letter.RenderTransform = group;
             letter.Opacity = Math.Max(0, Math.Min(1, pose.Opacity));
+            letter.Foreground = new SolidColorBrush(LetterColor);
+            // 굵게: 같은 색 빛을 둘러 굵어 보이게(썸네일 글꼴은 더 굵게 그릴 수 없다)
+            letter.Effect = pose.Bold > 0.05
+                ? new DropShadowEffect { ShadowDepth = 0, Color = LetterColor, BlurRadius = pose.Bold * 2, Opacity = 1 }
+                : Blur(pose.Blur);
             if (pose.Visible >= 1)
             {
                 letter.Clip = null;
@@ -230,10 +266,20 @@ namespace VideoEditor.Ui
             letter.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             var size = letter.DesiredSize;
             var rect = new Rect(0, 0, size.Width, size.Height);
+            var visible = Math.Max(0, pose.Visible);
+            if (pose.Split)
+            {
+                if (pose.WipeX != 0)
+                    rect = new Rect(size.Width * (1 - visible) / 2, 0, size.Width * visible, size.Height);
+                if (pose.WipeY != 0)
+                    rect = new Rect(rect.Left, size.Height * (1 - visible) / 2, rect.Width, size.Height * visible);
+                letter.Clip = new RectangleGeometry(rect);
+                return;
+            }
             if (pose.WipeX != 0)
-                rect = new Rect(pose.WipeX < 0 ? 0 : size.Width * (1 - pose.Visible), 0, size.Width * pose.Visible, size.Height);
+                rect = new Rect(pose.WipeX < 0 ? 0 : size.Width * (1 - visible), 0, size.Width * visible, size.Height);
             if (pose.WipeY != 0)
-                rect = new Rect(rect.Left, pose.WipeY < 0 ? 0 : size.Height * (1 - pose.Visible), rect.Width, size.Height * pose.Visible);
+                rect = new Rect(rect.Left, pose.WipeY < 0 ? 0 : size.Height * (1 - visible), rect.Width, size.Height * visible);
             letter.Clip = new RectangleGeometry(rect);
         }
     }

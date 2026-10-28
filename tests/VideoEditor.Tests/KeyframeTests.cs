@@ -352,9 +352,9 @@ namespace VideoEditor.Tests
             var x = ClipKeyframes.Expression(ClipKeyframes.Track(video, KeyframeProperty.Position)).ToFfmpeg("(round(t*30/1)+5)");
             Assert.StartsWith("if(lt((round(t*30/1)+5),20),((-100)+(200*clip(((round(t*30/1)+5)/20),0,1))),100)", x);
             Assert.Contains("overlay=x='(main_w-overlay_w)/2+" + x + "'", filter);
-            // 회전: 바뀌는 각도라 대각선 크기 rotate
-            Assert.Contains(",rotate=a='", filter);
-            Assert.Contains(":c=none:ow='hypot(iw,ih)':oh=ow", filter);
+            // 회전: 바뀌는 각도라 대각선 크기 rotate — 빈 곳은 투명하게(c=none은 앞 장이 꼬리처럼 남음), 넓히는 폭은 4의 배수(남은 효과 묶음의 고침)
+            Assert.Contains(",pad=w=iw+4:h=ih+4:x=2:y=2:color=black@0,rotate=a='", filter);
+            Assert.Contains(":c=black@0:ow='iw+4*ceil((hypot(iw,ih)-iw)/4)':oh='ih+4*ceil((hypot(iw,ih)-ih)/4)'", filter);
             // 불투명도: 키프레임 시각에 정확히 그 값(구간 시작 5 → 클립 안 15장이 흐름의 10장)
             var commands = Regex.Match(filter, "sendcmd=c='([^']*)'").Groups[1].Value.Split(';');
             Assert.Equal("0.183333 colorchannelmixer@an0 aa 0.95", commands[0]);

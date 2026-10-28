@@ -18,7 +18,8 @@ namespace VideoEditor.Ui
         private UIElement AnimationTab(string id)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
-            var text = _session.Project.FindClip(id)?.Kind == ClipKind.Text;
+            var target = _session.Project.FindClip(id);
+            var text = target?.Kind == ClipKind.Text;
             var tiles = new List<(AnimationTile Tile, AnimationKind Kind, AnimationEffect Effect)>();
             var rows = new Dictionary<AnimationKind, StackPanel>();
             foreach (var kind in new[] { AnimationKind.In, AnimationKind.Emphasis, AnimationKind.Out, AnimationKind.Path })
@@ -26,7 +27,7 @@ namespace VideoEditor.Ui
                 panel.Children.Add(Section(ClipAnimations.KindName(kind)));
                 var wrap = new WrapPanel();
                 AutomationProperties.SetAutomationId(wrap, "AnimationTiles" + kind);
-                var defs = kind == AnimationKind.Path ? ClipAnimations.Paths : ClipAnimations.All.Where(d => d.Emphasis == (kind == AnimationKind.Emphasis) && (text || !d.TextOnly));
+                var defs = kind == AnimationKind.Path ? ClipAnimations.Paths : ClipAnimations.All.Where(d => ClipAnimations.Offers(target, d, kind));
                 foreach (var def in defs)
                 {
                     var tile = new AnimationTile(def, kind, text && def.TextOnly, "Anim" + kind + "_" + def.Effect);
@@ -200,9 +201,10 @@ namespace VideoEditor.Ui
             if (def.Directions.Count > 0)
                 Choice("방향", "Direction", def.Directions, d => ClipAnimations.DirectionName(effect, d), a => a.Direction, (a, v) => a.Direction = v);
             var current0 = Find(_session.Project.FindClip(id));
-            if (text && kind != AnimationKind.Emphasis && kind != AnimationKind.Path)
+            // 단위: 나타나기·사라지기와 글자 전용 강조(물결·굵게 깜빡이기)
+            if (text && kind != AnimationKind.Path && (kind != AnimationKind.Emphasis || def.TextOnly))
             {
-                var units = def.TextOnly ? new[] { AnimationUnit.Word, AnimationUnit.Character } : new[] { AnimationUnit.All, AnimationUnit.Word, AnimationUnit.Character };
+                var units = def.NeedsUnits ? new[] { AnimationUnit.Word, AnimationUnit.Character } : new[] { AnimationUnit.All, AnimationUnit.Word, AnimationUnit.Character };
                 Choice("단위", "Unit", units, ClipAnimations.UnitName, a => a.Unit, (a, v) =>
                 {
                     a.Unit = v;
@@ -260,6 +262,13 @@ namespace VideoEditor.Ui
             }
             if (kind == AnimationKind.Path)
                 AddPathRows(box, id, prefix, effect, Find, Change, local);
+            if (def.DefaultColor != null)
+            {
+                var color = UiKit.ColorRow("색", prefix + "Color", () => Find(_session.Project.FindClip(id))?.Color ?? def.DefaultColor,
+                    hex => Change(a => a.Color = ClipAnimations.Rgb(hex, def.DefaultColor)));
+                local.Add(color.Refresh);
+                box.Children.Add(color);
+            }
             return box;
         }
 

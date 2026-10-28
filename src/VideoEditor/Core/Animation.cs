@@ -18,7 +18,9 @@ namespace VideoEditor.Core
     }
 
     /// <summary>
-    /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기, 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기,
+    /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기·떠오르기·커지며 돌기·가운데서 갈라지기·흐림에서 선명하게·그려지기,
+    /// 사라지기만: 떨어지기,
+    /// 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기·색 바꾸기·광선 깜빡임·물결·굵게 깜빡이기.
     /// 이동 경로: 직선·호·원·물결·사용자 경로(이름 앞에 Path — 강조 효과 이름과 겹치지 않게).
     /// 저장된 이름이 바뀌면 예전 프로젝트에서 효과가 빠지므로 이름을 바꾸지 않는다(뒤에만 더한다).
     /// </summary>
@@ -41,11 +43,23 @@ namespace VideoEditor.Core
         PathArc,
         PathCircle,
         PathWave,
-        PathCustom
+        PathCustom,
+        // 2단계(#4): 남은 효과
+        Rise,
+        GrowTurn,
+        Split,
+        Unblur,
+        ColorChange,
+        Glow,
+        Wave,
+        BoldFlash,
+        Fall,
+        Draw
     }
 
     /// <summary>
-    /// 방향: 나타나기는 들어오는 쪽, 사라지기는 나가는 쪽. 회전·돌며 나타나기는 왼쪽 = 시계 반대, 오른쪽 = 시계 방향, 흔들기는 왼쪽·오른쪽 = 가로, 위·아래 = 세로.
+    /// 방향: 나타나기는 들어오는 쪽, 사라지기는 나가는 쪽. 회전·돌며 나타나기·커지며 돌기는 왼쪽 = 시계 반대, 오른쪽 = 시계 방향,
+    /// 흔들기·가운데서 갈라지기는 왼쪽·오른쪽 = 가로(좌우로), 위·아래 = 세로(위아래로).
     /// </summary>
     public enum AnimationDirection
     {
@@ -114,6 +128,9 @@ namespace VideoEditor.Core
         /// <summary>이동 경로의 되돌아오기: 한 번 안에서 끝까지 갔다가 시작 자리로 돌아온다.</summary>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool RoundTrip { get; set; }
+        /// <summary>색("#RRGGBB" — 색 바꾸기·광선 깜빡임). 색을 쓰지 않는 효과는 null.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string Color { get; set; }
 
         public ClipAnimation Clone()
         {
@@ -155,8 +172,16 @@ namespace VideoEditor.Core
         public bool Emphasis { get; init; }
         /// <summary>이동 경로인지(<see cref="ClipAnimations.Paths"/>).</summary>
         public bool Path { get; init; }
-        /// <summary>글자별로만 움직이는 효과(타자기·흩어지기) — 글자 클립에만 넣는다.</summary>
+        /// <summary>글자 클립에만 넣는 효과(타자기·흩어지기·물결·굵게 깜빡이기) — 그리개가 글자를 장마다 그린다.</summary>
         public bool TextOnly { get; init; }
+        /// <summary>단어·글자로 나눠야만 하는 효과(타자기·흩어지기·물결) — "한 번에"로 저장된 것은 글자별로 읽는다.</summary>
+        public bool NeedsUnits { get; init; }
+        /// <summary>색을 고르는 효과의 기본 색("#RRGGBB" — 색 바꾸기·광선 깜빡임). 색을 쓰지 않으면 null.</summary>
+        public string DefaultColor { get; init; }
+        /// <summary>사라지기에만 쓰는 효과(떨어지기 — 거꾸로 돌린 나타나기가 없다).</summary>
+        public bool OutOnly { get; init; }
+        /// <summary>획을 그리는 효과(그려지기) — 선·화살표·동그라미 치기·밑줄 요소에만 넣고(<see cref="ArtShape.Draws"/>) 그리개가 장마다 그린다.</summary>
+        public bool Strokes { get; init; }
         /// <summary>고를 수 있는 방향(비었으면 방향 없음). 첫 값이 기본.</summary>
         public IReadOnlyList<AnimationDirection> Directions { get; init; } = Array.Empty<AnimationDirection>();
         public AnimationEase DefaultEase { get; init; }
@@ -179,7 +204,7 @@ namespace VideoEditor.Core
         /// <summary>이 분류에 넣을 수 있는 효과인지(강조는 강조 효과, 이동 경로는 경로, 나타나기·사라지기는 그 밖).</summary>
         public bool Fits(AnimationKind kind)
         {
-            return Path ? kind == AnimationKind.Path : kind != AnimationKind.Path && Emphasis == (kind == AnimationKind.Emphasis);
+            return Path ? kind == AnimationKind.Path : kind != AnimationKind.Path && Emphasis == (kind == AnimationKind.Emphasis) && (!OutOnly || kind == AnimationKind.Out);
         }
     }
 
@@ -221,10 +246,22 @@ namespace VideoEditor.Core
             new AnimationEffectDef { Effect = AnimationEffect.Spin, Name = "돌며 나타나기", OutName = "돌며 사라지기", Description = "돌면서 커지며 나타나고, 돌면서 작아지며 사라집니다.",
                 Directions = Turns, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.8, Amount = new AnimationAmount("회전", 0, 1080, 360, "°") },
             new AnimationEffectDef { Effect = AnimationEffect.Typewriter, Name = "타자기", OutName = "타자기 지우기", Description = "글자가 하나씩 찍히고, 뒤에서부터 하나씩 지워집니다(글자 클립).",
-                TextOnly = true, DefaultSeconds = 1.5, DefaultUnit = AnimationUnit.Character, DefaultStagger = 100 },
+                TextOnly = true, NeedsUnits = true, DefaultSeconds = 1.5, DefaultUnit = AnimationUnit.Character, DefaultStagger = 100 },
             new AnimationEffectDef { Effect = AnimationEffect.Scatter, Name = "모여들기", OutName = "흩어지기", Description = "글자가 사방에서 돌며 모여들고, 사방으로 흩어집니다(글자 클립).",
-                TextOnly = true, DefaultEase = AnimationEase.Out, DefaultSeconds = 1.0, DefaultUnit = AnimationUnit.Character, DefaultStagger = 30,
+                TextOnly = true, NeedsUnits = true, DefaultEase = AnimationEase.Out, DefaultSeconds = 1.0, DefaultUnit = AnimationUnit.Character, DefaultStagger = 30,
                 Amount = new AnimationAmount("거리", 20, 300, 100, "%") },
+            new AnimationEffectDef { Effect = AnimationEffect.Rise, Name = "떠오르기", OutName = "흐려지며 가라앉기", Description = "아래에서 떠오르며 서서히 보이고, 흐려지며 아래로 가라앉습니다.",
+                DefaultEase = AnimationEase.Out, DefaultSeconds = 0.7, Amount = new AnimationAmount("거리", 5, 500, 60, "px") },
+            new AnimationEffectDef { Effect = AnimationEffect.GrowTurn, Name = "커지며 돌기", OutName = "작아지며 돌기", Description = "작은 크기에서 돌며 커져 제자리에 서고, 돌며 작아져 사라집니다.",
+                Directions = Turns, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.7, Amount = new AnimationAmount("회전", 0, 1080, 90, "°") },
+            new AnimationEffectDef { Effect = AnimationEffect.Split, Name = "가운데서 갈라지기", OutName = "가운데로 닫히기", Description = "가운데에서 양쪽으로 열리며 드러나고, 양쪽에서 가운데로 닫히며 사라집니다.",
+                Directions = new[] { AnimationDirection.Left, AnimationDirection.Up }, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.6 },
+            new AnimationEffectDef { Effect = AnimationEffect.Unblur, Name = "흐림에서 선명하게", OutName = "흐릿하게 사라지기", Description = "흐릿하게 나타나 선명해지고, 흐려지며 사라집니다.",
+                DefaultEase = AnimationEase.Out, DefaultSeconds = 0.8, Amount = new AnimationAmount("흐림", 1, 100, 16, "px") },
+            new AnimationEffectDef { Effect = AnimationEffect.Draw, Name = "그려지기", OutName = "지워지기", Description = "선·화살표·동그라미 치기·밑줄이 펜으로 긋듯 한쪽 끝부터 그려지고, 그린 차례를 거꾸로 거두며 지워집니다(요소 클립).",
+                Strokes = true, DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.8 },
+            new AnimationEffectDef { Effect = AnimationEffect.Fall, Name = "떨어지기", Description = "기울며 점점 빨리 떨어져 화면 아래로 사라집니다(글자는 하나씩).", OutOnly = true,
+                Directions = Turns, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.8, Amount = new AnimationAmount("기울기", 0, 180, 25, "°") },
             new AnimationEffectDef { Effect = AnimationEffect.Pulse, Name = "맥박", Description = "커졌다 작아지기를 되풀이합니다.", Emphasis = true, Repeats = true,
                 DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, DefaultRepeat = 2, Amount = new AnimationAmount("커지는 정도", 1, 100, 15, "%") },
             new AnimationEffectDef { Effect = AnimationEffect.Shake, Name = "흔들기", Description = "좌우(또는 위아래)로 흔들리다 멈춥니다.", Emphasis = true, Repeats = true,
@@ -234,7 +271,16 @@ namespace VideoEditor.Core
             new AnimationEffectDef { Effect = AnimationEffect.Grow, Name = "크게·작게", Description = "정한 크기로 바뀐 뒤 그대로 남습니다.", Emphasis = true,
                 DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, Amount = new AnimationAmount("크기", 10, 400, 150, "%") },
             new AnimationEffectDef { Effect = AnimationEffect.Transparency, Name = "투명도 바꾸기", Description = "정한 불투명도로 바뀐 뒤 그대로 남습니다.", Emphasis = true,
-                DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, Amount = new AnimationAmount("불투명도", 0, 100, 40, "%") }
+                DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, Amount = new AnimationAmount("불투명도", 0, 100, 40, "%") },
+            new AnimationEffectDef { Effect = AnimationEffect.ColorChange, Name = "색 바꾸기", Description = "밝기를 지키며 정한 색으로 물든 뒤 그대로 남습니다(흰색은 그 색, 검은 윤곽은 그대로).", Emphasis = true,
+                DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, DefaultColor = "#EF4444", Amount = new AnimationAmount("세기", 0, 100, 100, "%") },
+            new AnimationEffectDef { Effect = AnimationEffect.Glow, Name = "광선 깜빡임", Description = "둘레에 빛이 번쩍였다 사라지기를 되풀이합니다.", Emphasis = true, Repeats = true,
+                DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, DefaultRepeat = 2, DefaultColor = "#FFE066", Amount = new AnimationAmount("광선 크기", 2, 100, 16, "px") },
+            new AnimationEffectDef { Effect = AnimationEffect.Wave, Name = "물결", Description = "글자가 차례로 솟았다 내려앉아 물결칩니다(글자 클립).", Emphasis = true, Repeats = true,
+                TextOnly = true, NeedsUnits = true, DefaultEase = AnimationEase.InOut, DefaultSeconds = 1.0, DefaultRepeat = 2, DefaultUnit = AnimationUnit.Character, DefaultStagger = 40,
+                Amount = new AnimationAmount("높이", 5, 200, 40, "%") },
+            new AnimationEffectDef { Effect = AnimationEffect.BoldFlash, Name = "굵게 깜빡이기", Description = "글자가 굵어졌다 돌아오기를 되풀이합니다(글자 클립 — 단어·글자별로 차례로도).", Emphasis = true, Repeats = true,
+                TextOnly = true, DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.5, DefaultRepeat = 2, DefaultStagger = 30, Amount = new AnimationAmount("굵기", 1, 30, 8, "%") }
         };
 
         /// <summary>이동 경로 목록(탭에 보이는 차례). 나타나기·강조·사라지기 목록(<see cref="All"/>)과 따로 둔다.</summary>
@@ -273,10 +319,12 @@ namespace VideoEditor.Core
         /// <summary>속성 패널에 보일 방향 이름(효과마다 뜻이 다르다).</summary>
         public static string DirectionName(AnimationEffect effect, AnimationDirection direction)
         {
-            if (effect == AnimationEffect.Spin || effect == AnimationEffect.Rotate || effect == AnimationEffect.PathCircle)
+            if (effect == AnimationEffect.Spin || effect == AnimationEffect.Rotate || effect == AnimationEffect.PathCircle || effect == AnimationEffect.GrowTurn || effect == AnimationEffect.Fall)
                 return direction == AnimationDirection.Left ? "시계 반대" : "시계 방향";
             if (effect == AnimationEffect.Shake)
                 return direction == AnimationDirection.Up || direction == AnimationDirection.Down ? "세로" : "가로";
+            if (effect == AnimationEffect.Split)
+                return direction == AnimationDirection.Up || direction == AnimationDirection.Down ? "위아래로" : "좌우로";
             switch (direction)
             {
                 case AnimationDirection.Left: return "왼쪽";
@@ -314,16 +362,29 @@ namespace VideoEditor.Core
             return clip != null && clip.IsVisual;
         }
 
-        /// <summary>이 클립에 이 효과를 넣을 수 있는지(타자기·흩어지기는 글자 클립만).</summary>
+        /// <summary>이 클립에 이 효과를 넣을 수 있는지(타자기·흩어지기·물결·굵게 깜빡이기는 글자 클립만, 그려지기는 선·화살표·동그라미 치기·밑줄 요소만).</summary>
         public static bool Allows(Clip clip, AnimationEffectDef def)
         {
-            return CanHave(clip) && def != null && (!def.TextOnly || clip.Kind == ClipKind.Text);
+            return CanHave(clip) && def != null && (!def.TextOnly || clip.Kind == ClipKind.Text)
+                && (!def.Strokes || clip.Kind == ClipKind.Art && clip.Art != null && ArtShape.Draws(clip.Art.Kind));
+        }
+
+        /// <summary>이 분류에 쓰는 효과인지(강조는 강조끼리, 사라지기 전용은 사라지기에만).</summary>
+        public static bool Fits(AnimationEffectDef def, AnimationKind kind)
+        {
+            return def != null && def.Fits(kind);
+        }
+
+        /// <summary>[애니메이션] 탭의 분류 칸에 보일 효과인지(분류가 맞고 이 클립에 넣을 수 있음).</summary>
+        public static bool Offers(Clip clip, AnimationEffectDef def, AnimationKind kind)
+        {
+            return Fits(def, kind) && Allows(clip, def);
         }
 
         /// <summary>기본값으로 새 애니메이션(분류가 효과와 맞지 않으면 null). 이동 경로는 높이 1080 화면 기준 기본 점(<see cref="MotionPaths.DefaultPoints"/>).</summary>
         public static ClipAnimation Create(AnimationEffectDef def, AnimationKind kind, FrameRate rate, Clip clip = null)
         {
-            if (def == null || !def.Fits(kind))
+            if (!Fits(def, kind))
                 return null;
             if (def.Path)
             {
@@ -350,7 +411,8 @@ namespace VideoEditor.Core
                 Duration = Math.Max(1, Math.Min(MaxFrames, rate.ToFrames(def.DefaultSeconds))),
                 Repeat = def.Emphasis ? def.DefaultRepeat : 1,
                 Ease = def.DefaultEase,
-                Amount = def.Amount?.Default ?? 0
+                Amount = def.Amount?.Default ?? 0,
+                Color = def.DefaultColor
             };
         }
 
@@ -438,7 +500,7 @@ namespace VideoEditor.Core
             foreach (var item in clip.Animations)
             {
                 var def = item == null ? null : Def(item.Effect);
-                if (def == null || !Enum.IsDefined(item.Kind) || !def.Fits(item.Kind) || !Allows(clip, def))
+                if (def == null || !Enum.IsDefined(item.Kind) || !Fits(def, item.Kind) || !Allows(clip, def))
                     continue;
                 if (item.Kind != AnimationKind.Emphasis && result.Any(a => a.Kind == item.Kind))
                     continue;
@@ -447,9 +509,10 @@ namespace VideoEditor.Core
                 var a = item.Clone();
                 if (!def.Directions.Contains(a.Direction))
                     a.Direction = def.DefaultDirection;
-                if (clip.Kind != ClipKind.Text || !Enum.IsDefined(a.Unit) || def.Path)
+                // 강조는 글자 전용(물결·굵게 깜빡이기)만 단위를 나눈다
+                if (clip.Kind != ClipKind.Text || !Enum.IsDefined(a.Unit) || def.Path || (def.Emphasis && !def.TextOnly))
                     a.Unit = AnimationUnit.All;
-                if (def.TextOnly && a.Unit == AnimationUnit.All)
+                if (def.NeedsUnits && a.Unit == AnimationUnit.All)
                     a.Unit = AnimationUnit.Character;
                 if (!Enum.IsDefined(a.Ease))
                     a.Ease = def.DefaultEase;
@@ -468,9 +531,19 @@ namespace VideoEditor.Core
                     a.Points = null;
                     a.RoundTrip = false;
                 }
+                a.Color = def.DefaultColor == null ? null : Rgb(a.Color, def.DefaultColor);
                 result.Add(a);
             }
             return Order(result);
+        }
+
+        /// <summary>색 글("#RRGGBB" — "#AARRGGBB"는 알파를 뺀다). 아니면 fallback.</summary>
+        public static string Rgb(string color, string fallback)
+        {
+            var normalized = TextStyle.NormalizeColor(color, null);
+            if (normalized == null)
+                return fallback;
+            return normalized.Length == 9 ? "#" + normalized.Substring(3) : normalized;
         }
 
         /// <summary>나눈 클립: 왼쪽 조각은 사라지기를, 오른쪽 조각은 나타나기를 뺀다(강조·이동 경로는 둘 다 남는다 — 오른쪽은 그 조각의 시작부터 다시).</summary>

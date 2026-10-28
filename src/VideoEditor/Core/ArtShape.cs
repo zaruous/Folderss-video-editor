@@ -172,6 +172,12 @@ namespace VideoEditor.Core
             }
         }
 
+        /// <summary>획을 따라 그려지는 모양인지(선·화살표·동그라미 치기·밑줄 — 애니메이션 "그려지기", <see cref="ArtGeometry.Outline(ArtShape, double, double)"/>의 drawn).</summary>
+        public static bool Draws(ArtKind kind)
+        {
+            return kind == ArtKind.Line || kind == ArtKind.Arrow || kind == ArtKind.CircleMark || kind == ArtKind.Underline;
+        }
+
         /// <summary>모서리 반경 값을 쓰는 모양인지.</summary>
         public static bool UsesCornerRadius(ArtKind kind)
         {
@@ -387,11 +393,24 @@ namespace VideoEditor.Core
 
         public static List<List<(double X, double Y)>> Outline(ArtShape shape, double scale)
         {
+            return Outline(shape, scale, 1);
+        }
+
+        /// <summary>
+        /// 획을 따라 drawn(0~1)만큼만 그린 윤곽(애니메이션 "그려지기" — <see cref="ArtShape.Draws"/>의 모양만, 그 밖은 다 그린 것과 같다).
+        /// 선·화살표는 왼쪽 끝(꼬리)부터 x = drawn × 너비까지 자르고, 동그라미 치기·밑줄은 붓 선의 앞 drawn만큼을 같은 굵기로 — 앞끝은 붓이 지나는 굵기다.
+        /// drawn이 1 이상이면 <see cref="Outline(ArtShape, double)"/>과 같고, 0 이하면 없다.
+        /// </summary>
+        public static List<List<(double X, double Y)>> Outline(ArtShape shape, double scale, double drawn)
+        {
             var s = shape?.Clone() ?? new ArtShape();
             s.Normalize();
             var k = double.IsFinite(scale) && scale > 0 ? scale : 1;
             double w = s.Width * k, h = s.Height * k;
             var result = new List<List<(double X, double Y)>>();
+            var partial = ArtShape.Draws(s.Kind) && !(drawn >= 1);
+            if (partial && !(drawn > 0))
+                return result;
             switch (s.Kind)
             {
                 case ArtKind.Ellipse:
@@ -412,6 +431,8 @@ namespace VideoEditor.Core
                 case ArtKind.Line:
                 case ArtKind.Arrow:
                     result.AddRange(Line(w, h, s.Thickness * k, s.Dashed, s.Kind == ArtKind.Arrow ? s.HeadSize : 0));
+                    if (partial)
+                        result = result.Select(polygon => ClipRight(polygon, w * drawn)).Where(polygon => polygon.Count >= 3).ToList();
                     break;
                 case ArtKind.Bubble:
                     result.Add(Ellipse(w, h));
@@ -425,10 +446,10 @@ namespace VideoEditor.Core
                     Thought(result, w, h, s.TailX, s.TailY);
                     break;
                 case ArtKind.CircleMark:
-                    result.Add(CircleMark(w, h, s.Thickness * k));
+                    result.Add(CircleMark(w, h, s.Thickness * k, partial ? drawn : 1));
                     break;
                 case ArtKind.Underline:
-                    result.Add(Underline(w, h, s.Thickness * k));
+                    result.Add(Underline(w, h, s.Thickness * k, partial ? drawn : 1));
                     break;
                 case ArtKind.Highlighter:
                 {
@@ -657,6 +678,24 @@ namespace VideoEditor.Core
             return result;
         }
 
+        /// <summary>다각형을 x ≤ limit 쪽만 남게 자른다(한 변으로 자르는 서덜랜드–호지먼).</summary>
+        private static List<(double X, double Y)> ClipRight(List<(double X, double Y)> polygon, double limit)
+        {
+            var result = new List<(double X, double Y)>();
+            for (var i = 0; i < polygon.Count; i++)
+            {
+                var a = polygon[i];
+                var b = polygon[(i + 1) % polygon.Count];
+                var aIn = a.X <= limit;
+                var bIn = b.X <= limit;
+                if (aIn)
+                    result.Add(a);
+                if (aIn != bIn)
+                    result.Add((limit, a.Y + (b.Y - a.Y) * (limit - a.X) / (b.X - a.X)));
+            }
+            return result;
+        }
+
         private static List<(double X, double Y)> Bar(double from, double to, double y, double t)
         {
             return new List<(double, double)> { (from, y - t / 2), (to, y - t / 2), (to, y + t / 2), (from, y + t / 2) };
@@ -750,7 +789,7 @@ namespace VideoEditor.Core
         /// 동그라미 치기: 손으로 그린 듯 1.12바퀴를 도는 굵은 선(돌수록 반지름이 조금 줄어 겹친 끝이 어긋나고, 양 끝은 가늘다). 바깥 가장자리가 상자에 닿는다.
         /// 선 조각 하나라 스스로 겹치는 곳도 0이 아닌 감김 규칙으로 칠해진다.
         /// </summary>
-        private static List<(double X, double Y)> CircleMark(double w, double h, double thickness)
+        private static List<(double X, double Y)> CircleMark(double w, double h, double thickness, double drawn)
         {
             var t = Math.Min(thickness, Math.Min(w, h) / 4);
             double a = w / 2 - t / 2, b = h / 2 - t / 2, cx = w / 2, cy = h / 2;
@@ -758,23 +797,24 @@ namespace VideoEditor.Core
             const double shrink = 0.07;
             var start = 200 * Math.PI / 180;
             var sweep = 2 * Math.PI * turns;
-            var n = Segments(Math.PI * (a + b) * turns, 64);
-            return Stroke(n, u =>
+            var n = Math.Max(2, (int)Math.Ceiling(Segments(Math.PI * (a + b) * turns, 64) * drawn));
+            return Stroke(n, v =>
             {
+                var u = v * drawn;
                 var angle = start + sweep * u;
                 var s = 1 - shrink * u;
                 return (cx + a * s * Math.Cos(angle), cy + b * s * Math.Sin(angle));
-            }, u => t / 2 * (0.3 + 0.7 * Math.Sqrt(Math.Sin(Math.PI * u))));
+            }, v => t / 2 * (0.3 + 0.7 * Math.Sqrt(Math.Sin(Math.PI * v * drawn))));
         }
 
         /// <summary>밑줄: 상자 가운데 높이를 지나는 완만한 붓 선(가운데가 조금 처지고 양 끝이 가늘다).</summary>
-        private static List<(double X, double Y)> Underline(double w, double h, double thickness)
+        private static List<(double X, double Y)> Underline(double w, double h, double thickness, double drawn)
         {
             var t = Math.Min(thickness, h / 2);
             var amplitude = Math.Max(0, h / 2 - t / 2) * 0.5;
-            var n = Segments(w, 32);
-            return Stroke(n, u => (t / 2 + u * Math.Max(0, w - t), h / 2 + amplitude * (Math.Sin(Math.PI * u) - 0.5)),
-                u => t / 2 * (0.35 + 0.65 * Math.Pow(Math.Sin(Math.PI * u), 0.35)));
+            var n = Math.Max(2, (int)Math.Ceiling(Segments(w, 32) * drawn));
+            return Stroke(n, v => (t / 2 + v * drawn * Math.Max(0, w - t), h / 2 + amplitude * (Math.Sin(Math.PI * v * drawn) - 0.5)),
+                v => t / 2 * (0.35 + 0.65 * Math.Pow(Math.Sin(Math.PI * v * drawn), 0.35)));
         }
 
         /// <summary>

@@ -174,6 +174,8 @@ namespace VideoEditor.Ui
 
             double boxWidth, boxHeight;
             var geometry = new GeometryGroup { FillRule = FillRule.Nonzero };
+            // 그려지기(#4) 도중이면 다 그린 모양의 경계 — 그림 크기·그라데이션·반사 바닥은 이것으로(장마다 같게)
+            Rect? whole = null;
             // 아트 요소 안의 글(말풍선 등) — 모양 위에 글자 색으로만 칠한다(꾸미기 효과는 모양에)
             GeometryGroup words = null;
             // 스티커 그림(제 색 그대로) — 있으면 본문은 채우기 대신 이것
@@ -206,7 +208,10 @@ namespace VideoEditor.Ui
                 var scale = Clamp(request.EffectScale, 0.001, 100, 1);
                 boxWidth = art.Width * scale;
                 boxHeight = art.Height * scale;
-                geometry.Children.Add(ArtPath(ArtGeometry.Outline(art, scale)));
+                var drawn = request.Animation?.Drawn(request.Animation.Frame) ?? 1;
+                geometry.Children.Add(ArtPath(ArtGeometry.Outline(art, scale, drawn)));
+                if (drawn < 1)
+                    whole = ArtPath(ArtGeometry.Outline(art, scale)).Bounds;
                 var area = ArtGeometry.TextArea(art, scale);
                 if (area != null && !string.IsNullOrEmpty(request.Text))
                 {
@@ -249,6 +254,8 @@ namespace VideoEditor.Ui
             var extent = ink;
             if (words != null && !words.Bounds.IsEmpty)
                 extent.Union(words.Bounds);
+            if (whole != null)
+                extent.Union(whole.Value);
             var centerX = boxWidth / 2;
             var centerY = boxHeight / 2;
             var halfWidth = Math.Max(centerX, extent.IsEmpty ? 0 : Math.Max(centerX - extent.Left, extent.Right - centerX));
@@ -278,7 +285,7 @@ namespace VideoEditor.Ui
                 }
                 else
                 {
-                    DrawBody(context, geometry, ink, style, request.EffectScale, null);
+                    DrawBody(context, geometry, ink, style, request.EffectScale, null, whole);
                 }
                 context.Pop();
             }
@@ -299,7 +306,7 @@ namespace VideoEditor.Ui
             if (shadow != null)
                 layers.Add(shadow);
             layers.AddRange(front);
-            var reflection = ReflectionLayer(front, geometry, ink, style, request.EffectScale, origin, layout.Width, layout.Height, cancellation);
+            var reflection = ReflectionLayer(front, geometry, whole ?? ink, style, request.EffectScale, origin, layout.Width, layout.Height, cancellation);
             if (reflection != null)
                 layers.Insert(0, reflection);
             var bitmap = new RenderTargetBitmap(layout.Width, layout.Height, 96, 96, PixelFormats.Pbgra32);
@@ -692,13 +699,13 @@ namespace VideoEditor.Ui
         /// 본문을 그린다: 윤곽선을 먼저, 채우기를 위에 — 펜 두께의 바깥 절반(= 윤곽선 두께)만 보인다.
         /// paint가 있으면 윤곽선·채우기 색 대신 모두 그 붓으로 칠한다 — 그림자처럼 본문이 칠하는 모양만 필요할 때(채우기가 없으면 윤곽선 고리만).
         /// </summary>
-        private static void DrawBody(DrawingContext context, Geometry geometry, Rect ink, TextStyle style, double effectScale, Brush paint)
+        private static void DrawBody(DrawingContext context, Geometry geometry, Rect ink, TextStyle style, double effectScale, Brush paint, Rect? gradientBox = null)
         {
             var outline = OutlinePen(style.Outline, effectScale, paint);
             if (outline != null && !ink.IsEmpty)
                 DrawOutline(context, outline, geometry, style.Fill);
-            // 채우기(단색·선형·원형, 없음이면 칠하지 않음)
-            var fill = FillBrush(style.Fill);
+            // 채우기(단색·선형·원형, 없음이면 칠하지 않음). gradientBox가 있으면 그라데이션은 그 상자 기준(그려지는 도중에도 다 그린 모양과 같은 색)
+            var fill = gradientBox == null ? FillBrush(style.Fill) : Absolute(FillBrush(style.Fill), gradientBox.Value);
             if (fill != null)
                 context.DrawGeometry(paint ?? fill, null, geometry);
         }

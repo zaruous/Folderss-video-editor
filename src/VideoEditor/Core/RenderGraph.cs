@@ -252,12 +252,15 @@ namespace VideoEditor.Core
                     var motion = Motion(project, clip, options);
                     var local = TimeText(rate, segStart - clip.Start);
                     if (motion != null)
+                    {
                         chain.Append(WipeChain(motion, local));
+                        chain.Append(LookChain(motion, k / shrink, rate, segStart - clip.Start, segEnd - segStart, clip.Duration, n));
+                    }
                     // 회전 = 기준(키프레임·고정) + 효과. 바뀌지 않으면 예전처럼 고정 각도
                     var rotation = basis.Rotation.Constant;
                     if (motion?.Rotation != null || rotation == null)
                     {
-                        chain.Append(RotateChain(motion, basis.Rotation, local));
+                        chain.Append(RotateChain(motion, basis.Rotation, local, segStart - clip.Start, segEnd - segStart));
                     }
                     else if (Math.Abs(rotation.Value) > 0.01)
                     {
@@ -360,7 +363,7 @@ namespace VideoEditor.Core
             {
                 // 그리개가 없으면(그릴 수 없음) 투명 — 다른 클립은 그대로 그린다
                 if (UsesRasterizer(clip, options))
-                    return StyledText(project, options, plan, clip, segFrames);
+                    return DrawsUnits(clip, options) ? AnimatedText(project, options, plan, clip, segStart, segEnd) : StyledText(project, options, plan, clip, segFrames);
                 return string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba",
                     options.Width, options.Height, fps, N(rate.ToSeconds(segFrames)));
             }
