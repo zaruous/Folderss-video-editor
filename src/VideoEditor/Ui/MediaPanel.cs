@@ -390,7 +390,7 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// [글자] 글을 쓰고 [글자 추가] — 아래 스타일(스타일 모음 + 내 스타일)을 고르면 그 모양으로 넣는다(고른 단추를 다시 누르면 풀려 꾸미지 않은 글자).
-        /// 스타일 단추를 두 번 누르면 바로 넣는다. 썸네일은 이 탭이 처음 보일 때 그리고, 내 스타일은 탭이 보일 때마다 설정을 다시 읽는다.
+        /// 스타일 단추를 두 번 누르면 바로 넣는다. 썸네일은 이 탭이 처음 보일 때 그리고, 내 스타일은 탭이 보일 때마다·어느 편집 창에서든 바뀔 때마다 설정을 다시 읽는다.
         /// </summary>
         private UIElement TextTab()
         {
@@ -461,21 +461,30 @@ namespace VideoEditor.Ui
             var shown = false;
             void Refill()
             {
-                // 고른 것이 내 스타일이면 다시 읽을 때 푼다(다른 곳에서 지웠을 수 있다)
+                // 고른 것이 내 스타일이면 다시 읽은 뒤 같은 이름을 다시 고른다(다른 곳에서 지웠으면 풀린다, 덮어썼으면 새 스타일로)
+                string chosenMine = null;
                 if (chosenTile != null && mine.Children.Contains(chosenTile))
+                {
+                    chosenMine = AutomationProperties.GetName(chosenTile);
                     Choose(chosenTile, null, null);
+                }
                 mine.Children.Clear();
                 tiles.RemoveAll(t => t.ImageId.StartsWith("NewTextMine", StringComparison.Ordinal));
                 var styles = _services?.TextStyles() ?? new List<(string Name, TextStyle Style)>();
                 for (var i = 0; i < styles.Count; i++)
                 {
-                    mine.Children.Add(Tile(styles[i].Name, styles[i].Style, "NewTextMine" + i));
+                    var tile = Tile(styles[i].Name, styles[i].Style, "NewTextMine" + i);
+                    mine.Children.Add(tile);
                     if (shown)
                         StyleTiles.ShowThumbnail(_services, tiles[tiles.Count - 1].Frame, styles[i].Style, "NewTextMine" + i + "Image");
+                    if (chosenMine != null && string.Equals(styles[i].Name, chosenMine, StringComparison.Ordinal))
+                        Choose(tile, styles[i].Name, styles[i].Style);
                 }
                 mineTitle.Visibility = mine.Visibility = styles.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             }
             Refill();
+            // 어느 편집 창에서든 내 스타일이 바뀌면 곧바로 다시 읽는다(#34)
+            StyleTiles.ListenToMine(_services, panel, Refill);
             panel.IsVisibleChanged += (s, e) =>
             {
                 if (!panel.IsVisible)

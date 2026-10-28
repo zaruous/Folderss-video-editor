@@ -767,11 +767,20 @@ namespace VideoEditor.Ui
             return TextStyleLibrary.Read(Setting(TextStylesKey));
         }
 
-        /// <summary>내 스타일을 설정에 쓴다(비면 키를 지운다). 실패하면 false.</summary>
+        /// <summary>내 스타일을 설정에 쓴다(비면 키를 지운다). 실패하면 false. 쓰면 <see cref="TextStylesChanged"/>로 모든 편집 창에 알린다.</summary>
         public bool SaveTextStyles(List<(string Name, TextStyle Style)> styles)
         {
-            return SaveSetting(TextStylesKey, styles.Count == 0 ? null : TextStyleLibrary.Write(styles));
+            if (!SaveSetting(TextStylesKey, styles.Count == 0 ? null : TextStyleLibrary.Write(styles)))
+                return false;
+            Raise(TextStylesChanged);
+            return true;
         }
+
+        /// <summary>
+        /// 내 스타일이 바뀌었다(저장·지우기·이름·순서·가져오기 — 어느 편집 창에서든). 속성 패널 [꾸미기]·미디어 패널 [글자]의 내 스타일 줄이 다시 읽는다(#34).
+        /// 설정을 쓴 스레드에서 알리므로 받는 쪽은 자기 Dispatcher로 넘긴다.
+        /// </summary>
+        public event EventHandler TextStylesChanged;
 
         // ---------- 새 동영상 효과 ----------
 

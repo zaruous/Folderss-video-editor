@@ -1293,7 +1293,7 @@ namespace VideoEditor.Ui
         /// <summary>
         /// 내 스타일(스타일 모음 아래): 저장한 스타일 단추(설정 textStyles — <see cref="TextStyleLibrary"/>)와 [내 스타일로 저장]. 단추는 스타일 모음과 같은 틀·썸네일이고
         /// 누르면 스타일 모음처럼 글자 내용·크기는 그대로 두고 스타일을 통째로 바꾼다(실행 취소 한 단계). 오른쪽 클릭 [지우기]로 지운다 —
-        /// 저장·지우기는 프로젝트가 아닌 플러그인 설정이라 실행 취소에 남지 않는다. 탭이 보일 때마다 설정을 다시 읽는다(다른 편집 창에서 저장·지운 것도 보이게).
+        /// 저장·지우기는 프로젝트가 아닌 플러그인 설정이라 실행 취소에 남지 않는다. 탭이 보일 때마다, 그리고 어느 편집 창에서든 내 스타일이 바뀌면 곧바로 설정을 다시 읽는다.
         /// </summary>
         private UIElement MyStyles(string id)
         {
@@ -1355,6 +1355,7 @@ namespace VideoEditor.Ui
                 shown = _services != null;
                 Rebuild();
             };
+            StyleTiles.ListenToMine(_services, box, Rebuild);
             Rebuild();
             var save = UiKit.TextButton("내 스타일로 저장", "StyleSaveMine", () => SaveMine(id, Rebuild));
             save.Margin = new Thickness(0, 0, 0, 6);
