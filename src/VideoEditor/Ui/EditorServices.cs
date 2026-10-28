@@ -56,6 +56,8 @@ namespace VideoEditor.Ui
             // 미리 보기·재생·내보내기가 "사람에게만" 효과의 마스크를 여기서 찾는다
             PersonMasks = new PersonMaskService(PersonMaskFolder);
             RenderEnvironment.PersonMasks = PersonMasks;
+            // 재생 때 미리 그린 수식 전환 구간(데이터 폴더\cache\prerender — 편집 창들이 함께 쓴다)
+            Prerender = new PrerenderCache(Path.Combine(Manager.DataDirectory, "cache", "prerender"));
             // 앞서 끝난 실행이 남긴 꾸민 글자 PNG 캐시와 끊긴 인물 마스크(.part)를 치운다(살아 있는 실행의 폴더는 건드리지 않음).
             // 시스템 글꼴 목록도 미리 읽어 둔다 — 처음 글자 클립을 고를 때 UI 스레드가 멈추지 않게
             Task.Run(() =>
@@ -63,6 +65,7 @@ namespace VideoEditor.Ui
                 TextImageCache.Cleanup(RenderEnvironment.TempRoot());
                 _ = StyledTextRasterizer.Fonts;
                 PersonMasks.Cleanup(TimeSpan.FromHours(1));
+                Prerender.Cleanup(TimeSpan.FromHours(1));
             });
         }
 
@@ -103,6 +106,9 @@ namespace VideoEditor.Ui
 
         /// <summary>인물 마스크 만들기·찾기(<see cref="RenderEnvironment.PersonMasks"/>로도 쓰인다).</summary>
         public PersonMaskService PersonMasks { get; }
+
+        /// <summary>재생용 수식 전환 미리 그리기 캐시(데이터 폴더\cache\prerender, 크기 상한·청소 — <see cref="PrerenderCache"/>).</summary>
+        public PrerenderCache Prerender { get; }
 
         /// <summary>유튜브 약관·권리 안내를 확인했는지(한 번 확인하면 설정에 기억).</summary>
         public bool YtDlpNoticeAccepted

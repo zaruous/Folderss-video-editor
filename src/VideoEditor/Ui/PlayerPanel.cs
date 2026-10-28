@@ -132,6 +132,30 @@ namespace VideoEditor.Ui
             hoverLabel.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
             AutomationProperties.SetAutomationId(hoverLabel, "EffectHoverPreview");
             screen.Children.Add(hoverLabel);
+            // 무거운 수식 전환을 배경에서 미리 그리는 동안: 왼쪽 아래에 전환 이름과 그린 장 수(다 그리면 사라진다 — 그 뒤 재생은 캐시를 읽는다)
+            var prerenderText = new TextBlock { Foreground = Brushes.White, FontSize = 11 };
+            var prerenderLabel = new Border
+            {
+                Child = prerenderText,
+                Background = new SolidColorBrush(Color.FromArgb(0xB4, 0, 0, 0)),
+                CornerRadius = new CornerRadius(2),
+                Padding = new Thickness(7, 2, 8, 3),
+                Margin = new Thickness(8),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                IsHitTestVisible = false,
+                Visibility = Visibility.Collapsed
+            };
+            AutomationProperties.SetAutomationId(prerenderLabel, "PrerenderStatus");
+            screen.Children.Add(prerenderLabel);
+            player.PrerenderChanged += (s, e) =>
+            {
+                var status = player.Prerendering;
+                prerenderText.Text = status == null ? "" : "전환 미리 그리는 중 · " + status.Name + " " + status.Done + "/" + status.Total + "장"
+                                                           + (status.Waiting > 0 ? " · 다음 " + status.Waiting + "개" : "");
+                AutomationProperties.SetName(prerenderLabel, prerenderText.Text);
+                prerenderLabel.Visibility = status == null ? Visibility.Collapsed : Visibility.Visible;
+            };
             AutomationProperties.SetAutomationId(_placeholder, "PreviewPlaceholder");
             screen.Children.Add(_placeholder);
             Children.Add(screen);

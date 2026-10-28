@@ -478,10 +478,10 @@ namespace VideoEditor.Media
 
         /// <summary>
         /// 재생: from부터 to까지 화면을 BGRA 원시 프레임 흐름으로. 도우미가 있으면 도우미의 파이프, 아니면 ffmpeg.exe의 표준 출력.
-        /// 도우미가 실패하면 helperFailed에 알리고 ffmpeg.exe로 간다.
+        /// 도우미가 실패하면 helperFailed에 알리고 ffmpeg.exe로 간다. prerendered: 미리 그려 둔 수식 전환 구간(<see cref="PrerenderCache.Survey"/>) — 그 구간은 캐시를 읽는다.
         /// </summary>
         public static PlaybackStream OpenVideo(FfmpegTool tool, PreviewHelper helper, Project project, long from, long to, int width, int height,
-            ITextRasterizer textRasterizer = null, Action<HelperException> helperFailed = null)
+            ITextRasterizer textRasterizer = null, Action<HelperException> helperFailed = null, IReadOnlyList<PrerenderedSpan> prerendered = null)
         {
             var plan = RenderGraph.Build(project, new RenderOptions
             {
@@ -496,7 +496,8 @@ namespace VideoEditor.Media
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
                 TextRasterizer = textRasterizer,
-                PersonMasks = RenderEnvironment.PersonMasks
+                PersonMasks = RenderEnvironment.PersonMasks,
+                Prerendered = prerendered
             });
             var stream = TryHelper(helper, plan, RenderCommand.ToHelperPlan(plan, true, width, height, project.SampleRate, 0), helperFailed);
             if (stream != null)

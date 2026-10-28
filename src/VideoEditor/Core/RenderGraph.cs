@@ -31,6 +31,11 @@ namespace VideoEditor.Core
         /// 멈춘 화면 한 장과 내보내기는 원래 크기.
         /// </summary>
         public bool Playback { get; set; }
+        /// <summary>
+        /// 재생: 미리 그려 둔 수식 전환 구간(<see cref="TransitionPrerender"/>) — 그 전환은 가벼운 xfade로 잇고 줄이지 않으며, 구간 동안 캐시 그림(완성 화면)을 덮는다.
+        /// 재생 미리 보기(<see cref="Playback"/>·<see cref="Preview"/>)에서만 쓴다.
+        /// </summary>
+        public IReadOnlyList<PrerenderedSpan> Prerendered { get; set; }
         /// <summary>꾸민 글자(글자 상자를 정한 글자도)를 PNG로 그릴 그리개. null이면 스타일이 있어도 drawtext로 그린다(첫 채우기 색만 반영, 글자 상자는 무시).</summary>
         public ITextRasterizer TextRasterizer { get; set; }
     }
@@ -152,12 +157,12 @@ namespace VideoEditor.Core
                     var length = after != null && after.Start == clips[j].End ? Math.Min(after.TransitionIn, after.Duration) : 0;
                     return length > 0 && !Transitions.Resolve(after, options.FfmpegMajor).IsDissolve && Overlaps(after.Start, length, options);
                 }
-                // i부터 시작하는 묶음에 수식 전환이 있는지
+                // i부터 시작하는 묶음에 수식 전환이 있는지(미리 그려 둔 전환은 빼고)
                 bool HasExpression(int i)
                 {
                     for (var j = i; j < clips.Count; j++)
                     {
-                        if (XfadeIn(j) && Transitions.Resolve(clips[j], options.FfmpegMajor).IsExpression)
+                        if (XfadeIn(j) && Transitions.Resolve(clips[j], options.FfmpegMajor).IsExpression && !TransitionPrerender.Covers(options, clips[j]))
                             return true;
                         if (!XfadeOut(j))
                             break;
@@ -279,9 +284,10 @@ namespace VideoEditor.Core
                             group = "t" + n;
                             groupStart = clip.Start;
                         }
-                        // offset: 묶음 흐름에서 이 클립(=전환)이 시작하는 초
+                        // offset: 묶음 흐름에서 이 클립(=전환)이 시작하는 초. 미리 그려 둔 전환은 캐시 그림이 덮으므로 가벼운 효과로 잇는다
                         filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}][{1}]xfade={2}:duration={3}:offset={4}[x{5}]",
-                            group, piece, Transitions.XfadeOption(effect), N(rate.ToSeconds(transition)), N(rate.ToSeconds(clip.Start - groupStart)), n));
+                            group, piece, TransitionPrerender.Covers(options, clip) ? TransitionPrerender.HiddenXfade : Transitions.XfadeOption(effect),
+                            N(rate.ToSeconds(transition)), N(rate.ToSeconds(clip.Start - groupStart)), n));
                         group = "x" + n;
                     }
                     else
@@ -296,7 +302,8 @@ namespace VideoEditor.Core
                 if (group != null)
                     CloseGroup();
             }
-            filters.Add("[" + layer + "]format=" + (options.Preview ? "bgra" : "yuv420p") + "[vout]");
+            // 출력 형식으로 — 재생에 미리 그린 전환 구간이 있으면 그 구간은 캐시 그림으로 덮는다
+            TransitionPrerender.Finish(options, plan, rate, layer, filters);
             plan.HasVideo = true;
         }
 
@@ -712,7 +719,7 @@ namespace VideoEditor.Core
 
         // ---------- 글·숫자 ----------
 
-        private static int AddInput(RenderPlan plan, params string[] args)
+        internal static int AddInput(RenderPlan plan, params string[] args)
         {
             plan.Inputs.Add(args.ToList());
             return plan.Inputs.Count - 1;
