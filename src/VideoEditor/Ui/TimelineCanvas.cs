@@ -31,7 +31,7 @@ namespace VideoEditor.Ui
     /// 링크된 영상·사운드(사운드 분리)는 함께 옮기고 다듬는다 — 끌기 시작할 때 Alt면 그 한 번만 그 클립만.
     /// 조작은 Pointer* 메서드로 모여 있어 화면 시험이 마우스 없이 부를 수 있다.
     /// </summary>
-    internal sealed class TimelineCanvas : FrameworkElement
+    internal sealed partial class TimelineCanvas : FrameworkElement
     {
         public const double RulerHeight = 28;
         public const string MediaDataFormat = "VideoEditor.MediaPaths";
@@ -909,13 +909,17 @@ namespace VideoEditor.Ui
                 dc.DrawText(Text(rate.Timecode(clip.Duration), 10, WaveBrush), new Point(textLeft, rect.Top + 16));
             // 어긋남: 짝보다 늦으면 +, 이르면 −(링크를 풀고 옮겼거나 잠긴 짝이 따라오지 못함)
             var offset = partner == null ? 0 : ClipLinks.Offset(clip, partner);
+            var badgeRight = rect.Right - 4;
             if (offset != 0)
             {
                 var badge = Text(ClipLinks.FormatOffset(offset, rate), 10, Brushes.White, true);
                 var box = new Rect(Math.Max(rect.Left + 2, rect.Right - badge.Width - 10), rect.Top + 2, badge.Width + 6, badge.Height + 2);
                 dc.DrawRoundedRectangle(OffsetBadgeBrush, null, box, 3, 3);
                 dc.DrawText(badge, new Point(box.Left + 3, box.Top + 1));
+                badgeRight = box.Left - 3;
             }
+            // 동영상 효과 배지(TimelineCanvas.Effects.cs) — 어긋남 배지가 있으면 그 왼쪽
+            DrawEffectBadge(dc, clip, rect, badgeRight);
             dc.Pop();
             // 페이드
             if (clip.FadeIn > 0)
@@ -1146,6 +1150,10 @@ namespace VideoEditor.Ui
                 // 화면 읽기 프로그램·시험에도 전환이 들어 있다는 것을 알린다
                 if (_clip.TransitionIn > 0 && _clip.IsVisual && !_track.Subtitles)
                     name += " · 전환 " + Transitions.Name(_clip) + " " + UiKit.Number(rate.ToSeconds(_clip.TransitionIn)) + "초";
+                // 동영상 효과(그리는 차례)
+                var effects = VideoEffectLabels.Spoken(_clip);
+                if (effects != null)
+                    name += " · " + effects;
                 // 사운드 분리: 링크 상태와 어긋남
                 var partner = ClipLinks.Partner(_canvas.Session.Project, _clip);
                 if (partner != null)
