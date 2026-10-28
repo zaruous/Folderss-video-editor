@@ -787,8 +787,10 @@ namespace VideoEditor.Ui
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             panel.Children.Add(Section("스타일 모음"));
-            panel.Children.Add(PresetGallery(id));
-            panel.Children.Add(MyStyles(id));
+            // 아트 요소는 썸네일을 글자 대신 도형 견본(둥근 사각형)으로 — 모양에 쓰는 꾸미기만 보인다
+            var sample = art ? ArtShape.StyleSample() : null;
+            panel.Children.Add(PresetGallery(id, sample));
+            panel.Children.Add(MyStyles(id, sample));
             // 아트 요소는 글꼴·휘기 묶음을 숨긴다(모양에는 쓰지 않음 — 스타일은 글자와 같은 것을 쓴다)
             var fontFrom = panel.Children.Count;
             var warning = UiKit.Label("이 PC에 없는 글꼴이라 맑은 고딕으로 그립니다.", true);
@@ -1194,7 +1196,7 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// [모양] 아트 요소의 상자(너비·높이)와 종류별 값 — 사각형: 모서리 반경, 다각형·별: 변·뿔 수, 별: 안쪽 비율, 선·화살표: 두께·점선, 화살표: 머리 크기.
-        /// 길이는 프로젝트 픽셀(크기 배율 전). 모양 손잡이(미리 보기에서 끌기)는 다음 단계.
+        /// 길이는 프로젝트 픽셀(크기 배율 전). 미리 보기 틀의 노란 점(모양 손잡이)으로도 바꾼다 — 모서리 반경, 선·화살표 양 끝, 별 안쪽.
         /// </summary>
         private UIElement ShapeTab(string id, ArtKind kind)
         {
@@ -1223,7 +1225,9 @@ namespace VideoEditor.Ui
             }
             if (kind == ArtKind.Arrow)
                 panel.Children.Add(NumberRow("머리", "ArtHeadSize", 1.5, 10, "×", id, c => c.Art?.HeadSize ?? 3, (c, v) => Shape(c).HeadSize = Math.Max(1.5, Math.Min(10, v))));
-            var hint = UiKit.Label(line ? "선·화살표는 상자 가운데 높이에서 왼쪽 끝 → 오른쪽 끝으로 긋습니다. 방향은 [화면] 탭의 회전으로 바꿉니다." : "색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.", true);
+            var hint = UiKit.Label(line ? "선·화살표는 상자 가운데 높이에서 왼쪽 끝 → 오른쪽 끝으로 긋습니다. 미리 보기에서 양 끝의 노란 점을 끌면 길이·방향이 바뀌고 반대쪽 끝은 그대로입니다([화면] 탭의 회전으로도)."
+                : kind == ArtKind.Rectangle || kind == ArtKind.Star ? "미리 보기 틀의 노란 점을 끌어 " + (kind == ArtKind.Star ? "안쪽 비율" : "모서리 반경") + "을 바꿀 수도 있습니다. 색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다."
+                : "색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.", true);
             hint.TextWrapping = TextWrapping.Wrap;
             hint.Margin = new Thickness(0, 4, 0, 4);
             panel.Children.Add(hint);
@@ -1232,9 +1236,9 @@ namespace VideoEditor.Ui
 
         /// <summary>
         /// 스타일 모음: 미리 만든 스타일 단추(<see cref="TextStylePresets"/>). 누르면 글자 내용·크기는 그대로 두고 스타일을 통째로 바꾼다(실행 취소 한 단계).
-        /// 단추 그림은 그리개로 그린 썸네일 — 탭이 처음 보일 때 배경에서 그리고, 다 그리기 전이나 실패하면 이름 글자만 보인다.
+        /// 단추 그림은 그리개로 그린 썸네일 — 탭이 처음 보일 때 배경에서 그리고, 다 그리기 전이나 실패하면 이름 글자만 보인다. sample이 있으면(아트 요소) 그 도형 견본으로 그린다.
         /// </summary>
-        private UIElement PresetGallery(string id)
+        private UIElement PresetGallery(string id, ArtShape sample)
         {
             var gallery = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
             AutomationProperties.SetAutomationId(gallery, "StylePresets");
@@ -1261,7 +1265,7 @@ namespace VideoEditor.Ui
                     return;
                 requested = true;
                 foreach (var tile in tiles)
-                    StyleTiles.ShowThumbnail(_services, tile.Frame, tile.Style, tile.ImageId);
+                    StyleTiles.ShowThumbnail(_services, tile.Frame, tile.Style, tile.ImageId, sample);
             };
             return gallery;
         }
@@ -1271,7 +1275,7 @@ namespace VideoEditor.Ui
         /// 누르면 스타일 모음처럼 글자 내용·크기는 그대로 두고 스타일을 통째로 바꾼다(실행 취소 한 단계). 오른쪽 클릭 [지우기]로 지운다 —
         /// 저장·지우기는 프로젝트가 아닌 플러그인 설정이라 실행 취소에 남지 않는다. 탭이 보일 때마다 설정을 다시 읽는다(다른 편집 창에서 저장·지운 것도 보이게).
         /// </summary>
-        private UIElement MyStyles(string id)
+        private UIElement MyStyles(string id, ArtShape sample)
         {
             var box = new StackPanel();
             box.Children.Add(Section("내 스타일"));
@@ -1321,7 +1325,7 @@ namespace VideoEditor.Ui
                     button.ContextMenu.Items.Add(remove);
                     row.Children.Add(button);
                     if (shown)
-                        StyleTiles.ShowThumbnail(_services, frame, style, "StyleMine" + i + "Image");
+                        StyleTiles.ShowThumbnail(_services, frame, style, "StyleMine" + i + "Image", sample);
                 }
                 row.Visibility = styles.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
                 hint.Visibility = styles.Count > 0 ? Visibility.Collapsed : Visibility.Visible;

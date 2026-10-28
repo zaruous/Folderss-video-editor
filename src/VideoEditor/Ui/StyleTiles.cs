@@ -11,7 +11,7 @@ namespace VideoEditor.Ui
 {
     /// <summary>
     /// 꾸민 글자 스타일 단추(속성 패널 [꾸미기]의 스타일 모음·내 스타일, 미디어 패널 [글자] 탭의 스타일 고르기):
-    /// 어두운 틀에 이름 글자를 두고, 그리개로 그린 썸네일("가나Ab")이 오면 그것으로 바꾼다.
+    /// 어두운 틀에 이름 글자를 두고, 그리개로 그린 썸네일("가나Ab" — 아트 요소면 도형 견본)이 오면 그것으로 바꾼다.
     /// </summary>
     internal static class StyleTiles
     {
@@ -47,9 +47,9 @@ namespace VideoEditor.Ui
         /// <summary>
         /// 썸네일을 단추 틀(Width·Height를 정한 Border)에 넣는다(이미 그려 둔 것이면 바로, 아니면 다 그린 뒤 UI 스레드에서). 그리개가 없거나 실패하면 이름 글자를 그대로 둔다.
         /// 썸네일 PNG의 가운데는 배치 상자 가운데라 반사·휘기는 칠한 곳이 한쪽으로 치우친다 — 칠한 곳의 가운데를 틀 가운데에 두고,
-        /// 칠한 곳이 틀(양옆 2px 남김)보다 크면 그만큼 더 줄인다(기본 배율보다 키우지는 않음).
+        /// 칠한 곳이 틀(양옆 2px 남김)보다 크면 그만큼 더 줄인다(기본 배율보다 키우지는 않음). art를 주면 글자 대신 그 모양 견본을 그린다.
         /// </summary>
-        public static void ShowThumbnail(EditorServices services, Border frame, TextStyle style, string automationId)
+        public static void ShowThumbnail(EditorServices services, Border frame, TextStyle style, string automationId, ArtShape art = null)
         {
             void Show(BitmapSource picture)
             {
@@ -71,7 +71,7 @@ namespace VideoEditor.Ui
             }
             if (services == null)
                 return;
-            var task = services.TextStylePreview(style);
+            var task = services.TextStylePreview(style, art);
             if (task.IsCompleted)
             {
                 if (task.Status == TaskStatus.RanToCompletion && task.Result != null)

@@ -235,9 +235,12 @@ namespace VideoEditor.Tests
             Assert.Same(project.VideoTracks[2], project.TrackOf(second));
             var third = TimelineEdits.AddArt(project, ArtKind.Heart, 60, 30);
             Assert.Same(project.VideoTracks[1], project.TrackOf(third));
-            // 놓은 줄이 비었으면 그 줄
+            // 놓은 줄이 비었으면 그 줄 — 마그네틱 주 트랙은 빼고(#38: 놓은 시각을 지키게 덮어 쓰기 트랙으로)
             var fourth = TimelineEdits.AddArt(project, ArtKind.Arrow, 200, 30, project.MainTrack);
-            Assert.Same(project.MainTrack, project.TrackOf(fourth));
+            Assert.Same(project.VideoTracks[1], project.TrackOf(fourth));
+            Assert.Equal(200, fourth.Start);
+            var fourthB = TimelineEdits.AddArt(project, ArtKind.Arrow, 200, 30, project.VideoTracks[2]);
+            Assert.Same(project.VideoTracks[2], project.TrackOf(fourthB));
             // 잠긴 줄·자막 줄·오디오 줄에는 놓지 않는다
             project.VideoTracks[1].Locked = true;
             var audio = TimelineEdits.AddTrack(project, TrackKind.Audio);

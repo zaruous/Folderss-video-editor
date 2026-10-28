@@ -545,8 +545,7 @@ namespace VideoEditor.Core
         /// </summary>
         private static TextImageRequest ArtRequest(Clip clip, TextStyle style, double scale, int canvasWidth, int canvasHeight)
         {
-            var used = new TextStyle { Fill = style.Fill, Outline = style.Outline, Shadow = style.Shadow, Glow = style.Glow, Reflection = style.Reflection };
-            used.Normalize();
+            var used = ArtShape.UsedStyle(style);
             var art = (clip.Art ?? new ArtShape()).Clone();
             art.Normalize();
             return new TextImageRequest

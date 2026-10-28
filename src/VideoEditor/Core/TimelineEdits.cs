@@ -81,11 +81,14 @@ namespace VideoEditor.Core
         /// <summary>
         /// 아트 요소를 start에 넣는다(요소 탭에서 두 번 누르기·끌어 놓기). 트랙: preferred(끌어 놓은 줄)가 쓸 수 있는 동영상 트랙이고 그 구간이 비었으면 거기,
         /// 아니면 그 구간이 빈 덮어 쓰기 트랙(주 트랙은 빼고 — 주 트랙에 놓아 뒤 클립을 밀지 않게), 없으면 새 동영상 트랙. 넣은 클립을 돌려준다.
+        /// 마그네틱 주 트랙에 끌어 놓아도 덮어 쓰기 트랙으로 보낸다: 요소는 자막·강조처럼 영상 위에 겹쳐 쓰는 것이라 놓은 자리(시각)를 지켜야 하는데,
+        /// 마그네틱 주 트랙은 클립 경계(빈 트랙이면 0초)에 붙여 그 자리를 잃고, 맨 아래 줄이라 영상 위에 보이지도 않는다. 마그네틱을 끈 주 트랙은 다른 줄과 같다.
         /// </summary>
         public static Clip AddArt(Project project, ArtKind kind, long start, long frames, Track preferred = null)
         {
             var clip = CreateArt(kind, start, frames);
-            bool Free(Track t) => t.Kind == TrackKind.Video && !t.Locked && !t.Subtitles && !t.Clips.Any(c => c.Start < clip.End && c.End > clip.Start);
+            bool Free(Track t) => t.Kind == TrackKind.Video && !t.Locked && !t.Subtitles && !IsMagnetic(project, t)
+                                  && !t.Clips.Any(c => c.Start < clip.End && c.End > clip.Start);
             var track = preferred != null && Free(preferred) ? preferred
                 : project.VideoTracks.Skip(1).FirstOrDefault(Free) ?? AddTrack(project, TrackKind.Video);
             Place(project, track, clip, clip.Start);

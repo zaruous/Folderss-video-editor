@@ -697,9 +697,26 @@ namespace VideoEditor.Ui
         // 글자 클립의 기본 크기(Clip.FontSize) — 효과 길이를 이 크기 클립을 썸네일 크기로 줄인 비율로 줄인다(기본 크기 클립에서 보이는 모양 그대로)
         private const double DefaultClipFontSize = 72;
 
-        /// <summary>스타일 모음 썸네일 한 장의 그리기 요청. 캔버스는 효과가 잘리지 않을 만큼 넉넉히 — PNG는 글자와 효과 크기만큼만 나온다.</summary>
-        public static TextImageRequest StylePreviewRequest(TextStyle style)
+        /// <summary>
+        /// 스타일 모음 썸네일 한 장의 그리기 요청. 캔버스는 효과가 잘리지 않을 만큼 넉넉히 — PNG는 글자와 효과 크기만큼만 나온다.
+        /// art를 주면(아트 요소의 [꾸미기]) 글자 대신 그 모양을 같은 배율로 그린다 — 모양에 쓰는 꾸미기만(<see cref="ArtShape.UsedStyle"/>).
+        /// </summary>
+        public static TextImageRequest StylePreviewRequest(TextStyle style, ArtShape art = null)
         {
+            if (art != null)
+            {
+                var shape = art.Clone();
+                shape.Normalize();
+                return new TextImageRequest
+                {
+                    Text = "",
+                    Style = ArtShape.UsedStyle(style),
+                    EffectScale = StylePreviewFontSize / DefaultClipFontSize,
+                    CanvasWidth = 640,
+                    CanvasHeight = 360,
+                    Art = shape
+                };
+            }
             var copy = style?.Clone() ?? new TextStyle();
             copy.Normalize();
             return new TextImageRequest
@@ -716,14 +733,14 @@ namespace VideoEditor.Ui
         /// <summary>
         /// 스타일 모음 썸네일(투명 PNG를 배경에서 그림). 같은 요청(해시 키)은 한 번만 그려 메모리에 둔다.
         /// 그리기는 꾸민 글자 캐시(30초 제한·.part에 쓰고 옮기기)를 그대로 거치고, 썸네일 때문에 새로 그린 파일은 읽은 뒤 지운다(임시 폴더에 쌓이지 않게).
-        /// 그리개가 없거나 실패하면 null(다음에 다시 시도).
+        /// 그리개가 없거나 실패하면 null(다음에 다시 시도). art를 주면 글자 대신 그 모양 견본(<see cref="StylePreviewRequest"/>).
         /// </summary>
-        public Task<BitmapSource> TextStylePreview(TextStyle style)
+        public Task<BitmapSource> TextStylePreview(TextStyle style, ArtShape art = null)
         {
             var rasterizer = TextRasterizer;
             if (rasterizer == null)
                 return Task.FromResult<BitmapSource>(null);
-            var request = StylePreviewRequest(style);
+            var request = StylePreviewRequest(style, art);
             // 내 스타일(최대 50개)이 바뀔 때마다 새 키가 생기므로 오래 쌓이지 않게 넘치면 비운다(썸네일은 다시 그리면 된다)
             if (_stylePreviews.Count > MaxStylePreviews)
                 _stylePreviews.Clear();

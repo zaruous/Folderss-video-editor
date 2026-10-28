@@ -325,7 +325,11 @@ namespace VideoEditor.Ui
         private UIElement ArtTab()
         {
             var panel = new StackPanel { Margin = new Thickness(8) };
-            panel.Children.Add(UiKit.Label("두 번 누르면 재생 헤드 위치에, 타임라인으로 끌어 놓으면 그 자리에 넣습니다.", true));
+            // 좁은 패널(1280×800 창의 264px)에서 잘리지 않게 줄을 나눈다
+            var hint = UiKit.Label("두 번 누르면 재생 헤드 위치에, 타임라인으로 끌어 놓으면 그 자리에 넣습니다.", true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            AutomationProperties.SetAutomationId(hint, "ArtHint");
+            panel.Children.Add(hint);
             var tiles = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
             AutomationProperties.SetAutomationId(tiles, "ArtTiles");
             foreach (ArtKind kind in Enum.GetValues(typeof(ArtKind)))

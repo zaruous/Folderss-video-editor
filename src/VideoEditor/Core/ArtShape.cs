@@ -74,6 +74,25 @@ namespace VideoEditor.Core
             return (ArtShape)MemberwiseClone();
         }
 
+        /// <summary>
+        /// 아트 요소 그림에 쓰는 꾸미기만 남긴 정규화한 사본: 채우기·윤곽선·그림자·광선·반사(글꼴·휘기는 기본값) —
+        /// 화면에서 숨긴 값이 달라도 같은 그림이 다른 캐시 파일이 되지 않게.
+        /// </summary>
+        public static TextStyle UsedStyle(TextStyle style)
+        {
+            var source = style?.Clone() ?? new TextStyle();
+            source.Normalize();
+            var used = new TextStyle { Fill = source.Fill, Outline = source.Outline, Shadow = source.Shadow, Glow = source.Glow, Reflection = source.Reflection };
+            used.Normalize();
+            return used;
+        }
+
+        /// <summary>속성 패널 [꾸미기] 스타일 모음·내 스타일의 도형 견본(둥근 사각형) — 스타일만 바꿔 그린다.</summary>
+        public static ArtShape StyleSample()
+        {
+            return new ArtShape { Kind = ArtKind.Rectangle, Width = 150, Height = 100, CornerRadius = 24 };
+        }
+
         /// <summary>남이 만든 파일의 값도 그릴 수 있는 범위로(NaN·무한대는 기본값).</summary>
         public void Normalize()
         {
