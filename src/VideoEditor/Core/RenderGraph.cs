@@ -273,7 +273,7 @@ namespace VideoEditor.Core
                         chain.AppendFormat(CultureInfo.InvariantCulture, ",setpts=PTS-STARTPTS+round({0}/TB)[c{1}]", N(rate.ToSeconds(segStart - options.From)), n);
                         filters.Add(chain.ToString());
                         // overlay의 시각은 바탕 흐름(0 = 그리는 구간 시작)
-                        var (x, y) = OverlayPosition(motion, clip.X * k, clip.Y * k, k, TimeText(rate, options.From - clip.Start));
+                        var (x, y) = OverlayPosition(clip, motion, k, 1, TimeText(rate, options.From - clip.Start));
                         filters.Add(string.Format(CultureInfo.InvariantCulture,
                             "[{0}][c{1}]overlay=x='{2}':y='{3}':eof_action=pass[o{1}]",
                             layer, n, x, y));
@@ -289,7 +289,7 @@ namespace VideoEditor.Core
                     filters.Add(chain.ToString());
                     filters.Add(string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=rgba[g{4}]",
                         canvasWidth, canvasHeight, fps, N(rate.ToSeconds(segEnd - segStart)), n));
-                    var (gx, gy) = OverlayPosition(motion, clip.X * k / shrink, clip.Y * k / shrink, k / shrink, local);
+                    var (gx, gy) = OverlayPosition(clip, motion, k, shrink, local);
                     filters.Add(string.Format(CultureInfo.InvariantCulture,
                         "[g{0}][s{0}]overlay=x='{1}':y='{2}':eof_action=pass,format=gbrap,premultiply=inplace=1[k{0}]",
                         n, gx, gy));
