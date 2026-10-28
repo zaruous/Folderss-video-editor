@@ -297,15 +297,24 @@ namespace VideoEditor.Core
         public bool CanVanish { get; set; }
         /// <summary>흐림(가우스 시그마, 프로젝트 픽셀 — 0이면 선명). 그래프가 장마다 값을 보낸다.</summary>
         public MotionExpr Blur { get; set; }
+        /// <summary>색 바꾸기: 세기(0~1 — 0이면 그대로)와 물들일 색("#RRGGBB").</summary>
+        public List<(MotionExpr Amount, string Color)> Tints { get; } = new List<(MotionExpr, string)>();
+        /// <summary>광선: 세기(0~1 — 0이면 없음), 크기(프로젝트 픽셀), 색("#RRGGBB").</summary>
+        public List<(MotionExpr Strength, double Size, string Color)> Glows { get; } = new List<(MotionExpr, double, string)>();
 
         public bool IsEmpty
         {
-            get { return Scale == null && Rotation == null && Opacity == null && ShiftX == null && ShiftY == null && Fly.Count == 0 && Wipes.Count == 0 && Blur == null; }
+            get
+            {
+                return Scale == null && Rotation == null && Opacity == null && ShiftX == null && ShiftY == null && Fly.Count == 0 && Wipes.Count == 0 && Blur == null
+                    && Tints.Count == 0 && Glows.Count == 0;
+            }
         }
     }
 
     /// <summary>
-    /// 글자 단위 하나의 모습(출력 픽셀): 옮김·크기·회전(도, 단위 가운데 기준)·불투명도·닦아내기(보이는 비율과 쪽 — Split이면 가운데에서 그 축으로)·흐림(가우스 시그마).
+    /// 글자 단위 하나의 모습(출력 픽셀): 옮김·크기·회전(도, 단위 가운데 기준)·불투명도·닦아내기(보이는 비율과 쪽 — Split이면 가운데에서 그 축으로)·흐림(가우스 시그마)·
+    /// 굵기(윤곽을 그만큼 넓힘).
     /// </summary>
     public struct UnitPose
     {
@@ -319,15 +328,16 @@ namespace VideoEditor.Core
         public int WipeY;
         public bool Split;
         public double Blur;
+        public double Bold;
 
         public static UnitPose Rest { get { return new UnitPose { Scale = 1, Opacity = 1, Visible = 1 }; } }
 
         public bool IsRest
         {
-            get { return X == 0 && Y == 0 && Scale == 1 && Rotation == 0 && Opacity == 1 && Visible >= 1 && Blur == 0; }
+            get { return X == 0 && Y == 0 && Scale == 1 && Rotation == 0 && Opacity == 1 && Visible >= 1 && Blur == 0 && Bold == 0; }
         }
 
-        /// <summary>두 모습을 겹친다(옮김·회전·흐림은 더하고 크기·불투명도는 곱함, 닦아내기는 덜 보이는 쪽).</summary>
+        /// <summary>두 모습을 겹친다(옮김·회전·흐림·굵기는 더하고 크기·불투명도는 곱함, 닦아내기는 덜 보이는 쪽).</summary>
         public UnitPose Then(UnitPose other)
         {
             var wipe = other.Visible < Visible ? other : this;
@@ -342,7 +352,8 @@ namespace VideoEditor.Core
                 WipeX = wipe.WipeX,
                 WipeY = wipe.WipeY,
                 Split = wipe.Split,
-                Blur = Blur + other.Blur
+                Blur = Blur + other.Blur,
+                Bold = Bold + other.Bold
             };
         }
     }
@@ -475,23 +486,31 @@ namespace VideoEditor.Core
             }
         }
 
-        /// <summary>단위를 나누는 효과인지(글자 클립에서 단어·글자별로 그리개가 그림).</summary>
+        /// <summary>
+        /// 그리개가 장마다 그리는 효과인지: 단어·글자별 나타나기·사라지기, 글자 전용 강조(물결·굵게 깜빡이기 — 한 번에여도 글자 모양이 바뀐다).
+        /// </summary>
         public static bool IsPerUnit(ClipAnimation animation)
         {
-            return animation != null && animation.Kind != AnimationKind.Emphasis && animation.Unit != AnimationUnit.All;
+            if (animation == null)
+                return false;
+            if (animation.Kind == AnimationKind.Emphasis)
+                return ClipAnimations.Def(animation.Effect)?.TextOnly == true;
+            return animation.Unit != AnimationUnit.All;
         }
 
-        /// <summary>단어·글자별 나타나기·사라지기가 든 글자 클립인지.</summary>
+        /// <summary>그리개가 장마다 그리는 효과(<see cref="IsPerUnit"/>)가 든 글자 클립인지.</summary>
         public static bool HasPerUnit(Clip clip)
         {
-            return clip != null && clip.Kind == ClipKind.Text && (IsPerUnit(ClipAnimations.In(clip)) || IsPerUnit(ClipAnimations.Out(clip)));
+            return clip != null && clip.Kind == ClipKind.Text
+                && (IsPerUnit(ClipAnimations.In(clip)) || IsPerUnit(ClipAnimations.Out(clip)) || ClipAnimations.Emphases(clip).Any(IsPerUnit));
         }
 
         // ---------- 클립 전체 ----------
 
         /// <summary>
-        /// 클립 전체의 움직임(시간식, τ = 클립 시작부터의 장 번호). perUnitDrawn이면 단어·글자별 나타나기·사라지기는 그리개가 그림에 넣으므로 빼고,
-        /// 아니면(그리개 없음·긴 글·글자가 아닌 클립) 한 번에 움직이는 비슷한 모습으로 대신한다 — 타자기는 왼쪽부터 닦아내기, 흩어지기는 서서히.
+        /// 클립 전체의 움직임(시간식, τ = 클립 시작부터의 장 번호). perUnitDrawn이면 그리개가 그리는 효과(<see cref="IsPerUnit"/>)는 그림에 들어가므로 빼고,
+        /// 아니면(그리개 없음·긴 글·글자가 아닌 클립) 한 번에 움직이는 비슷한 모습으로 대신한다 — 타자기는 왼쪽부터 닦아내기, 흩어지기는 서서히,
+        /// 물결은 글 전체가 솟았다 내려앉기, 굵게 깜빡이기는 조금 커졌다 돌아오기.
         /// </summary>
         public static ObjectMotion ObjectMotion(Clip clip, bool perUnitDrawn)
         {
@@ -520,9 +539,11 @@ namespace VideoEditor.Core
                 var def = ClipAnimations.Def(animation.Effect);
                 if (def == null)
                     continue;
+                if (perUnitDrawn && IsPerUnit(animation))
+                    continue;
                 if (animation.Kind == AnimationKind.Emphasis)
                 {
-                    Emphasis(clip, animation, def, Scale, Rotate, Fade, (dx, dy) =>
+                    Emphasis(clip, animation, def, motion, Scale, Rotate, Fade, (dx, dy) =>
                     {
                         if (dx != null)
                             shiftX = shiftX == null ? dx : shiftX + dx;
@@ -531,8 +552,6 @@ namespace VideoEditor.Core
                     });
                     continue;
                 }
-                if (perUnitDrawn && IsPerUnit(animation))
-                    continue;
                 var (start, length) = Window(clip, animation);
                 var p = Progress(start, length);
                 // 진행 → 제자리에 가까운 정도(나타나기: p, 사라지기: 1 − p)
@@ -598,7 +617,7 @@ namespace VideoEditor.Core
             return motion;
         }
 
-        private static void Emphasis(Clip clip, ClipAnimation animation, AnimationEffectDef def,
+        private static void Emphasis(Clip clip, ClipAnimation animation, AnimationEffectDef def, ObjectMotion motion,
             Action<MotionExpr> scale, Action<MotionExpr> rotate, Action<MotionExpr> fade, Action<MotionExpr, MotionExpr> shift)
         {
             var (start, cycle, end) = EmphasisWindow(clip, animation);
@@ -636,7 +655,50 @@ namespace VideoEditor.Core
                 case AnimationEffect.Transparency:
                     fade(1 + (animation.Amount / 100 - 1) * Ease(animation.Ease, MotionExpr.Clip01(u)));
                     break;
+                case AnimationEffect.ColorChange:
+                    motion.Tints.Add((animation.Amount / 100 * Ease(animation.Ease, MotionExpr.Clip01(u)), ClipAnimations.Rgb(animation.Color, def.DefaultColor)));
+                    break;
+                case AnimationEffect.Glow:
+                    motion.Glows.Add((MotionExpr.Sin(Math.PI * Ease(animation.Ease, phase)), animation.Amount, ClipAnimations.Rgb(animation.Color, def.DefaultColor)));
+                    break;
+                case AnimationEffect.Wave:
+                    // 그리개가 없을 때(긴 글 등): 글 전체가 글자 크기의 정도(%)만큼 솟았다 내려앉는다
+                    shift(null, -clip.FontSize * animation.Amount / 100 * MotionExpr.Sin(Math.PI * Ease(animation.Ease, phase)));
+                    break;
+                case AnimationEffect.BoldFlash:
+                    // 그리개가 없을 때: 굵기 대신 조금 커졌다 돌아온다
+                    scale(1 + animation.Amount / 100 * MotionExpr.Sin(Math.PI * Ease(animation.Ease, phase)));
+                    break;
             }
+        }
+
+        /// <summary>
+        /// 글자 전용 강조(물결·굵게 깜빡이기)의 단위 하나의 모습(frame = 클립 안 장, start·cycle·end = <see cref="EmphasisWindow"/>, size = 글자 크기(출력 픽셀)).
+        /// 한 번의 길이 안에서 단위마다 지연(%)만큼 늦게 시작해 그 몫의 시간 동안 솟았다(굵어졌다) 돌아온다 — 한 번의 시작·끝에서 모두 제자리라 되풀이가 이어진다.
+        /// </summary>
+        public static UnitPose EmphasisPose(ClipAnimation animation, long frame, long start, long cycle, long end, int index, int count, double size)
+        {
+            var pose = UnitPose.Rest;
+            if (frame < start || frame >= end || cycle <= 0)
+                return pose;
+            var u = (frame - start) / (double)cycle;
+            var phase = u - Math.Floor(u);
+            count = Math.Max(1, count);
+            index = Math.Max(0, Math.Min(count - 1, index));
+            var stagger = Math.Max(0, Math.Min(100, animation.Stagger)) / 100;
+            var span = 1 / (1 + (count - 1) * stagger);
+            var q = Math.Max(0, Math.Min(1, (phase - index * stagger * span) / span));
+            var swell = Math.Sin(Math.PI * Ease(animation.Ease, q));
+            switch (animation.Effect)
+            {
+                case AnimationEffect.Wave:
+                    pose.Y = -size * animation.Amount / 100 * swell;
+                    break;
+                case AnimationEffect.BoldFlash:
+                    pose.Bold = Math.Max(0, size * animation.Amount / 100 * swell);
+                    break;
+            }
+            return pose;
         }
 
         // ---------- 단어·글자별 ----------

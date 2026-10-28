@@ -13,7 +13,7 @@ using VideoEditor.Core;
 namespace VideoEditor.Ui
 {
     /// <summary>
-    /// 단어·글자별 애니메이션 한 장(#4): 글자 요소(빈칸이 아닌 것 — 한글은 음절)마다 윤곽을 따로 만들어 그 장의 모습(옮김·크기·회전·불투명도·닦아내기·흐림)으로 그린다.
+    /// 단어·글자별 애니메이션 한 장(#4): 글자 요소(빈칸이 아닌 것 — 한글은 음절)마다 윤곽을 따로 만들어 그 장의 모습(옮김·크기·회전·불투명도·닦아내기·흐림·굵기)으로 그린다.
     /// - 자리: 줄 통째 조각(자간 0)은 줄 안 자리(BuildHighlightGeometry)에 요소를 하나씩 놓는다 — 커닝 자리 그대로. 오른쪽→왼쪽 글자가 든 줄은 줄 통째로 첫 요소와 같이 움직인다.
     /// - 크기: 한 클립의 모든 장이 같은 크기(이어 붙이기) — 움직이는 모든 장(<see cref="TextAnimationFrame.Frames"/>)에서 요소가 가는 범위를 모아 대칭으로 넓힌다.
     /// - 칠하기: 정지 그림과 같은 층(반사 → 그림자 → 광선 → 본문). 그라데이션은 글 전체 상자 기준(요소마다 따로 칠하지 않게)이고 요소와 함께 움직인다.
@@ -57,10 +57,10 @@ namespace VideoEditor.Ui
             var centerX = arranged.BoxWidth / 2;
             var centerY = arranged.BoxHeight / 2;
             var reach = ink;
-            foreach (var frame in animation.Frames())
+            foreach (var state in animation.States())
             {
                 cancellation.ThrowIfCancellationRequested();
-                var poses = Poses(animation, units, elements.Count, size, frame, request.EffectScale);
+                var poses = Poses(state, units, request.Text, elements.Count, size, request.EffectScale);
                 for (var i = 0; i < elements.Count; i++)
                 {
                     if (elements[i].Geometry == null || poses[i].Pose.IsRest)
@@ -68,8 +68,8 @@ namespace VideoEditor.Ui
                     var moved = Transform(poses[i].Pose, poses[i].Center).TransformBounds(elements[i].Bounds);
                     if (moved.IsEmpty)
                         continue;
-                    // 흐림이 번지는 만큼
-                    var spread = BlurRadius(poses[i].Pose);
+                    // 흐림이 번지고 굵어지는 만큼
+                    var spread = BlurRadius(poses[i].Pose) + poses[i].Pose.Bold / 2;
                     moved.Inflate(spread, spread);
                     reach.Union(moved);
                 }
@@ -82,7 +82,7 @@ namespace VideoEditor.Ui
             var origin = new Vector(layout.OriginX + halfWidth - centerX, layout.OriginY + halfHeight - centerY);
 
             // 이 장: 같은 모습의 요소끼리 묶는다(보이지 않는 요소는 뺀다)
-            var current = Poses(animation, units, elements.Count, size, animation.Frame, request.EffectScale);
+            var current = Poses(animation, units, request.Text, elements.Count, size, request.EffectScale);
             var groups = new List<(UnitPose Pose, Point Center, GeometryGroup Geometry, Rect Bounds)>();
             var index = new Dictionary<string, int>(StringComparer.Ordinal);
             for (var i = 0; i < elements.Count; i++)
@@ -90,7 +90,7 @@ namespace VideoEditor.Ui
                 var (pose, center) = current[i];
                 if (elements[i].Geometry == null || pose.Opacity <= 0 || pose.Visible <= 0 || pose.Scale <= 0)
                     continue;
-                var key = pose.IsRest ? "rest" : string.Join("|", new[] { pose.X, pose.Y, pose.Scale, pose.Rotation, pose.Opacity, pose.Visible, pose.WipeX, pose.WipeY, pose.Split ? 1 : 0, pose.Blur, center.X, center.Y }
+                var key = pose.IsRest ? "rest" : string.Join("|", new[] { pose.X, pose.Y, pose.Scale, pose.Rotation, pose.Opacity, pose.Visible, pose.WipeX, pose.WipeY, pose.Split ? 1 : 0, pose.Blur, pose.Bold, center.X, center.Y }
                     .Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
                 if (!index.TryGetValue(key, out var at))
                 {
@@ -130,10 +130,11 @@ namespace VideoEditor.Ui
             using (var context = body.RenderOpen())
             {
                 context.PushTransform(new TranslateTransform(origin.X, origin.Y));
-                foreach (var (pose, center, geometry, bounds) in groups)
+                foreach (var (pose, center, group, bounds) in groups)
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    geometry.Freeze();
+                    group.Freeze();
+                    var geometry = pose.Bold > 0 ? Embolden(group, pose.Bold) : group;
                     var transform = Transform(pose, center);
                     var clip = Wipe(pose, bounds);
                     // 그림자·광선은 옮긴 윤곽으로 그리개의 층 함수를 그대로 쓴다(층 하나에 흐림 하나)
@@ -209,6 +210,16 @@ namespace VideoEditor.Ui
                 group.Children.Add(new TranslateTransform(pose.X, pose.Y));
             group.Freeze();
             return group;
+        }
+
+        /// <summary>굵게: 윤곽을 둥근 이음의 굵기만큼 넓힌 것과 합친다(채우기·윤곽선·그림자·광선이 모두 굵어진 모양을 쓴다).</summary>
+        private static Geometry Embolden(Geometry geometry, double bold)
+        {
+            var pen = new Pen(Brushes.Black, bold) { LineJoin = PenLineJoin.Round };
+            pen.Freeze();
+            var result = Geometry.Combine(geometry, geometry.GetWidenedPathGeometry(pen), GeometryCombineMode.Union, null);
+            result.Freeze();
+            return result;
         }
 
         /// <summary>흐림 반지름(출력 픽셀): 모습의 흐림은 가우스 시그마라 흐림 효과의 반지름은 그 약 3배다.</summary>
@@ -368,21 +379,26 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>
-        /// frame 장에서 요소마다의 모습과 그 모습의 기준(단위 가운데). 나타나기와 사라지기 구간은 겹치지 않으므로 움직이는 쪽 하나를 쓴다
-        /// (둘 다 쉬면 그대로).
+        /// animation의 장(<see cref="TextAnimationFrame.Frame"/>)에서 요소마다의 모습과 그 모습의 기준(단위 가운데). 나타나기와 사라지기 구간은 겹치지 않으므로
+        /// 움직이는 쪽 하나의 가운데를 쓰고(둘 다 쉬면 그대로), 글자 전용 강조(옮김·굵기 — 가운데가 필요 없다)는 그 위에 더한다.
+        /// 강조 하나만 그리는 장(<see cref="TextAnimationFrame.Solo"/>)은 나타나기·사라지기가 다 나타난 모습이다.
         /// </summary>
-        private static (UnitPose Pose, Point Center)[] Poses(TextAnimationFrame animation, UnitLayout units, int count, double size, long frame, double pixel)
+        private static (UnitPose Pose, Point Center)[] Poses(TextAnimationFrame animation, UnitLayout units, string text, int count, double size, double pixel)
         {
+            var frame = animation.Frame;
+            var solo = animation.Solo >= 0;
             var result = new (UnitPose, Point)[count];
             var inCount = units.InCenters?.Length ?? 0;
             var outCount = units.OutCenters?.Length ?? 0;
             var inProgress = TextAnimationFrame.Progress(frame, animation.InStart, animation.InLength);
             var outProgress = TextAnimationFrame.Progress(frame, animation.OutStart, animation.OutLength);
+            var emphasis = animation.EmphasisPoses(text, size, frame);
             for (var i = 0; i < count; i++)
             {
                 var pose = UnitPose.Rest;
                 var center = new Point();
-                if (animation.In != null)
+                var centered = false;
+                if (animation.In != null && !solo)
                 {
                     var unit = UnitOf(units.In, i);
                     var appear = AnimationMotion.InPose(animation.In, inProgress, unit, inCount, size, pixel);
@@ -390,15 +406,18 @@ namespace VideoEditor.Ui
                     {
                         pose = appear;
                         center = units.InCenters[unit];
+                        centered = true;
                     }
                 }
-                if (animation.Out != null)
+                if (emphasis.Length > 0)
+                    pose = pose.Then(emphasis[Math.Min(i, emphasis.Length - 1)]);
+                if (animation.Out != null && !solo)
                 {
                     var unit = UnitOf(units.Out, i);
                     var vanish = AnimationMotion.OutPose(animation.Out, outProgress, unit, outCount, size, pixel);
                     if (!vanish.IsRest)
                     {
-                        center = pose.IsRest ? units.OutCenters[unit] : center;
+                        center = centered ? center : units.OutCenters[unit];
                         pose = pose.Then(vanish);
                     }
                 }

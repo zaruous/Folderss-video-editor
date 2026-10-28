@@ -24,7 +24,8 @@ namespace VideoEditor.Media
         private static readonly TimeSpan RenderTimeout = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan KeepRecent = TimeSpan.FromMinutes(5);
         // \z: $는 끝의 줄바꿈 앞에서도 맞는다
-        private const string Names = "(?:st-[0-9a-f]{64}|sa-[0-9a-f]{64}-(?:[io][0-9]{5}|s))\\.png";
+        // 애니메이션 장: 나타나기·사라지기 번호(i·o), 쉬는 장(s), 강조 한 번의 차례(w강조-), 강조가 겹친 구간의 장(m시작-)
+        private const string Names = "(?:st-[0-9a-f]{64}|sa-[0-9a-f]{64}-(?:[io][0-9]{5}|s|w[0-9]{1,2}-[0-9]{5}|m[0-9]{5}-[0-9]{5}))\\.png";
         private static readonly Regex CacheName = new Regex("^" + Names + "\\z", RegexOptions.CultureInvariant);
         private static readonly Regex PartName = new Regex("^" + Names + "\\.[0-9a-f]{32}\\.part\\z", RegexOptions.CultureInvariant);
         // 같은 경로는 한 번만 그리도록 경로 해시로 나눈 문(경로마다 만들면 끝없이 쌓인다)

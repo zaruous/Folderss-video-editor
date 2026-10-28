@@ -15,7 +15,7 @@ namespace VideoEditor.Core
 
     /// <summary>
     /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기·떠오르기·커지며 돌기·가운데서 갈라지기·흐림에서 선명하게,
-    /// 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기.
+    /// 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기·색 바꾸기·광선 깜빡임·물결·굵게 깜빡이기.
     /// 저장된 이름이 바뀌면 예전 프로젝트에서 효과가 빠지므로 이름을 바꾸지 않는다(뒤에만 더한다).
     /// </summary>
     public enum AnimationEffect
@@ -37,7 +37,11 @@ namespace VideoEditor.Core
         Rise,
         GrowTurn,
         Split,
-        Unblur
+        Unblur,
+        ColorChange,
+        Glow,
+        Wave,
+        BoldFlash
     }
 
     /// <summary>
@@ -105,6 +109,9 @@ namespace VideoEditor.Core
         /// <summary>정도(효과마다 뜻과 단위가 다르다 — <see cref="AnimationEffectDef.Amount"/>). 정도가 없는 효과는 0.</summary>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public double Amount { get; set; }
+        /// <summary>색("#RRGGBB" — 색 바꾸기·광선 깜빡임). 색을 쓰지 않는 효과는 null.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string Color { get; set; }
 
         public ClipAnimation Clone()
         {
@@ -142,8 +149,12 @@ namespace VideoEditor.Core
         public string Description { get; init; }
         /// <summary>강조 효과인지(아니면 나타나기·사라지기).</summary>
         public bool Emphasis { get; init; }
-        /// <summary>글자별로만 움직이는 효과(타자기·흩어지기) — 글자 클립에만 넣는다.</summary>
+        /// <summary>글자 클립에만 넣는 효과(타자기·흩어지기·물결·굵게 깜빡이기) — 그리개가 글자를 장마다 그린다.</summary>
         public bool TextOnly { get; init; }
+        /// <summary>단어·글자로 나눠야만 하는 효과(타자기·흩어지기·물결) — "한 번에"로 저장된 것은 글자별로 읽는다.</summary>
+        public bool NeedsUnits { get; init; }
+        /// <summary>색을 고르는 효과의 기본 색("#RRGGBB" — 색 바꾸기·광선 깜빡임). 색을 쓰지 않으면 null.</summary>
+        public string DefaultColor { get; init; }
         /// <summary>고를 수 있는 방향(비었으면 방향 없음). 첫 값이 기본.</summary>
         public IReadOnlyList<AnimationDirection> Directions { get; init; } = Array.Empty<AnimationDirection>();
         public AnimationEase DefaultEase { get; init; }
@@ -202,9 +213,9 @@ namespace VideoEditor.Core
             new AnimationEffectDef { Effect = AnimationEffect.Spin, Name = "돌며 나타나기", OutName = "돌며 사라지기", Description = "돌면서 커지며 나타나고, 돌면서 작아지며 사라집니다.",
                 Directions = Turns, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.8, Amount = new AnimationAmount("회전", 0, 1080, 360, "°") },
             new AnimationEffectDef { Effect = AnimationEffect.Typewriter, Name = "타자기", OutName = "타자기 지우기", Description = "글자가 하나씩 찍히고, 뒤에서부터 하나씩 지워집니다(글자 클립).",
-                TextOnly = true, DefaultSeconds = 1.5, DefaultUnit = AnimationUnit.Character, DefaultStagger = 100 },
+                TextOnly = true, NeedsUnits = true, DefaultSeconds = 1.5, DefaultUnit = AnimationUnit.Character, DefaultStagger = 100 },
             new AnimationEffectDef { Effect = AnimationEffect.Scatter, Name = "모여들기", OutName = "흩어지기", Description = "글자가 사방에서 돌며 모여들고, 사방으로 흩어집니다(글자 클립).",
-                TextOnly = true, DefaultEase = AnimationEase.Out, DefaultSeconds = 1.0, DefaultUnit = AnimationUnit.Character, DefaultStagger = 30,
+                TextOnly = true, NeedsUnits = true, DefaultEase = AnimationEase.Out, DefaultSeconds = 1.0, DefaultUnit = AnimationUnit.Character, DefaultStagger = 30,
                 Amount = new AnimationAmount("거리", 20, 300, 100, "%") },
             new AnimationEffectDef { Effect = AnimationEffect.Rise, Name = "떠오르기", OutName = "흐려지며 가라앉기", Description = "아래에서 떠오르며 서서히 보이고, 흐려지며 아래로 가라앉습니다.",
                 DefaultEase = AnimationEase.Out, DefaultSeconds = 0.7, Amount = new AnimationAmount("거리", 5, 500, 60, "px") },
@@ -223,7 +234,16 @@ namespace VideoEditor.Core
             new AnimationEffectDef { Effect = AnimationEffect.Grow, Name = "크게·작게", Description = "정한 크기로 바뀐 뒤 그대로 남습니다.", Emphasis = true,
                 DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, Amount = new AnimationAmount("크기", 10, 400, 150, "%") },
             new AnimationEffectDef { Effect = AnimationEffect.Transparency, Name = "투명도 바꾸기", Description = "정한 불투명도로 바뀐 뒤 그대로 남습니다.", Emphasis = true,
-                DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, Amount = new AnimationAmount("불투명도", 0, 100, 40, "%") }
+                DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, Amount = new AnimationAmount("불투명도", 0, 100, 40, "%") },
+            new AnimationEffectDef { Effect = AnimationEffect.ColorChange, Name = "색 바꾸기", Description = "밝기를 지키며 정한 색으로 물든 뒤 그대로 남습니다(흰색은 그 색, 검은 윤곽은 그대로).", Emphasis = true,
+                DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, DefaultColor = "#EF4444", Amount = new AnimationAmount("세기", 0, 100, 100, "%") },
+            new AnimationEffectDef { Effect = AnimationEffect.Glow, Name = "광선 깜빡임", Description = "둘레에 빛이 번쩍였다 사라지기를 되풀이합니다.", Emphasis = true, Repeats = true,
+                DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.6, DefaultRepeat = 2, DefaultColor = "#FFE066", Amount = new AnimationAmount("광선 크기", 2, 100, 16, "px") },
+            new AnimationEffectDef { Effect = AnimationEffect.Wave, Name = "물결", Description = "글자가 차례로 솟았다 내려앉아 물결칩니다(글자 클립).", Emphasis = true, Repeats = true,
+                TextOnly = true, NeedsUnits = true, DefaultEase = AnimationEase.InOut, DefaultSeconds = 1.0, DefaultRepeat = 2, DefaultUnit = AnimationUnit.Character, DefaultStagger = 40,
+                Amount = new AnimationAmount("높이", 5, 200, 40, "%") },
+            new AnimationEffectDef { Effect = AnimationEffect.BoldFlash, Name = "굵게 깜빡이기", Description = "글자가 굵어졌다 돌아오기를 되풀이합니다(글자 클립 — 단어·글자별로 차례로도).", Emphasis = true, Repeats = true,
+                TextOnly = true, DefaultEase = AnimationEase.InOut, DefaultSeconds = 0.5, DefaultRepeat = 2, DefaultStagger = 30, Amount = new AnimationAmount("굵기", 1, 30, 8, "%") }
         };
 
         public static AnimationEffectDef Def(AnimationEffect effect)
@@ -289,7 +309,7 @@ namespace VideoEditor.Core
             return clip != null && clip.IsVisual;
         }
 
-        /// <summary>이 클립에 이 효과를 넣을 수 있는지(타자기·흩어지기는 글자 클립만).</summary>
+        /// <summary>이 클립에 이 효과를 넣을 수 있는지(타자기·흩어지기·물결·굵게 깜빡이기는 글자 클립만).</summary>
         public static bool Allows(Clip clip, AnimationEffectDef def)
         {
             return CanHave(clip) && def != null && (!def.TextOnly || clip.Kind == ClipKind.Text);
@@ -311,7 +331,8 @@ namespace VideoEditor.Core
                 Duration = Math.Max(1, Math.Min(MaxFrames, rate.ToFrames(def.DefaultSeconds))),
                 Repeat = def.Emphasis ? def.DefaultRepeat : 1,
                 Ease = def.DefaultEase,
-                Amount = def.Amount?.Default ?? 0
+                Amount = def.Amount?.Default ?? 0,
+                Color = def.DefaultColor
             };
         }
 
@@ -400,9 +421,10 @@ namespace VideoEditor.Core
                 var a = item.Clone();
                 if (!def.Directions.Contains(a.Direction))
                     a.Direction = def.DefaultDirection;
-                if (clip.Kind != ClipKind.Text || !Enum.IsDefined(a.Unit))
+                // 강조는 글자 전용(물결·굵게 깜빡이기)만 단위를 나눈다
+                if (clip.Kind != ClipKind.Text || !Enum.IsDefined(a.Unit) || (def.Emphasis && !def.TextOnly))
                     a.Unit = AnimationUnit.All;
-                if (def.TextOnly && a.Unit == AnimationUnit.All)
+                if (def.NeedsUnits && a.Unit == AnimationUnit.All)
                     a.Unit = AnimationUnit.Character;
                 if (!Enum.IsDefined(a.Ease))
                     a.Ease = def.DefaultEase;
@@ -411,9 +433,19 @@ namespace VideoEditor.Core
                 a.Delay = Math.Max(0, Math.Min(MaxFrames, a.Delay));
                 a.Repeat = def.Repeats ? Math.Max(0, Math.Min(MaxRepeat, a.Repeat)) : 1;
                 a.Amount = def.Amount == null ? 0 : double.IsFinite(a.Amount) ? Math.Max(def.Amount.Min, Math.Min(def.Amount.Max, a.Amount)) : def.Amount.Default;
+                a.Color = def.DefaultColor == null ? null : Rgb(a.Color, def.DefaultColor);
                 result.Add(a);
             }
             return Order(result);
+        }
+
+        /// <summary>색 글("#RRGGBB" — "#AARRGGBB"는 알파를 뺀다). 아니면 fallback.</summary>
+        public static string Rgb(string color, string fallback)
+        {
+            var normalized = TextStyle.NormalizeColor(color, null);
+            if (normalized == null)
+                return fallback;
+            return normalized.Length == 9 ? "#" + normalized.Substring(3) : normalized;
         }
 
         /// <summary>나눈 클립: 왼쪽 조각은 사라지기를, 오른쪽 조각은 나타나기를 뺀다(강조는 둘 다 남는다 — 오른쪽은 그 조각의 시작부터 다시).</summary>

@@ -420,6 +420,196 @@ namespace VideoEditor.Tests
             Assert.Contains("gblur@bl0=sigma=8:sigmaV=8,", RenderGraph.Build(project, Options(null, 55, 56)).Filter);
         }
 
+        [Fact]
+        public void Clean_TextOnlyEmphasis_UnitsAndColors()
+        {
+            var (_, video) = VideoProject();
+            var tint = Make(AnimationEffect.ColorChange, AnimationKind.Emphasis);
+            tint.Color = "#8022c55e";
+            var glow = Make(AnimationEffect.Glow, AnimationKind.Emphasis);
+            glow.Color = "red";
+            var pulse = Make(AnimationEffect.Pulse, AnimationKind.Emphasis);
+            pulse.Unit = AnimationUnit.Character;
+            pulse.Color = "#FFFFFF";
+            video.Animations = new List<ClipAnimation> { tint, glow, pulse, Make(AnimationEffect.Wave, AnimationKind.Emphasis), Make(AnimationEffect.BoldFlash, AnimationKind.Emphasis) };
+            var clean = ClipAnimations.Clean(video);
+            // 글자 전용 강조는 동영상에서 빠지고, 색은 #RRGGBB(알파는 뺌·잘못된 글은 기본 색), 색을 쓰지 않는 효과는 색이 없다
+            Assert.Equal(new[] { AnimationEffect.ColorChange, AnimationEffect.Glow, AnimationEffect.Pulse }, clean.Select(a => a.Effect));
+            Assert.Equal(new[] { "#22C55E", "#FFE066", null }, clean.Select(a => a.Color));
+            Assert.Equal(AnimationUnit.All, clean[2].Unit);
+            Assert.Equal("#EF4444", Make(AnimationEffect.ColorChange, AnimationKind.Emphasis).Color);
+
+            // 글자 클립: 물결은 한 번에로 저장돼도 글자별, 굵게 깜빡이기는 한 번에 그대로, 맥박은 단위를 나누지 않는다
+            var (_, text) = TextProject();
+            var wave = Make(AnimationEffect.Wave, AnimationKind.Emphasis, 10, text);
+            Assert.Equal((AnimationUnit.Character, 40.0), (wave.Unit, wave.Stagger));
+            wave.Unit = AnimationUnit.All;
+            var bold = Make(AnimationEffect.BoldFlash, AnimationKind.Emphasis, 10, text);
+            var textPulse = Make(AnimationEffect.Pulse, AnimationKind.Emphasis, 10, text);
+            textPulse.Unit = AnimationUnit.Word;
+            text.Animations = new List<ClipAnimation> { wave, bold, textPulse };
+            Assert.Equal(new[] { AnimationUnit.Character, AnimationUnit.All, AnimationUnit.All }, ClipAnimations.Clean(text).Select(a => a.Unit));
+            // 저장 글: 색은 색 효과만
+            var saved = JsonNode.Parse(ProjectFile.Snapshot(VideoWith(clean)))["VideoTracks"][0]["Clips"][0]["Animations"];
+            Assert.Equal("#22C55E", (string)saved[0]["Color"]);
+            Assert.Null(saved[2]["Color"]);
+        }
+
+        private static Project VideoWith(List<ClipAnimation> animations)
+        {
+            var (project, video) = VideoProject();
+            video.Animations = animations;
+            return project;
+        }
+
+        [Fact]
+        public void Emphasis_ColorChangeHolds_GlowFlashes_WaveAndBoldFallBack()
+        {
+            var (_, text) = TextProject();
+            ObjectMotion With(AnimationEffect effect, double amount, bool drawn = false)
+            {
+                var animation = Make(effect, AnimationKind.Emphasis, 12, text);
+                animation.Ease = AnimationEase.Linear;
+                animation.Amount = amount;
+                animation.Delay = 6;
+                animation.Repeat = 1;
+                text.Animations = new List<ClipAnimation> { animation };
+                return AnimationMotion.ObjectMotion(text, drawn);
+            }
+            // 색 바꾸기: 시작 전 0, 끝나면 세기 그대로 남는다
+            var tint = With(AnimationEffect.ColorChange, 80);
+            var (amount, color) = tint.Tints.Single();
+            Assert.Equal("#EF4444", color);
+            Assert.Equal((0.0, 0.4, 0.8, 0.8), (amount.Eval(3), amount.Eval(12), amount.Eval(18), amount.Eval(50)));
+            // 광선 깜빡임: 한 번의 가운데에서 가장 밝고 끝에 사라진다
+            var glow = With(AnimationEffect.Glow, 24);
+            var (strength, size, glowColor) = glow.Glows.Single();
+            Assert.Equal((24.0, "#FFE066"), (size, glowColor));
+            Assert.Equal(0, strength.Eval(6), 9);
+            Assert.Equal(1, strength.Eval(12), 9);
+            Assert.Equal(0, strength.Eval(18), 9);
+            // 물결·굵게 깜빡이기: 그리개가 그리면 시간식에는 없고, 없으면 글 전체가 글자 크기 × 정도만큼 솟거나 조금 커진다
+            Assert.True(With(AnimationEffect.Wave, 50, true).IsEmpty);
+            Assert.Equal(-text.FontSize * 0.5, With(AnimationEffect.Wave, 50).ShiftY.Eval(12), 9);
+            Assert.True(With(AnimationEffect.BoldFlash, 10, true).IsEmpty);
+            Assert.Equal(1.1, With(AnimationEffect.BoldFlash, 10).Scale.Eval(12), 9);
+            Assert.True(AnimationMotion.HasPerUnit(text));
+        }
+
+        [Fact]
+        public void Graph_ColorChangeMixesChannels_GlowUnderlaysBlurredColor()
+        {
+            var (project, video) = VideoProject();
+            var tint = Make(AnimationEffect.ColorChange, AnimationKind.Emphasis);
+            tint.Ease = AnimationEase.Linear;
+            tint.Color = "#00FF00";
+            tint.Delay = 20;
+            var glow = Make(AnimationEffect.Glow, AnimationKind.Emphasis);
+            glow.Ease = AnimationEase.Linear;
+            glow.Amount = 20;
+            glow.Repeat = 1;
+            glow.Delay = 40;
+            video.Animations = new List<ClipAnimation> { tint, glow };
+            var filter = RenderGraph.Build(project, Options()).Filter;
+            // 색: 21장부터 3×3 값을 함께 보낸다(초록 × 밝기) — 끝난 뒤는 a = 1: rr = 0, gr = 0.299, gg = 0.587
+            var commands = Regex.Match(filter, "sendcmd=c='([^']*)'").Groups[1].Value.Split(';');
+            Assert.Equal("0.683333 colorchannelmixer@ct0x0 rr 0.9, colorchannelmixer@ct0x0 rg 0, colorchannelmixer@ct0x0 rb 0, colorchannelmixer@ct0x0 gr 0.0299, "
+                + "colorchannelmixer@ct0x0 gg 0.9587, colorchannelmixer@ct0x0 gb 0.0114, colorchannelmixer@ct0x0 br 0, colorchannelmixer@ct0x0 bg 0, colorchannelmixer@ct0x0 bb 0.9", commands[0]);
+            Assert.Contains("colorchannelmixer@ct0x0=rr=1:rg=0:rb=0:gr=0:gg=1:gb=0:br=0:bg=0:bb=1", filter);
+            Assert.Contains(",colorchannelmixer=rr=0:rg=0:rb=0:gr=0.299:gg=0.587:gb=0.114:br=0:bg=0:bb=0", RenderGraph.Build(project, Options(null, 35, 36)).Filter);
+            // 시작 전만 그리면 색 체인이 없다(정지 그림 그대로)
+            Assert.DoesNotContain("colorchannelmixer", RenderGraph.Build(project, Options(null, 0, 20)).Filter);
+            // 광선: 번질 자리(시그마 10 × 3 = 30) 넓힘, 그림을 광선 색으로 칠해 흐린 층을 밑에 — 세기는 sendcmd로
+            Assert.Contains(",pad=w=iw+60:h=ih+60:x=30:y=30:color=black@0,split[gla0x0][glb0x0];[gla0x0]format=gbrap,lutrgb=r=255:g=224:b=102,gblur=sigma=10,sendcmd=c='", filter);
+            Assert.Contains("[glc0x0];[glc0x0][glb0x0]overlay=format=auto,format=rgba", filter);
+            // 광선이 없는 구간은 넓히기만(한 장과 내보내기가 같은 자리)
+            var rest = RenderGraph.Build(project, Options(null, 52, 53)).Filter;
+            Assert.Contains(",pad=w=iw+60:h=ih+60:x=30:y=30:color=black@0,", rest);
+            Assert.DoesNotContain("gblur", rest);
+        }
+
+        [Fact]
+        public void UnitPoses_WaveRipplesInOrder_RepeatsSeamlessly_BoldSwells_SoloSkipsInAndOut()
+        {
+            var (project, text) = TextProject("가나다라");
+            var wave = Make(AnimationEffect.Wave, AnimationKind.Emphasis, 12, text);
+            wave.Ease = AnimationEase.Linear;
+            wave.Stagger = 50;
+            wave.Delay = 6;
+            wave.Repeat = 2;
+            wave.Amount = 50;
+            text.Animations = new List<ClipAnimation> { Make(AnimationEffect.Typewriter, AnimationKind.In, 4, text), wave };
+            var frame = TextAnimationFrame.Of(text, project.Rate);
+            var emphasis = Assert.Single(frame.Emphases);
+            Assert.Equal((6L, 12L, 30L), (emphasis.Start, emphasis.Cycle, emphasis.End));
+            Assert.All(frame.Poses(text.Text, 40, 6), p => Assert.True(p.IsRest));
+            // 한 번 안에서 앞 글자부터 솟는다(위로 = −y), 높이는 글자 크기 × 50%까지
+            var early = frame.Poses(text.Text, 40, 8);
+            Assert.True(early[0].Y < -1 && early[3].Y == 0, "앞 글자부터: " + string.Join(", ", early.Select(p => p.Y)));
+            Assert.True(Enumerable.Range(6, 12).SelectMany(f => frame.Poses(text.Text, 40, f)).Min(p => p.Y) >= -20 - 1e-9);
+            // 되풀이는 이어진다(한 번 뒤 같은 모습), 다 끝나면 제자리
+            Assert.Equal(frame.Poses(text.Text, 40, 9).Select(p => p.Y), frame.Poses(text.Text, 40, 21).Select(p => p.Y));
+            Assert.All(frame.Poses(text.Text, 40, 30), p => Assert.True(p.IsRest));
+            // 강조 하나만 그리는 장은 나타나기를 다 나타난 모습으로 본다(타자기 첫 장인데도 보인다)
+            Assert.All(frame.Poses(text.Text, 40, 0), p => Assert.Equal(0, p.Opacity));
+            Assert.All(frame.At(0, 0).Poses(text.Text, 40, 0), p => Assert.Equal(1, p.Opacity));
+            // 그리개가 그림 크기를 정할 때 보는 장: 움직이는 장 + 강조 한 번(홀로)
+            var states = frame.States().ToList();
+            Assert.Equal(Enumerable.Range(0, 5).Concat(Enumerable.Range(6, 24)).Select(f => (long)f), states.Where(s => s.Solo < 0).Select(s => s.Frame));
+            Assert.Equal(Enumerable.Range(6, 12).Select(f => (long)f), states.Where(s => s.Solo == 0).Select(s => s.Frame));
+
+            // 굵게 깜빡이기(한 번에): 가운데에서 글자 크기 × 정도만큼 굵어진다
+            var bold = Make(AnimationEffect.BoldFlash, AnimationKind.Emphasis, 10, text);
+            bold.Ease = AnimationEase.Linear;
+            bold.Amount = 10;
+            text.Animations = new List<ClipAnimation> { bold };
+            frame = TextAnimationFrame.Of(text, project.Rate);
+            Assert.All(frame.Poses(text.Text, 40, 5), p => Assert.Equal(4, p.Bold, 9));
+            Assert.All(frame.Poses(text.Text, 40, 0), p => Assert.True(p.IsRest));
+        }
+
+        [Fact]
+        public void PerUnit_Emphasis_DrawsOneCycle_AndLoopsIt()
+        {
+            var (project, text) = TextProject();
+            var wave = Make(AnimationEffect.Wave, AnimationKind.Emphasis, 10, text);
+            wave.Repeat = 0;
+            text.Animations = new List<ClipAnimation> { wave };
+            var rasterizer = new FakeTextRasterizer();
+            var plan = RenderGraph.Build(project, Options(rasterizer, 0, 60));
+            // 한 번(10장)만 그리고 그림 묶음을 되풀이해 읽는다
+            var names = plan.TextImages.Keys.Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal).ToList();
+            Assert.Equal(Enumerable.Range(0, 10).Select(i => "-w0-" + i.ToString("D5") + ".png"), names.Select(n => n.Substring(67)));
+            Assert.All(plan.TextImages.Values, r => Assert.Equal(0, r.Animation.Solo));
+            Assert.Equal(new[] { "-loop", "1", "-framerate", "30/1", "-t", "2.016667", "-f", "image2", "-pattern_type", "sequence" }, plan.Inputs[0].Take(10));
+            Assert.EndsWith("-w0-%05d.png", plan.Inputs[0][^1]);
+            Assert.Contains("[0:v]trim=start_frame=0:end_frame=60,setpts=PTS-STARTPTS,format=rgba", plan.Filter);
+            // 가운데부터 그리면 한 번 안의 차례부터
+            Assert.Contains("trim=start_frame=5:end_frame=20,", RenderGraph.Build(project, Options(rasterizer, 25, 40)).Filter);
+            Assert.EndsWith("-w0-00007.png", Assert.Single(RenderGraph.Build(project, Options(rasterizer, 37, 38)).TextImages).Key);
+
+            // 타자기(0~14장) 뒤에 이어서: 나타나기 장들은 물결을 함께 그리고, 그 뒤는 15장부터 한 번 안의 5번째부터 되풀이
+            text.Animations = new List<ClipAnimation> { Make(AnimationEffect.Typewriter, AnimationKind.In, 15, text), wave };
+            plan = RenderGraph.Build(project, Options(rasterizer, 0, 60));
+            Assert.Contains("trim=start_frame=5:end_frame=50,", plan.Filter);
+            Assert.All(plan.TextImages.Where(i => i.Key.Contains("-i0")), i => Assert.Single(i.Value.Animation.Emphases));
+            // 강조 둘이 겹치면(쉬는 동안) 장마다 그린다
+            var bold = Make(AnimationEffect.BoldFlash, AnimationKind.Emphasis, 6, text);
+            bold.Delay = 20;
+            bold.Repeat = 1;
+            text.Animations = new List<ClipAnimation> { wave, bold };
+            var overlap = RenderGraph.Build(project, Options(rasterizer, 0, 60));
+            var m = overlap.TextImages.Keys.Select(Path.GetFileName).Where(n => n.Contains("-m00020-")).ToList();
+            Assert.Equal(6, m.Count);
+            Assert.Contains("trim=start_frame=0:end_frame=20,", overlap.Filter);
+            Assert.Contains("trim=start_frame=6:end_frame=40,", overlap.Filter);
+            // 키: 강조가 없는 묶음은 예전 그대로(이미 그린 장을 다시 쓴다), 홀로 그리는 장은 장 키에만
+            var request = new TextImageRequest { Text = "가", Style = new TextStyle(), FontPixelSize = 10, EffectScale = 1, CanvasWidth = 10, CanvasHeight = 10 };
+            var single = TextAnimationFrame.Of(text, project.Rate);
+            Assert.Equal(request.WithAnimation(single.At(3)).JobKey(1), request.WithAnimation(single.At(3, 0)).JobKey(1));
+            Assert.NotEqual(request.WithAnimation(single.At(3)).Key(1), request.WithAnimation(single.At(3, 0)).Key(1));
+        }
+
         // ---------- 글자 나누기·글자별 모습 ----------
 
         [Fact]

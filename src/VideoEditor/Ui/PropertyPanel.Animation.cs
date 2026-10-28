@@ -9,7 +9,7 @@ using VideoEditor.Core;
 namespace VideoEditor.Ui
 {
     /// <summary>
-    /// 속성 패널 [애니메이션] 탭(#4): 나타나기·강조·사라지기 분류별 썸네일(마우스를 올리면 움직임), 넣은 효과의 설정(방향·단위·글자 사이 지연·길이·지연·반복·이징·정도)과 [빼기],
+    /// 속성 패널 [애니메이션] 탭(#4): 나타나기·강조·사라지기 분류별 썸네일(마우스를 올리면 움직임), 넣은 효과의 설정(방향·단위·글자 사이 지연·길이·지연·반복·이징·정도·색)과 [빼기],
     /// [미리 보기](이 클립 구간만 재생). 효과를 넣고 빼면 줄을 다시 만들고, 값만 바뀌면 값만 갱신한다(끄는 슬라이더가 사라지지 않게). 모두 실행 취소 한 단계씩.
     /// </summary>
     internal sealed partial class PropertyPanel
@@ -194,9 +194,10 @@ namespace VideoEditor.Ui
             if (def.Directions.Count > 0)
                 Choice("방향", "Direction", def.Directions, d => ClipAnimations.DirectionName(effect, d), a => a.Direction, (a, v) => a.Direction = v);
             var current0 = Find(_session.Project.FindClip(id));
-            if (text && kind != AnimationKind.Emphasis)
+            // 단위: 나타나기·사라지기와 글자 전용 강조(물결·굵게 깜빡이기)
+            if (text && (kind != AnimationKind.Emphasis || def.TextOnly))
             {
-                var units = def.TextOnly ? new[] { AnimationUnit.Word, AnimationUnit.Character } : new[] { AnimationUnit.All, AnimationUnit.Word, AnimationUnit.Character };
+                var units = def.NeedsUnits ? new[] { AnimationUnit.Word, AnimationUnit.Character } : new[] { AnimationUnit.All, AnimationUnit.Word, AnimationUnit.Character };
                 Choice("단위", "Unit", units, ClipAnimations.UnitName, a => a.Unit, (a, v) =>
                 {
                     a.Unit = v;
@@ -251,6 +252,13 @@ namespace VideoEditor.Ui
                     if (a != null)
                         a.Amount = Math.Max(amount.Min, Math.Min(amount.Max, v));
                 }));
+            }
+            if (def.DefaultColor != null)
+            {
+                var color = UiKit.ColorRow("색", prefix + "Color", () => Find(_session.Project.FindClip(id))?.Color ?? def.DefaultColor,
+                    hex => Change(a => a.Color = ClipAnimations.Rgb(hex, def.DefaultColor)));
+                local.Add(color.Refresh);
+                box.Children.Add(color);
             }
             return box;
         }

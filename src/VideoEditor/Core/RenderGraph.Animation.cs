@@ -110,12 +110,109 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// 모습(앞에 ","): 흐림 — 닦아내기 뒤·회전 앞(틀 크기의 그림)에서. 지금은 흐림 하나다.
+        /// 모습(앞에 ","): 흐림 → 색 바꾸기 → 광선 — 닦아내기 뒤·회전 앞(틀 크기의 그림)에서. 광선은 색 바꾸기에 물들지 않는다.
         /// k = 출력 픽셀 / 프로젝트 픽셀(재생 축소 포함), offset = 이 흐름이 시작한 클립 안 장, frames = 그리는 장 수, length = 클립 길이(장).
         /// </summary>
         private static string LookChain(ObjectMotion motion, double k, FrameRate rate, long offset, long frames, long length, int n)
         {
-            return BlurChain(motion, k, rate, offset, frames, length, n);
+            var text = new StringBuilder(BlurChain(motion, k, rate, offset, frames, length, n));
+            for (var i = 0; i < motion.Tints.Count; i++)
+                text.Append(TintChain(motion.Tints[i].Amount, motion.Tints[i].Color, rate, offset, frames, n + "x" + i));
+            for (var i = 0; i < motion.Glows.Count; i++)
+                text.Append(GlowChain(motion.Glows[i], k, rate, offset, frames, length, n + "x" + i));
+            return text.ToString();
+        }
+
+        /// <summary>장마다 바뀌는 필터 값(이름, 값 글)들: 처음 값과 바뀌는 장에서만 보내는 sendcmd 명령(장 사이 시각). 바뀌지 않으면 명령은 빈 글.</summary>
+        private static (string First, string Commands) Commanded(string target, string[] names, Func<long, string[]> values, FrameRate rate, long frames)
+        {
+            var first = values(0);
+            var last = first;
+            var commands = new StringBuilder();
+            for (long i = 1; i < frames; i++)
+            {
+                var now = values(i);
+                if (now.SequenceEqual(last))
+                    continue;
+                commands.Append(N((i - 0.5) / rate.Fps));
+                for (var p = 0; p < names.Length; p++)
+                    commands.Append(p == 0 ? " " : ", ").Append(target).Append(' ').Append(names[p]).Append(' ').Append(now[p]);
+                commands.Append(';');
+                last = now;
+            }
+            if (commands.Length > 0)
+                commands.Length--;
+            return (string.Join(":", names.Select((name, p) => name + "=" + first[p])), commands.ToString());
+        }
+
+        /// <summary>
+        /// 색 바꾸기(앞에 ","): 밝기(0.299R + 0.587G + 0.114B)를 지키며 색으로 물들인다 — 결과 = (1 − a) × 원래 색 + a × 색 × 밝기(흰색은 그 색, 검정은 검정).
+        /// 장마다 세기 a를 계산해 colorchannelmixer의 3×3 값을 sendcmd로 보낸다. 그리는 구간 내내 0이면 넣지 않는다(정지 그림 그대로).
+        /// </summary>
+        private static string TintChain(MotionExpr amount, string color, FrameRate rate, long offset, long frames, string id)
+        {
+            var c = ColorValues(color);
+            double[] luma = { 0.299, 0.587, 0.114 };
+            var names = new[] { "rr", "rg", "rb", "gr", "gg", "gb", "br", "bg", "bb" };
+            double A(long i) => Math.Round(Math.Max(0, Math.Min(1, amount.Eval(offset + i))), 4);
+            string[] Matrix(long i)
+            {
+                var a = A(i);
+                var values = new string[9];
+                for (var row = 0; row < 3; row++)
+                {
+                    for (var col = 0; col < 3; col++)
+                        values[row * 3 + col] = N((row == col ? 1 - a : 0) + a * c[row] * luma[col]);
+                }
+                return values;
+            }
+            var any = false;
+            for (long i = 0; i < frames && !any; i++)
+                any = A(i) > 0;
+            if (!any)
+                return "";
+            var target = "colorchannelmixer@ct" + id;
+            var (first, commands) = Commanded(target, names, Matrix, rate, frames);
+            return commands.Length == 0 ? ",colorchannelmixer=" + first : ",sendcmd=c='" + commands + "'," + target + "=" + first;
+        }
+
+        /// <summary>
+        /// 광선(앞에 ","): 그림의 알파를 흐려(시그마 = 크기 / 2) 광선 색으로 칠한 층을 그림 밑에 깔고, 그 층의 불투명도(세기 × 1.5, 2까지)를 장마다 sendcmd로 보낸다.
+        /// 번질 자리(클립 전체에서 시그마 × 3, 짝수)만큼 투명하게 넓힌다 — 흐림과 같이 한 장과 내보내기가 같은 자리. 그리는 구간 내내 세기가 0이면 넓히기만 한다.
+        /// </summary>
+        private static string GlowChain((MotionExpr Strength, double Size, string Color) glow, double k, FrameRate rate, long offset, long frames, long length, string id)
+        {
+            double S(long frame) => Math.Round(Math.Max(0, Math.Min(1, glow.Strength.Eval(frame))), 3);
+            var any = false;
+            for (long f = 0; f < length && !any; f++)
+                any = S(f) > 0;
+            var sigma = Math.Max(0.5, glow.Size * k / 2);
+            if (!any)
+                return "";
+            var margin = 2 * (int)Math.Ceiling(sigma * 3 / 2);
+            var text = new StringBuilder();
+            text.AppendFormat(CultureInfo.InvariantCulture, ",pad=w=iw+{0}:h=ih+{0}:x={1}:y={1}:color=black@0", margin * 2, margin);
+            var shown = false;
+            for (long i = 0; i < frames && !shown; i++)
+                shown = S(offset + i) > 0;
+            if (!shown)
+                return text.ToString();
+            var c = ColorValues(glow.Color);
+            var target = "colorchannelmixer@gl" + id;
+            var (first, commands) = Commanded(target, new[] { "aa" }, i => new[] { N(Math.Min(2, 1.5 * S(offset + i))) }, rate, frames);
+            text.AppendFormat(CultureInfo.InvariantCulture, ",split[gla{0}][glb{0}];[gla{0}]format=gbrap,lutrgb=r={1}:g={2}:b={3},gblur=sigma={4}",
+                id, (int)Math.Round(c[0] * 255), (int)Math.Round(c[1] * 255), (int)Math.Round(c[2] * 255), N(sigma));
+            if (commands.Length > 0)
+                text.Append(",sendcmd=c='").Append(commands).Append('\'');
+            text.AppendFormat(CultureInfo.InvariantCulture, ",{0}={1},format=rgba[glc{2}];[glc{2}][glb{2}]overlay=format=auto,format=rgba", target, first, id);
+            return text.ToString();
+        }
+
+        /// <summary>"#RRGGBB"를 0~1 세 값으로(잘못된 글은 흰색).</summary>
+        private static double[] ColorValues(string color)
+        {
+            var hex = ClipAnimations.Rgb(color, "#FFFFFF");
+            return new[] { 1, 3, 5 }.Select(at => Convert.ToInt32(hex.Substring(at, 2), 16) / 255.0).ToArray();
         }
 
         /// <summary>
@@ -213,9 +310,10 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
-        /// 단어·글자별 애니메이션이 든 글자 클립의 화면 원본: 그리개가 장마다 그린 PNG를 구간별로 이어 붙인다(concat — 모든 장이 같은 크기).
-        /// 클립 안 프레임으로 [0, 나타나기 시작) 나타나기 첫 장 · 나타나기 구간 장들 · 쉬는 장 하나 · 사라지기 구간 장들 · [사라지기 끝, 클립 끝) 사라진 장.
-        /// 파일 이름은 묶음 키(sa-&lt;해시&gt;-)에 구간 안 번호(i00012·o00003)나 쉬는 장(s) — 같은 설정이면 같은 이름이라 다시 그리지 않는다.
+        /// 그리개가 장마다 그리는 효과(단어·글자별 나타나기·사라지기, 글자 전용 강조)가 든 글자 클립의 화면 원본: 그린 PNG를 구간별로 이어 붙인다(concat — 모든 장이 같은 크기).
+        /// 클립 안 프레임으로 [0, 나타나기 시작) 나타나기 첫 장 · 나타나기 구간 장들 · 쉬는 동안 · 사라지기 구간 장들 · [사라지기 끝, 클립 끝) 사라진 장.
+        /// 쉬는 동안은 강조 구간으로 나눠 강조가 없으면 쉬는 장 하나(s), 강조 하나면 그 강조 한 번(w0-00000…)을 그림 묶음 되풀이(-loop 1)로, 둘 이상 겹치면 장마다(m…-).
+        /// 파일 이름은 묶음 키(sa-&lt;해시&gt;-)에 구간 안 번호(i00012·o00003) — 같은 설정이면 같은 이름이라 다시 그리지 않는다.
         /// 여러 장은 그림 묶음 입력(-pattern_type sequence, 처음 장부터 이어져 있어야 하므로 앞 장들도 그려 둔다)에서 trim으로 고르고, 한 장이면 그림 한 장을 되풀이한다.
         /// </summary>
         private static string AnimatedText(Project project, RenderOptions options, RenderPlan plan, Clip clip, long segStart, long segEnd)
@@ -229,12 +327,13 @@ namespace VideoEditor.Core
             var job = request.WithAnimation(animation.At(0)).JobKey(options.TextRasterizer.Version);
             var folder = Path.Combine(options.TempFolder ?? Path.GetTempPath(), "styled-text");
             plan.TextRasterizer = options.TextRasterizer;
-            string Image(string suffix, long clipFrame)
+            string Image(string suffix, TextAnimationFrame state)
             {
                 var path = Path.Combine(folder, "sa-" + job + "-" + suffix + ".png");
-                plan.TextImages[path] = request.WithAnimation(animation.At(clipFrame));
+                plan.TextImages[path] = request.WithAnimation(state);
                 return path;
             }
+            string D5(long value) => value.ToString("D5", CultureInfo.InvariantCulture);
             var duration = clip.Duration;
             long inStart = 0, inEnd = 0, outStart = duration, outEnd = duration;
             if (animation.In != null)
@@ -247,42 +346,74 @@ namespace VideoEditor.Core
                 outStart = animation.OutStart;
                 outEnd = animation.OutStart + animation.OutLength;
             }
-            // (구간, 구간 안 번호의 기준 프레임, 묶음 이름 글자 — 0이면 그림 한 장, 그 한 장의 이름·장)
-            var pieces = new List<(long Start, long End, long Base, char Window, string Still, long StillFrame)>
+            var pieces = new List<TextPiece>
             {
-                (0, inStart, 0, '\0', "i" + 0.ToString("D5", CultureInfo.InvariantCulture), inStart),
-                (inStart, inEnd, inStart, 'i', null, 0),
-                (inEnd, outStart, 0, '\0', "s", inEnd),
-                (outStart, outEnd, outStart, 'o', null, 0),
-                (outEnd, duration, 0, '\0', "o" + Math.Max(0, outEnd - outStart).ToString("D5", CultureInfo.InvariantCulture), outEnd)
+                new TextPiece { Start = 0, End = inStart, Name = "i" + D5(0), Frame = inStart },
+                new TextPiece { Start = inStart, End = inEnd, Prefix = "i", Base = inStart }
             };
+            // 쉬는 동안은 글자 전용 강조의 구간으로 나눈다: 강조가 없으면 쉬는 장 하나, 하나면 그 강조 한 번(장마다 그림)을 되풀이, 둘 이상 겹치면 장마다
+            var emphases = animation.Emphases ?? new List<TextEmphasis>();
+            var cuts = new SortedSet<long> { inEnd, outStart };
+            foreach (var emphasis in emphases)
+            {
+                foreach (var cut in new[] { emphasis.Start, emphasis.End })
+                {
+                    if (cut > inEnd && cut < outStart)
+                        cuts.Add(cut);
+                }
+            }
+            var points = cuts.ToList();
+            for (var c = 0; c + 1 < points.Count; c++)
+            {
+                long a = points[c], b = points[c + 1];
+                var active = Enumerable.Range(0, emphases.Count).Where(k => emphases[k].Start <= a && b <= emphases[k].End).ToList();
+                if (active.Count == 0)
+                    pieces.Add(new TextPiece { Start = a, End = b, Name = "s", Frame = a });
+                else if (active.Count == 1)
+                    pieces.Add(new TextPiece { Start = a, End = b, Prefix = "w" + active[0] + "-", Base = emphases[active[0]].Start, Period = emphases[active[0]].Cycle, Solo = active[0] });
+                else
+                    pieces.Add(new TextPiece { Start = a, End = b, Prefix = "m" + D5(a) + "-", Base = a });
+            }
+            pieces.Add(new TextPiece { Start = outStart, End = outEnd, Prefix = "o", Base = outStart });
+            pieces.Add(new TextPiece { Start = outEnd, End = duration, Name = "o" + D5(Math.Max(0, outEnd - outStart)), Frame = outEnd });
             long from = segStart - clip.Start, to = segEnd - clip.Start;
             var chains = new List<string>();
+            void StillInput(string path, long frames)
+            {
+                var still = AddInput(plan, "-loop", "1", "-framerate", rate.Rational, "-t", N((frames + 0.5) / rate.Fps),
+                    "-f", "image2", "-pattern_type", "none", "-i", path);
+                chains.Add(string.Format(CultureInfo.InvariantCulture, "[{0}:v]trim=end_frame={1},setpts=PTS-STARTPTS", still, frames));
+            }
             foreach (var piece in pieces)
             {
                 long start = Math.Max(from, piece.Start), end = Math.Min(to, piece.End);
                 if (end <= start)
                     continue;
-                if (piece.Window == '\0' || end - start == 1)
+                if (piece.Name != null)
                 {
-                    var path = piece.Window == '\0'
-                        ? Image(piece.Still, piece.StillFrame)
-                        : Image(piece.Window + (start - piece.Base).ToString("D5", CultureInfo.InvariantCulture), start);
-                    var still = AddInput(plan, "-loop", "1", "-framerate", rate.Rational, "-t", N((end - start + 0.5) / rate.Fps),
-                        "-f", "image2", "-pattern_type", "none", "-i", path);
-                    chains.Add(string.Format(CultureInfo.InvariantCulture, "[{0}:v]trim=end_frame={1},setpts=PTS-STARTPTS", still, end - start));
+                    StillInput(Image(piece.Name, animation.At(piece.Frame)), end - start);
                     continue;
                 }
-                // 묶음은 0번 장부터 이어져 있어야 읽힌다 — 끝 장까지 모두 그려 둔다
-                long first = start - piece.Base, last = end - piece.Base;
+                // 묶음 안 번호: 장마다 그린 묶음은 장 − 기준, 되풀이 묶음은 강조 시작부터 한 번 안의 차례
+                long first = piece.Period > 0 ? (start - piece.Base) % piece.Period : start - piece.Base;
+                TextAnimationFrame State(long index) => animation.At(piece.Base + index, piece.Solo);
+                if (end - start == 1)
+                {
+                    StillInput(Image(piece.Prefix + D5(first), State(first)), 1);
+                    continue;
+                }
+                // 묶음은 0번 장부터 이어져 있어야 읽힌다 — 끝 장까지(되풀이 묶음은 한 번 전체를) 모두 그려 둔다
+                long last = piece.Period > 0 ? piece.Period : end - piece.Base;
                 for (long index = 0; index < last; index++)
-                    Image(piece.Window + index.ToString("D5", CultureInfo.InvariantCulture), piece.Base + index);
+                    Image(piece.Prefix + D5(index), State(index));
                 // 임시 폴더 경로의 %는 파일 이름 패턴이 아니게 %%로
-                var pattern = Path.Combine(folder.Replace("%", "%%"), "sa-" + job + "-" + piece.Window + "%05d.png");
-                var input = AddInput(plan, "-framerate", rate.Rational, "-f", "image2", "-pattern_type", "sequence", "-i", pattern);
-                chains.Add(string.Format(CultureInfo.InvariantCulture, "[{0}:v]trim=start_frame={1}:end_frame={2},setpts=PTS-STARTPTS", input, first, last));
-            }
-            if (chains.Count == 1)
+                var pattern = Path.Combine(folder.Replace("%", "%%"), "sa-" + job + "-" + piece.Prefix + "%05d.png");
+                long count = end - start;
+                var input = piece.Period > 0
+                    ? AddInput(plan, "-loop", "1", "-framerate", rate.Rational, "-t", N((first + count + 0.5) / rate.Fps), "-f", "image2", "-pattern_type", "sequence", "-i", pattern)
+                    : AddInput(plan, "-framerate", rate.Rational, "-f", "image2", "-pattern_type", "sequence", "-i", pattern);
+                chains.Add(string.Format(CultureInfo.InvariantCulture, "[{0}:v]trim=start_frame={1}:end_frame={2},setpts=PTS-STARTPTS", input, first, first + count));
+            }            if (chains.Count == 1)
                 return chains[0] + ",format=rgba";
             // 조각을 잇고 장 번호로 시각을 다시 매긴다(조각마다 정확히 그 장 수)
             var labels = new StringBuilder();
@@ -296,6 +427,22 @@ namespace VideoEditor.Core
             text.AppendFormat(CultureInfo.InvariantCulture, "{0}concat=n={1}:v=1:a=0,setpts='round(N*{2}/({3}*TB))',format=rgba",
                 labels, chains.Count, rate.Denominator, rate.Numerator);
             return text.ToString();
+        }
+
+        /// <summary>
+        /// 글자 클립 원본의 조각 하나(클립 안 [Start, End)): 그림 한 장(Name — 그릴 장 Frame), 장마다 그린 묶음(Prefix + 번호, 번호 = 장 − Base),
+        /// 강조 한 번을 되풀이하는 묶음(Period > 0 — 번호 = (장 − Base) mod Period, 그 강조만 그린다(Solo)).
+        /// </summary>
+        private sealed class TextPiece
+        {
+            public long Start;
+            public long End;
+            public string Name;
+            public long Frame;
+            public string Prefix;
+            public long Base;
+            public long Period;
+            public int Solo = -1;
         }
     }
 }

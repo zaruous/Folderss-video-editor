@@ -475,6 +475,116 @@ namespace VideoEditor.Tests
             await AssertPreviewEqualsExport(project, checks.ToArray());
         }
 
+        /// <summary>(x, y) 픽셀의 (R, G, B).</summary>
+        private static (int R, int G, int B) Rgb(byte[] bgra, int x, int y)
+        {
+            var i = (y * Width + x) * 4;
+            return (bgra[i + 2], bgra[i + 1], bgra[i]);
+        }
+
+        [FfmpegFact]
+        public void ImageColorChange_HoldsTheTint_GlowFlashesAroundAndLeaves()
+        {
+            var project = NewProject();
+            var red = Add(project, project.MainTrack, FfmpegMedia.RedImage, 0, 40);
+            red.Scale = 0.5;
+            var still = Frame(project, 0);
+            var box = Box(still, (r, g, b) => r > 150);
+            _out.WriteLine("빨간 상자 " + box);
+            // 초록으로 물들이기(밝기 0.299): 반쯤은 빨강 반 + 초록 × 밝기 반, 끝난 뒤 (0, 76, 0)에 머문다
+            var tint = Animation(AnimationEffect.ColorChange, AnimationKind.Emphasis, 10);
+            tint.Color = "#00FF00";
+            red.Animations = new List<ClipAnimation> { tint };
+            Assert.Equal(0, MaxDiff(still, Frame(project, 0)));
+            var half = Rgb(Frame(project, 5), 160, 120);
+            var done = Rgb(Frame(project, 30), 160, 120);
+            _out.WriteLine("반쯤 " + half + " · 끝 " + done);
+            Assert.InRange(half.R, 122, 134);
+            Assert.InRange(half.G, 33, 44);
+            Assert.InRange(done.R, 0, 5);
+            Assert.InRange(done.G, 70, 82);
+
+            // 광선 깜빡임(노랑, 크기 20): 한 번의 가운데에서 상자 밖이 노랗게 빛나고, 끝난 뒤엔 자리 그대로·빛 없음
+            var glow = Animation(AnimationEffect.Glow, AnimationKind.Emphasis, 10);
+            glow.Amount = 20;
+            glow.Repeat = 1;
+            red.Animations = new List<ClipAnimation> { glow };
+            var flash = Frame(project, 5);
+            var outside = Rgb(flash, box.Left - 4, 120);
+            _out.WriteLine("광선 가운데 상자 밖 " + outside + " · 상자 안 " + Rgb(flash, 160, 120));
+            Assert.True(outside.R > 80 && outside.G > 60 && outside.B < outside.G, "상자 밖이 노랗게 " + outside);
+            var inside = Rgb(flash, 160, 120);
+            Assert.True(inside.R > 240 && inside.G < 15 && inside.B < 15, "상자 안은 빨강 그대로 " + inside);
+            var after = Frame(project, 20);
+            Assert.Equal(box, Box(after, (r, g, b) => r > 150));
+            Assert.Equal((0, 0, 0), Rgb(after, box.Left - 4, 120));
+            Assert.InRange(MaxDiff(still, after), 0, 20);
+        }
+
+        [FfmpegFact]
+        public void WaveText_OneCycleLoops_InPlaybackAndOneFrame()
+        {
+            // 물결(10장마다, 클립 끝까지) + 타자기(0~11장): 장 번호를 색에 담은 그리개 — 나타나기 장은 그 장, 그 뒤는 한 번 안의 차례(장 mod 10)를 되풀이
+            var project = NewProject();
+            var text = TimelineEdits.CreateText("가나다", 0, 40);
+            text.Style = TextStyle.FromLegacy(text);
+            TimelineEdits.Place(project, project.MainTrack, text, 0);
+            var wave = Animation(AnimationEffect.Wave, AnimationKind.Emphasis, 10, AnimationEase.InOut, text);
+            wave.Repeat = 0;
+            text.Animations = new List<ClipAnimation> { Animation(AnimationEffect.Typewriter, AnimationKind.In, 12, AnimationEase.Linear, text), wave };
+            var rasterizer = new FrameColorRasterizer();
+            int Expected(long f) => FrameColorRasterizer.Red(f < 12 ? f : f % 10);
+            int RedAt(byte[] bgra) => bgra[(120 * Width + 160) * 4 + 2];
+            List<byte[]> frames;
+            using (var process = PreviewRenderer.StartVideo(FfmpegMedia.Tool, project, 0, 40, Width, Height, out var files, rasterizer))
+            {
+                process.BeginErrorReadLine();
+                frames = new List<byte[]>();
+                var size = Width * Height * 4;
+                while (true)
+                {
+                    var buffer = new byte[size];
+                    if (!HelperProtocol.ReadExactly(process.StandardOutput.BaseStream, buffer, size))
+                        break;
+                    frames.Add(buffer);
+                }
+                foreach (var file in files)
+                    RenderCommand.TryDelete(file);
+            }
+            Assert.Equal(40, frames.Count);
+            _out.WriteLine("빨강: " + string.Join(" ", frames.Select(RedAt)) + " · 그린 장 " + rasterizer.Calls);
+            for (var f = 0; f < 40; f++)
+                Assert.InRange(RedAt(frames[f]), Expected(f) - 4, Expected(f) + 4);
+            foreach (var f in new long[] { 3, 12, 19, 25, 39 })
+                Assert.InRange(RedAt(Frame(project, f, rasterizer)), Expected(f) - 4, Expected(f) + 4);
+        }
+
+        [FfmpegFact]
+        public async Task NewEmphases_PreviewEqualsExport()
+        {
+            // 사진: 색 바꾸기 + 광선 깜빡임, 글자: 물결(되풀이) + 굵게 깜빡이기(겹치는 동안은 장마다)
+            var project = NewProject();
+            var image = Add(project, project.MainTrack, FfmpegMedia.RedImage, 0, 40);
+            image.Scale = 0.4;
+            image.X = -60;
+            var tint = Animation(AnimationEffect.ColorChange, AnimationKind.Emphasis, 10, AnimationEase.InOut);
+            tint.Delay = 4;
+            var glow = Animation(AnimationEffect.Glow, AnimationKind.Emphasis, 8, AnimationEase.InOut);
+            glow.Delay = 20;
+            image.Animations = new List<ClipAnimation> { tint, glow };
+            var text = TimelineEdits.CreateText("가나다", 0, 40);
+            text.Style = TextStyle.FromLegacy(text);
+            text.X = 80;
+            TimelineEdits.Place(project, TimelineEdits.AddTrack(project, TrackKind.Video), text, 0);
+            var wave = Animation(AnimationEffect.Wave, AnimationKind.Emphasis, 10, AnimationEase.InOut, text);
+            wave.Repeat = 0;
+            var bold = Animation(AnimationEffect.BoldFlash, AnimationKind.Emphasis, 6, AnimationEase.InOut, text);
+            bold.Delay = 14;
+            bold.Repeat = 1;
+            text.Animations = new List<ClipAnimation> { wave, bold };
+            await AssertPreviewEqualsExport(project, new long[] { 2, 8, 16, 24, 33 }, new FrameColorRasterizer());
+        }
+
         [Fact]
         public void Cache_RedrawsWhenSettingsChange_ReusesWhenReverted()
         {
@@ -566,6 +676,20 @@ namespace VideoEditor.Tests
             opening.Scale = 0.25;
             opening.X = -80;
             opening.Animations = new List<ClipAnimation> { Make(AnimationEffect.Split, AnimationKind.In, 10), Make(AnimationEffect.Rise, AnimationKind.Out, 10) };
+            // 강조: 색 바꾸기(3×3 값 명령)·광선(나눠 흐린 층을 밑에), 물결(한 번을 그린 그림 묶음을 -loop 1로 되풀이)
+            var tint = Make(AnimationEffect.ColorChange, AnimationKind.Emphasis, 8);
+            tint.Delay = 5;
+            var glow = Make(AnimationEffect.Glow, AnimationKind.Emphasis, 8);
+            glow.Delay = 20;
+            sharp.Animations.Add(tint);
+            sharp.Animations.Add(glow);
+            var waving = TimelineEdits.CreateText("물결", 0, 50);
+            waving.Style = TextStyle.FromLegacy(waving);
+            waving.Y = 60;
+            TimelineEdits.Place(project, TimelineEdits.AddTrack(project, TrackKind.Video), waving, 0);
+            var wave = Make(AnimationEffect.Wave, AnimationKind.Emphasis, 7, waving);
+            wave.Repeat = 0;
+            waving.Animations = new List<ClipAnimation> { wave };
             return project;
         }
 

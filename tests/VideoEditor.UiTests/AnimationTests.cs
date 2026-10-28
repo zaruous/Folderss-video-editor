@@ -89,7 +89,7 @@ namespace VideoEditor.UiTests
                     _out.WriteLine("탭: " + string.Join(", ", tabs.Items.Cast<TabItem>().Select(t => t.Header)) + " · 윗변 " + string.Join(", ", tops.Select(y => y.ToString("0"))));
                     Assert.True(tops.Max() - tops.Min() < 1, "속성 탭 머리가 두 줄");
                     Assert.Equal(12, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
-                    Assert.Equal(5, Ui.ById<WrapPanel>(window, "AnimationTilesEmphasis").Children.Count);
+                    Assert.Equal(9, Ui.ById<WrapPanel>(window, "AnimationTilesEmphasis").Children.Count);
                     Assert.Equal(12, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
                     Ui.Snap(window, plugin.ShotFolder, "animation-tab-empty");
                     Ui.Click(Ui.ById<Button>(window, "AnimIn_Typewriter"));
@@ -178,7 +178,9 @@ namespace VideoEditor.UiTests
                     tabs.SelectedItem = Ui.ById<TabItem>(window, "AnimationTab");
                     window.UpdateLayout();
                     Assert.Null(Ui.ById<Button>(window, "AnimIn_Typewriter"));
+                    Assert.Null(Ui.ById<Button>(window, "AnimEmphasis_Wave"));
                     Assert.Equal(10, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
+                    Assert.Equal(7, Ui.ById<WrapPanel>(window, "AnimationTilesEmphasis").Children.Count);
                     // 좁은 속성 패널(1280×800 창에서 약 250px): 썸네일은 줄을 바꿔 패널 안에 들고, 긴 이름("흐려지며 가라앉기")은 칸 안에서 줄을 바꾼다
                     foreach (var id in new[] { "AnimationTilesIn", "AnimationTilesEmphasis", "AnimationTilesOut" })
                     {
@@ -206,6 +208,17 @@ namespace VideoEditor.UiTests
                     direction.SelectedIndex = 1;
                 });
                 await ui.WaitUntil(() => Get(Animations(ProjectClips(window)[0])[0], "Direction").ToString() == "Up", Wait, "위아래로");
+                // 색 바꾸기: 색 칸(기본 빨강)에서 파랑을 고르면 저장된다
+                ui.Run(() => Ui.Click(Ui.ById<Button>(window, "AnimEmphasis_ColorChange")));
+                await ui.WaitUntil(() => Animations(ProjectClips(window)[0]).Any(a => Get(a, "Effect").ToString() == "ColorChange"), Wait, "색 바꾸기 넣기");
+                await ui.WaitFor(() => Ui.ById<ComboBox>(window, "AnimEmphasis0_ColorPalette"), Wait, "색 칸");
+                ui.Run(() =>
+                {
+                    Assert.Equal("#EF4444", Ui.ById<TextBox>(window, "AnimEmphasis0_Color").Text);
+                    var palette = Ui.ById<ComboBox>(window, "AnimEmphasis0_ColorPalette");
+                    palette.SelectedItem = palette.Items.Cast<object>().First(i => (string)Get(i, "Name") == "파랑");
+                });
+                await ui.WaitUntil(() => (string)Get(Animations(ProjectClips(window)[0]).First(a => Get(a, "Effect").ToString() == "ColorChange"), "Color") == "#3B82F6", Wait, "파랑");
                 Assert.Empty(ui.TakeErrors());
             }
             finally
@@ -370,6 +383,35 @@ namespace VideoEditor.UiTests
             Assert.True(blurred[0].Width > still.Width, "흐림이 번질 자리");
             Assert.Equal(still.Ink(), blurred[0].Ink());
             Assert.True(Soft(blurred[1]) > Soft(blurred[0]) * 2, "흐린 장의 반투명 픽셀");
+        }
+
+        [UiFact]
+        public async Task Rasterizer_WaveLiftsLettersInTurn_BoldThickens_FramesSameSize()
+        {
+            var rasterizer = NewRasterizer();
+            var still = await Render(rasterizer, Request(rasterizer, "안녕 ABC", null), "wave-still");
+            // 물결(글자별, 한 번 10장, 높이 40%): 모든 장이 같은 크기(솟는 자리까지), 칠한 양은 그대로이고 장마다 위치만 다르다
+            string Wave(int frame, int solo = -1) => "{\"Emphases\":[{\"Animation\":{\"Kind\":\"Emphasis\",\"Effect\":\"Wave\",\"Unit\":\"Character\",\"Stagger\":40,\"Duration\":10,\"Repeat\":1,\"Amount\":40},"
+                + "\"Start\":0,\"Cycle\":10,\"End\":10}],\"Frame\":" + frame + ",\"Solo\":" + solo + "}";
+            var waves = new List<Png>();
+            foreach (var f in new[] { 0, 3, 6, 9 })
+                waves.Add(await Render(rasterizer, Request(rasterizer, "안녕 ABC", Wave(f)), "wave-" + f));
+            waves.Add(await Render(rasterizer, Request(rasterizer, "안녕 ABC", Wave(3, 0)), "wave-solo-3"));
+            _out.WriteLine("물결 " + string.Join(", ", waves.Select(p => p.Width + "×" + p.Height + " " + p.Ink())) + " · 정지 " + still.Width + "×" + still.Height + " " + still.Ink());
+            Assert.All(waves, p => Assert.Equal((waves[0].Width, waves[0].Height), (p.Width, p.Height)));
+            Assert.True(waves[0].Height > still.Height, "솟는 자리까지");
+            Assert.All(waves, p => Assert.InRange(p.Ink(), still.Ink() * 0.97, still.Ink() * 1.03));
+            Assert.False(waves[1].Bgra.SequenceEqual(waves[0].Bgra), "솟은 장");
+            Assert.True(waves[4].Bgra.SequenceEqual(waves[1].Bgra), "홀로 그린 장 = 같은 장(나타나기·사라지기가 없으면)");
+
+            // 굵게 깜빡이기(한 번에, 굵기 10%): 가운데 장은 정지 그림보다 칠한 곳이 많고, 끝 장은 같다
+            string Bold(int frame) => "{\"Emphases\":[{\"Animation\":{\"Kind\":\"Emphasis\",\"Effect\":\"BoldFlash\",\"Unit\":\"All\",\"Duration\":10,\"Repeat\":1,\"Amount\":10},"
+                + "\"Start\":0,\"Cycle\":10,\"End\":10}],\"Frame\":" + frame + "}";
+            var thick = await Render(rasterizer, Request(rasterizer, "안녕 ABC", Bold(5)), "bold-5");
+            var thin = await Render(rasterizer, Request(rasterizer, "안녕 ABC", Bold(10)), "bold-10");
+            _out.WriteLine("굵게 " + thick.Ink() + " · 끝 " + thin.Ink() + " · 정지 " + still.Ink());
+            Assert.True(thick.Ink() > still.Ink() * 1.2, "굵어짐");
+            Assert.Equal(still.Ink(), thin.Ink());
         }
     }
 }
