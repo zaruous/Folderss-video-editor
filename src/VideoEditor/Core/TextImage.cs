@@ -117,6 +117,9 @@ namespace VideoEditor.Core
                 }
                 if (ArtTextColor != null)
                     Quoted(json, "art.textColor", ArtTextColor);
+                // 스티커는 그림 글의 해시(이름은 그림에 영향이 없다)
+                if (art.Kind == ArtKind.Sticker)
+                    Quoted(json, "art.sticker", StickerSvg.Hash(art.StickerSvg ?? ""));
             }
             json.Length--;
             json.Append('}');

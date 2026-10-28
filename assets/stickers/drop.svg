@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>물방울</title>
+  <path d="M64 8 C64 8 26 56 26 82 A38 38 0 0 0 102 82 C102 56 64 8 64 8 Z" fill="#29B6F6" stroke="#0277BD" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M44 82 Q44 98 58 104" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" stroke-opacity="0.8"/>
+</svg>

@@ -238,7 +238,7 @@ namespace VideoEditor.Core
             get
             {
                 if (Kind == ClipKind.Art)
-                    return ArtShape.DisplayName(Art?.Kind ?? ArtKind.Rectangle);
+                    return Art?.Label ?? ArtShape.DisplayName(ArtKind.Rectangle);
                 return Kind == ClipKind.Text ? (string.IsNullOrEmpty(Text) ? "글자" : Text.Split('\n')[0]) : System.IO.Path.GetFileName(Path);
             }
         }

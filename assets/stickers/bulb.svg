@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>전구</title>
+  <g fill="none" stroke="#FFB300" stroke-width="5" stroke-linecap="round">
+  <path d="M64 4 V14"/>
+  <path d="M22 20 L30 28"/>
+  <path d="M106 20 L98 28"/>
+  <path d="M8 58 H18"/>
+  <path d="M110 58 H120"/>
+  </g>
+  <path d="M64 22 A34 34 0 0 1 86 82 Q80 88 80 96 H48 Q48 88 42 82 A34 34 0 0 1 64 22 Z" fill="#FFEB3B" stroke="#F9A825" stroke-width="4"/>
+  <rect x="46" y="98" width="36" height="10" rx="4" fill="#90A4AE"/>
+  <rect x="50" y="110" width="28" height="10" rx="4" fill="#78909C"/>
+  <path d="M54 40 Q60 34 68 36" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/>
+</svg>

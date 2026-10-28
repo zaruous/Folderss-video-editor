@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>놀람</title>
+  <circle cx="64" cy="64" r="58" fill="#FFCC33" stroke="#E0A100" stroke-width="4"/>
+  <path d="M30 36 Q42 28 54 34" fill="none" stroke="#4A2C12" stroke-width="5" stroke-linecap="round"/>
+  <path d="M74 34 Q86 28 98 36" fill="none" stroke="#4A2C12" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="44" cy="54" r="11" fill="#FFFFFF" stroke="#4A2C12" stroke-width="3"/>
+  <circle cx="84" cy="54" r="11" fill="#FFFFFF" stroke="#4A2C12" stroke-width="3"/>
+  <circle cx="46" cy="56" r="5" fill="#4A2C12"/>
+  <circle cx="82" cy="56" r="5" fill="#4A2C12"/>
+  <ellipse cx="64" cy="90" rx="11" ry="15" fill="#7A1F1F"/>
+</svg>

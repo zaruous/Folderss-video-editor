@@ -139,7 +139,7 @@ namespace VideoEditor.Ui
                 {
                     var artKind = clip.Art?.Kind ?? ArtKind.Rectangle;
                     tabs.Items.Add(new TabItem { Header = "모양", Content = ShapeTab(id, artKind) });
-                    var styleTab = new TabItem { Header = "꾸미기", Content = StyleTab(id, true, ArtShape.HoldsText(artKind)) };
+                    var styleTab = new TabItem { Header = "꾸미기", Content = StyleTab(id, true, ArtShape.HoldsText(artKind), artKind == ArtKind.Sticker) };
                     AutomationProperties.SetAutomationId(styleTab, "StyleTab");
                     tabs.Items.Add(styleTab);
                 }
@@ -784,8 +784,9 @@ namespace VideoEditor.Ui
         /// 광선 묶음(켜기·색·크기·불투명도), 반사 묶음(켜기·크기·간격·불투명도), 맨 끝에 휘기 묶음(종류·정도).
         /// 스타일이 없는 글자(예전 방식)는 처음 고칠 때 지금 색을 이어받은 스타일을 만든다(그때부터 그리개로 그림).
         /// 아트 요소(art)는 글꼴·휘기 묶음을 숨기고, 글을 넣는 모양(artText — 말풍선 등)은 글꼴 묶음만 보인다(안의 글에 씀).
+        /// 스티커(sticker)는 채우기 묶음도 숨긴다(그린 색 그대로 — 윤곽선·그림자·광선·반사만 스티커 둘레에).
         /// </summary>
-        private UIElement StyleTab(string id, bool art = false, bool artText = false)
+        private UIElement StyleTab(string id, bool art = false, bool artText = false, bool sticker = false)
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             panel.Children.Add(Section("스타일 모음"));
@@ -947,6 +948,7 @@ namespace VideoEditor.Ui
                 }
             });
 
+            var fillTo = panel.Children.Count;
             // 윤곽선: 켜기 · 색 · 두께(0~50px) · 이음(둥글게·각지게·깎아서) — 색·두께·이음은 켰을 때만 고친다
             panel.Children.Add(Section("윤곽선"));
             var outlineOn = new CheckBox { Content = "윤곽선 그리기", VerticalAlignment = VerticalAlignment.Center };
@@ -1189,9 +1191,17 @@ namespace VideoEditor.Ui
             {
                 for (var i = fontFrom; i < panel.Children.Count; i++)
                 {
-                    if (i < fontTo && !artText || i >= warpFrom)
+                    if (i < fontTo && !artText || i >= warpFrom || sticker && i >= fontTo && i < fillTo)
                         panel.Children[i].Visibility = Visibility.Collapsed;
                 }
+            }
+            if (sticker)
+            {
+                var note = UiKit.Label("스티커는 그린 색 그대로 그립니다. 윤곽선·그림자·광선·반사는 스티커 둘레에 그립니다(흰 윤곽선이면 오려 붙인 스티커처럼).", true);
+                note.TextWrapping = TextWrapping.Wrap;
+                note.Margin = new Thickness(0, 4, 0, 4);
+                AutomationProperties.SetAutomationId(note, "StyleStickerNote");
+                panel.Children.Insert(fontFrom, note);
             }
             return panel;
         }
@@ -1206,6 +1216,8 @@ namespace VideoEditor.Ui
             var panel = new StackPanel { Margin = new Thickness(6) };
             ArtShape Shape(Clip c) => c.Art ??= ArtShape.Default(kind);
             var line = kind == ArtKind.Line || kind == ArtKind.Arrow;
+            if (kind == ArtKind.Sticker)
+                return StickerRows(id, panel, Shape);
             if (ArtShape.HoldsText(kind))
             {
                 // 안의 글: 모양과 같은 그림에 그린다(꼬리·크기를 바꾸면 따라간다). 글꼴은 [꾸미기]의 글꼴 묶음
@@ -1260,6 +1272,42 @@ namespace VideoEditor.Ui
             else
                 text = "색·윤곽선·그림자는 [꾸미기] 탭에서 고칩니다.";
             var hint = UiKit.Label(text, true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Margin = new Thickness(0, 4, 0, 4);
+            panel.Children.Add(hint);
+            return panel;
+        }
+
+        /// <summary>
+        /// [모양] 스티커: 이름(그림을 읽지 못했으면 알림), 너비·높이(늘이기 — 크기 %는 [화면] 탭), [원래 비율로](높이를 SVG 비율에 맞춤 — 실행 취소 한 단계).
+        /// </summary>
+        private UIElement StickerRows(string id, StackPanel panel, Func<Clip, ArtShape> shape)
+        {
+            var name = UiKit.Label("", true);
+            name.TextWrapping = TextWrapping.Wrap;
+            name.Margin = new Thickness(0, 2, 0, 6);
+            AutomationProperties.SetAutomationId(name, "ArtStickerName");
+            panel.Children.Add(name);
+            _refreshers.Add(() =>
+            {
+                var art = _session.Project.FindClip(id)?.Art;
+                if (art == null)
+                    return;
+                name.Text = StickerSvg.Cached(art.StickerSvg) != null
+                    ? "스티커: " + art.Label
+                    : "스티커: " + art.Label + " — 그림을 읽지 못해 그리지 않습니다(프로젝트 파일이 깨졌을 수 있습니다).";
+            });
+            panel.Children.Add(NumberRow("너비", "ArtWidth", 1, 4000, "px", id, c => c.Art?.Width ?? 300, (c, v) => shape(c).Width = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
+            panel.Children.Add(NumberRow("높이", "ArtHeight", 1, 4000, "px", id, c => c.Art?.Height ?? 300, (c, v) => shape(c).Height = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, v))));
+            var aspect = UiKit.TextButton("원래 비율로", "ArtStickerAspect", () => Edit(id, c =>
+            {
+                var sticker = StickerSvg.Cached(c.Art?.StickerSvg);
+                if (sticker != null && sticker.Width > 0)
+                    shape(c).Height = Math.Max(1, Math.Min(ClipLayout.MaxTextBox, Math.Round(shape(c).Width * sticker.Height / sticker.Width, 2)));
+            }, null));
+            aspect.HorizontalAlignment = HorizontalAlignment.Left;
+            panel.Children.Add(aspect);
+            var hint = UiKit.Label("스티커는 벡터라 크게 키워도 그 크기로 다시 그립니다. 너비·높이를 따로 바꾸면 늘어납니다 — 비율을 지켜 키우려면 [화면] 탭의 크기나 미리 보기 모서리를 끄세요.", true);
             hint.TextWrapping = TextWrapping.Wrap;
             hint.Margin = new Thickness(0, 4, 0, 4);
             panel.Children.Add(hint);

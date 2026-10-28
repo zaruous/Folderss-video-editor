@@ -170,7 +170,29 @@ namespace VideoEditor.Ui
             var geometry = new GeometryGroup { FillRule = FillRule.Nonzero };
             // 아트 요소 안의 글(말풍선 등) — 모양 위에 글자 색으로만 칠한다(꾸미기 효과는 모양에)
             GeometryGroup words = null;
-            if (request.Art != null)
+            // 스티커 그림(제 색 그대로) — 있으면 본문은 채우기 대신 이것
+            Drawing sticker = null;
+            if (request.Art != null && request.Art.Kind == ArtKind.Sticker)
+            {
+                // 스티커: SVG를 같은 상한으로 다시 읽어 상자에 늘여 그린다. 꾸미기의 윤곽선·그림자·광선·반사는 칠한 곳 전체(실루엣) 둘레에 — 채우기는 쓰지 않는다.
+                // 읽지 못하면 아무것도 칠하지 않는다(상자 크기 투명 그림)
+                var art = request.Art.Clone();
+                art.Normalize();
+                var scale = Clamp(request.EffectScale, 0.001, 100, 1);
+                boxWidth = art.Width * scale;
+                boxHeight = art.Height * scale;
+                var parsed = StickerSvg.Cached(art.StickerSvg);
+                if (parsed != null)
+                {
+                    var built = StickerDrawing.Build(parsed, boxWidth, boxHeight);
+                    geometry.Children.Add(built.Silhouette);
+                    sticker = built.Drawing;
+                }
+                // 불투명한 단색으로 둔다 — 윤곽선은 실루엣 바깥에 그대로, 광선은 속 빈 모양으로 보지 않게(칠하는 색은 스티커 그림)
+                style.Fill = new TextFill { Kind = FillKind.Solid, Colors = new List<string> { "#FFFFFF" } };
+                cancellation.ThrowIfCancellationRequested();
+            }
+            else if (request.Art != null)
             {
                 // 아트 요소: 모양 윤곽(출력 픽셀)을 글자 윤곽 대신 칠한다 — 상자 = 모양 상자, 휘기는 쓰지 않는다
                 var art = request.Art.Clone();
@@ -240,7 +262,18 @@ namespace VideoEditor.Ui
             using (var context = body.RenderOpen())
             {
                 context.PushTransform(new TranslateTransform(origin.X, origin.Y));
-                DrawBody(context, geometry, ink, style, request.EffectScale, null);
+                if (sticker != null)
+                {
+                    // 스티커: 윤곽선을 실루엣에 먼저(바깥 절반만 보임), 그 위에 제 색 그림
+                    var outline = OutlinePen(style.Outline, request.EffectScale, null);
+                    if (outline != null && !ink.IsEmpty)
+                        context.DrawGeometry(null, outline, geometry);
+                    context.DrawDrawing(sticker);
+                }
+                else
+                {
+                    DrawBody(context, geometry, ink, style, request.EffectScale, null);
+                }
                 context.Pop();
             }
             front.Add(body);

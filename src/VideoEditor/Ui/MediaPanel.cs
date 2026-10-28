@@ -327,6 +327,7 @@ namespace VideoEditor.Ui
         /// <summary>
         /// [요소] 도형·말풍선·강조·프레임·배경 칸(묶음마다 제목): 두 번 누르면 재생 헤드에, 타임라인으로 끌어 놓으면 그 줄·자리에 넣는다(<see cref="EditorCommands.AddArt"/>).
         /// 칸의 그림은 모양 윤곽(<see cref="ArtGeometry"/>)을 처음 채우기 색으로 그대로 그린 것이라 FFmpeg·그리개를 기다리지 않는다.
+        /// 그 아래 스티커 모음(기본)과 내 스티커(<see cref="StickerSection"/>).
         /// </summary>
         private UIElement ArtTab()
         {
@@ -348,7 +349,152 @@ namespace VideoEditor.Ui
                 }
                 panel.Children.Add(tiles);
             }
+            panel.Children.Add(StickerSection());
             return new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        }
+
+        /// <summary>
+        /// 스티커(기본 모음 — 플러그인 stickers\의 SVG)와 내 스티커(데이터 폴더 — [스티커 더하기…]로 SVG·PNG, 오른쪽 클릭 [지우기]).
+        /// 칸을 두 번 누르거나 타임라인으로 끌어 놓아 넣는다(<see cref="EditorCommands.AddSticker"/>). 파일은 탭이 처음 보일 때 읽고, 내 스티커는 보일 때마다 다시 읽는다.
+        /// </summary>
+        private UIElement StickerSection()
+        {
+            var box = new StackPanel();
+            box.Children.Add(new TextBlock { Text = "스티커", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 4) });
+            var builtin = new WrapPanel();
+            AutomationProperties.SetAutomationId(builtin, "ArtStickers");
+            box.Children.Add(builtin);
+            box.Children.Add(new TextBlock { Text = "내 스티커", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 4) });
+            var mine = new WrapPanel();
+            AutomationProperties.SetAutomationId(mine, "ArtMyStickers");
+            box.Children.Add(mine);
+            var hint = UiKit.Label("SVG·PNG를 [스티커 더하기…]로 넣으면 여기에 남습니다. SVG는 경로·도형만 읽고 스크립트·외부 참조는 버립니다.", true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Margin = new Thickness(0, 0, 0, 4);
+            AutomationProperties.SetAutomationId(hint, "ArtMyStickersHint");
+            box.Children.Add(hint);
+            void FillMine()
+            {
+                mine.Children.Clear();
+                var stickers = _services.MyStickers();
+                for (var i = 0; i < stickers.Count; i++)
+                {
+                    var item = stickers[i];
+                    var tile = StickerTile(item, "MyStickerTile" + i);
+                    var remove = new MenuItem { Header = new TextBlock { Text = "지우기" } };
+                    remove.Click += (s, e) =>
+                    {
+                        _commands.Status(_services.RemoveMySticker(item.Key)
+                            ? "내 스티커에서 지웠습니다: " + item.Name + " (이미 넣은 클립은 그대로)"
+                            : "내 스티커를 지우지 못했습니다: " + item.Name);
+                        FillMine();
+                    };
+                    tile.ContextMenu = new ContextMenu();
+                    tile.ContextMenu.Items.Add(remove);
+                    mine.Children.Add(tile);
+                }
+                mine.Visibility = stickers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            }
+            var add = UiKit.TextButton("스티커 더하기…", "StickerAddMine", () =>
+            {
+                AddMyStickers();
+                FillMine();
+            });
+            add.HorizontalAlignment = HorizontalAlignment.Left;
+            add.Margin = new Thickness(0, 0, 0, 4);
+            box.Children.Add(add);
+            var filled = false;
+            box.Loaded += (s, e) =>
+            {
+                if (!filled)
+                {
+                    filled = true;
+                    var stickers = _services.BuiltinStickers();
+                    foreach (var item in stickers)
+                        builtin.Children.Add(StickerTile(item, "StickerTile_" + Path.GetFileNameWithoutExtension(item.Path)));
+                }
+                FillMine();
+            };
+            return box;
+        }
+
+        /// <summary>[스티커 더하기…]: 고른 SVG·PNG를 내 스티커에 넣는다. 넣지 못한 파일은 이유를 알리고(상한·형식), 무시한 것(스크립트·참조 등)은 상태 줄에 적는다.</summary>
+        private void AddMyStickers()
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog { Title = "내 스티커 더하기", Filter = "스티커 그림 (*.svg;*.png)|*.svg;*.png", Multiselect = true };
+            if (dialog.ShowDialog(UiKit.OwnerOf(this)) != true)
+                return;
+            var added = new List<string>();
+            var problems = new List<string>();
+            var ignored = new List<string>();
+            foreach (var file in dialog.FileNames)
+            {
+                var item = _services.AddMySticker(file, out var error, out var skipped);
+                if (item == null)
+                {
+                    problems.Add(Path.GetFileName(file) + ": " + error);
+                    continue;
+                }
+                added.Add(item.Name);
+                ignored.AddRange(skipped.Where(i => !ignored.Contains(i)));
+            }
+            if (added.Count > 0)
+                _commands.Status("내 스티커에 더했습니다: " + string.Join(", ", added)
+                    + (ignored.Count > 0 ? " — 읽지 않고 버린 것: " + string.Join(", ", ignored) + "(스크립트·외부 참조·지원하지 않는 요소)" : ""));
+            if (problems.Count > 0)
+                UiKit.Inform(this, "내 스티커", "더하지 못했습니다.\n" + string.Join("\n", problems));
+        }
+
+        /// <summary>스티커 칸: 그림(SVG는 벡터 그림을 바로, PNG는 작게 디코드)과 이름. 두 번 누르면 넣고, 끌면 타임라인에 놓는다.</summary>
+        private Button StickerTile(StickerItem item, string automationId)
+        {
+            const double Icon = 44;
+            ImageSource source = null;
+            if (item.IsPicture)
+            {
+                source = EditorServices.StickerPicture(item.Path, (int)(Icon * 2));
+            }
+            else
+            {
+                var aspect = item.Sticker.Width / item.Sticker.Height;
+                var drawing = StickerDrawing.Build(item.Sticker, aspect >= 1 ? Icon : Icon * aspect, aspect >= 1 ? Icon / aspect : Icon).Drawing;
+                var image = new DrawingImage(drawing);
+                image.Freeze();
+                source = image;
+            }
+            var picture = new Image { Source = source, Width = Icon, Height = Icon, Stretch = Stretch.Uniform, Margin = new Thickness(0, 2, 0, 2) };
+            var content = new StackPanel();
+            content.Children.Add(picture);
+            content.Children.Add(new TextBlock { Text = item.Name, HorizontalAlignment = HorizontalAlignment.Center, FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis });
+            var button = new Button { Content = content, Width = 64, Padding = new Thickness(2), Margin = new Thickness(0, 0, 4, 4), ToolTip = item.Name };
+            AutomationProperties.SetAutomationId(button, automationId);
+            AutomationProperties.SetName(button, item.Name);
+            button.MouseDoubleClick += (s, e) =>
+            {
+                _commands.AddSticker(item.Key);
+                e.Handled = true;
+            };
+            var dragStart = new Point();
+            var pressed = false;
+            button.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                dragStart = e.GetPosition(button);
+                pressed = true;
+            };
+            button.PreviewMouseLeftButtonUp += (s, e) => pressed = false;
+            button.PreviewMouseMove += (s, e) =>
+            {
+                if (!pressed || e.LeftButton != MouseButtonState.Pressed)
+                    return;
+                var point = e.GetPosition(button);
+                if (Math.Abs(point.X - dragStart.X) < 6 && Math.Abs(point.Y - dragStart.Y) < 6)
+                    return;
+                pressed = false;
+                var data = new DataObject();
+                data.SetData(TimelineCanvas.StickerDataFormat, item.Key);
+                DragDrop.DoDragDrop(button, data, DragDropEffects.Copy);
+            };
+            return button;
         }
 
         /// <summary>

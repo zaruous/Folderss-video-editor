@@ -99,6 +99,32 @@ namespace VideoEditor.Core
         }
 
         /// <summary>
+        /// 스티커 클립: 깨끗한 SVG(<see cref="StickerSvg.Write"/>)를 넣은 아트 요소 — 상자는 SVG viewBox 비율로 긴 변 300px, 꾸미기는 없음(스티커는 그린 색 그대로).
+        /// </summary>
+        public static Clip CreateSticker(string name, Sticker sticker, long start, long frames)
+        {
+            var clip = CreateArt(ArtKind.Sticker, start, frames);
+            var aspect = sticker != null && sticker.Width > 0 && sticker.Height > 0 ? sticker.Width / sticker.Height : 1;
+            clip.Art.Width = aspect >= 1 ? 300 : Math.Max(1, Math.Round(300 * aspect, 2));
+            clip.Art.Height = aspect >= 1 ? Math.Max(1, Math.Round(300 / aspect, 2)) : 300;
+            clip.Art.StickerName = ArtShape.CleanName(name) ?? ArtShape.CleanName(sticker?.Title) ?? "스티커";
+            clip.Art.StickerSvg = sticker == null ? null : StickerSvg.Write(sticker);
+            return clip;
+        }
+
+        /// <summary>
+        /// 그림(PNG) 스티커를 원래 픽셀 크기쯤으로 보이게 하는 크기 배율: 맞춤으로 화면 × 배율 틀에 넣으므로 max(그림 폭 / 화면 폭, 그림 높이 / 화면 높이),
+        /// 화면의 5~50%로.
+        /// </summary>
+        public static double PictureStickerScale(int pictureWidth, int pictureHeight, int screenWidth, int screenHeight)
+        {
+            if (pictureWidth <= 0 || pictureHeight <= 0 || screenWidth <= 0 || screenHeight <= 0)
+                return 0.3;
+            var scale = Math.Max((double)pictureWidth / screenWidth, (double)pictureHeight / screenHeight);
+            return Math.Round(Math.Max(0.05, Math.Min(0.5, scale)), 3);
+        }
+
+        /// <summary>
         /// 화면에 겹쳐 쓰는 클립(아트 요소·스티커)을 그 시작에 넣는다: preferred(끌어 놓은 줄)가 쓸 수 있는 동영상 트랙이고 그 구간이 비었으면 거기,
         /// 아니면 그 구간이 빈 덮어 쓰기 트랙, 없으면 새 동영상 트랙. 마그네틱 주 트랙은 쓰지 않는다(<see cref="AddArt(Project, ArtKind, long, long, Track)"/>).
         /// </summary>
@@ -146,6 +172,7 @@ namespace VideoEditor.Core
         /// <summary>
         /// 종류별 처음 스타일: 도형은 파랑, 말풍선은 흰 바탕·짙은 윤곽선, 동그라미 치기·밑줄·테두리 상자는 빨강, 형광펜은 반투명 노랑,
         /// 반짝임은 연노랑에 노란 광선, 집중선·화면 테두리는 흰색(집중선은 조금 비침), 아래 자막 띠·배경 판은 반투명 어두운 색(띠의 글은 왼쪽 정렬).
+        /// 스티커는 채우기 없음 — 그리개는 스티커의 제 색으로 그리고(채우기를 쓰지 않음), 스티커를 모르는 예전 판은 사각형으로 읽어도 아무것도 칠하지 않는다.
         /// </summary>
         public static TextStyle ArtStyle(ArtKind kind)
         {
@@ -188,6 +215,9 @@ namespace VideoEditor.Core
                     break;
                 case ArtKind.Plate:
                     Fill("#99000000");
+                    break;
+                case ArtKind.Sticker:
+                    style.Fill.Kind = FillKind.None;
                     break;
             }
             style.Normalize();

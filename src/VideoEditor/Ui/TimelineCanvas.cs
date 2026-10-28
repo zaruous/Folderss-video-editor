@@ -41,6 +41,8 @@ namespace VideoEditor.Ui
         public const string VideoEffectDataFormat = "VideoEditor.VideoEffect";
         /// <summary>요소 탭에서 끈 아트 요소(모양 종류 이름).</summary>
         public const string ArtDataFormat = "VideoEditor.Art";
+        /// <summary>요소 탭에서 끄는 스티커(값은 스티커 키 — builtin:파일·mine:파일).</summary>
+        public const string StickerDataFormat = "VideoEditor.Sticker";
         private const double EdgeGrip = 7;
         private const double DragThreshold = 3;
         private const double SnapPixels = 8;
@@ -160,6 +162,8 @@ namespace VideoEditor.Ui
         public event Action<string[], Track, long> MediaDropped;
         /// <summary>요소 탭의 아트 요소를 끌어 놓음: 모양 종류, 놓은 트랙(줄 아래 빈 곳이면 null), 프레임.</summary>
         public event Action<ArtKind, Track, long> ArtDropped;
+        /// <summary>스티커를 놓음: 스티커 키, 놓은 줄(없으면 null), 프레임.</summary>
+        public event Action<string, Track, long> StickerDropped;
         /// <summary>[전환] 탭의 전환을 클립에 놓음 — ("종류|초", 클립 Id).</summary>
         public event Action<string, string> TransitionDropped;
         /// <summary>효과 탭의 동영상 효과를 클립에 놓음 — (효과 id, 클립 Id).</summary>
@@ -633,7 +637,7 @@ namespace VideoEditor.Ui
                 return;
             }
             var paths = DroppedPaths(e.Data);
-            var art = e.Data.GetDataPresent(ArtDataFormat);
+            var art = e.Data.GetDataPresent(ArtDataFormat) || e.Data.GetDataPresent(StickerDataFormat);
             if (!art && (paths == null || paths.Length == 0))
             {
                 e.Effects = DragDropEffects.None;
@@ -685,6 +689,8 @@ namespace VideoEditor.Ui
             InvalidateVisual();
             if (e.Data.GetDataPresent(ArtDataFormat) && Enum.TryParse(e.Data.GetData(ArtDataFormat) as string, out ArtKind kind) && Enum.IsDefined(kind))
                 ArtDropped?.Invoke(kind, track, Math.Max(0, frame));
+            else if (e.Data.GetDataPresent(StickerDataFormat) && e.Data.GetData(StickerDataFormat) is string sticker)
+                StickerDropped?.Invoke(sticker, track, Math.Max(0, frame));
             else if (paths != null && paths.Length > 0)
                 MediaDropped?.Invoke(paths, track, frame);
             e.Handled = true;

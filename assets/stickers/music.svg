@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>음표</title>
+  <path d="M44 92 V28 L104 16 V80" fill="none" stroke="#5E35B1" stroke-width="8" stroke-linejoin="round"/>
+  <polygon points="44,24 104,12 104,30 44,42" fill="#5E35B1"/>
+  <ellipse cx="32" cy="94" rx="16" ry="12" fill="#5E35B1" transform="rotate(-20 32 94)"/>
+  <ellipse cx="92" cy="82" rx="16" ry="12" fill="#5E35B1" transform="rotate(-20 92 82)"/>
+</svg>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Serialization;
 
 namespace VideoEditor.Core
@@ -32,7 +33,9 @@ namespace VideoEditor.Core
         // 프레임·배경
         LowerThird,
         ScreenBorder,
-        Plate
+        Plate,
+        // 3단계(#40): 스티커(SVG를 클립에 넣어 둠 — <see cref="ArtShape.StickerSvg"/>)
+        Sticker
     }
 
     /// <summary>
@@ -69,6 +72,22 @@ namespace VideoEditor.Core
         /// <summary>말풍선 꼬리 끝: 상자 가운데에서 상자 높이의 몇 배(아래 +).</summary>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public double TailY { get; set; }
+        /// <summary>스티커 이름(타임라인·속성 패널에 보임, 40자까지). 스티커가 아니면 null.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string StickerName { get; set; }
+        /// <summary>
+        /// 스티커 그림: 경로만 남긴 깨끗한 SVG(<see cref="StickerSvg.Write"/>) — 프로젝트에 함께 넣어 스티커 파일이 없는 PC에서도 같게 그린다.
+        /// 남이 만든 프로젝트일 수 있어 그릴 때마다 같은 상한으로 다시 읽는다. 스티커가 아니면 null.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string StickerSvg { get; set; }
+
+        /// <summary>보이는 이름: 스티커는 그 이름, 나머지는 종류 이름.</summary>
+        [JsonIgnore]
+        public string Label
+        {
+            get { return Kind == ArtKind.Sticker && !string.IsNullOrWhiteSpace(StickerName) ? StickerName : DisplayName(Kind); }
+        }
 
         /// <summary>요소 탭·타임라인에 보이는 이름.</summary>
         public static string DisplayName(ArtKind kind)
@@ -94,15 +113,18 @@ namespace VideoEditor.Core
                 case ArtKind.LowerThird: return "아래 자막 띠";
                 case ArtKind.ScreenBorder: return "화면 테두리";
                 case ArtKind.Plate: return "배경 판";
+                case ArtKind.Sticker: return "스티커";
                 default: return "사각형";
             }
         }
 
-        /// <summary>요소 탭의 묶음 이름(도형·말풍선·강조·프레임·배경).</summary>
+        /// <summary>요소 탭의 묶음 이름(도형·말풍선·강조·프레임·배경·스티커).</summary>
         public static string Group(ArtKind kind)
         {
             if (IsBubble(kind))
                 return "말풍선";
+            if (kind == ArtKind.Sticker)
+                return "스티커";
             switch (kind)
             {
                 case ArtKind.CircleMark:
@@ -318,6 +340,29 @@ namespace VideoEditor.Core
             HeadSize = Range(HeadSize, 1.5, 10, 3);
             TailX = Range(TailX, -MaxTail, MaxTail, 0);
             TailY = Range(TailY, -MaxTail, MaxTail, 0);
+            // 스티커 값은 스티커에만, 너무 긴 SVG는 버린다(그리지 않음 — 읽기 상한과 같음)
+            if (Kind != ArtKind.Sticker)
+            {
+                StickerName = null;
+                StickerSvg = null;
+            }
+            else
+            {
+                StickerName = CleanName(StickerName);
+                if (StickerSvg != null && StickerSvg.Length > Core.StickerSvg.MaxChars)
+                    StickerSvg = null;
+            }
+        }
+
+        /// <summary>스티커 이름: 제어 문자는 빼고 앞뒤 빈칸을 자르고 40자까지(비면 null).</summary>
+        public static string CleanName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return null;
+            var clean = new string(name.Where(c => !char.IsControl(c)).ToArray()).Trim();
+            if (clean.Length == 0)
+                return null;
+            return clean.Length > Core.StickerSvg.MaxTitle ? clean.Substring(0, Core.StickerSvg.MaxTitle) : clean;
         }
 
         private static double Range(double value, double min, double max, double fallback)

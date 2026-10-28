@@ -19,6 +19,8 @@
     <EmbeddedResource Include="..\..\src\VideoEditor\Core\transitions.json" LogicalName="VideoEditor.Core.transitions.json" Link="Core\transitions.json" />
     <!-- yt-dlp 출력 표본(실제 출력을 저장해 둔 것) -->
     <None Include="Samples\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 기본 스티커(플러그인 zip의 stickers\와 같은 파일) — 모두 읽히고 출처·라이선스 목록에 있는지 본다 -->
+    <None Include="..\..\assets\stickers\**" Link="stickers\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

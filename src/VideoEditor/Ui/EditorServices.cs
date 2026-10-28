@@ -13,6 +13,25 @@ using VideoEditor.Media;
 
 namespace VideoEditor.Ui
 {
+    /// <summary>스티커 하나(기본·내 것): 키, 보이는 이름, 파일, 읽은 SVG(그림 스티커는 null).</summary>
+    internal sealed class StickerItem
+    {
+        public StickerItem(string key, string name, string path, Sticker sticker)
+        {
+            Key = key;
+            Name = name;
+            Path = path;
+            Sticker = sticker;
+        }
+
+        public string Key { get; }
+        public string Name { get; }
+        public string Path { get; }
+        public Sticker Sticker { get; }
+        public bool IsPicture { get { return Sticker == null; } }
+        public bool Mine { get { return Key.StartsWith(StickerLibrary.MinePrefix, StringComparison.Ordinal); } }
+    }
+
     /// <summary>
     /// 편집 창들이 함께 쓰는 것: Folderss 관리자, 찾은 FFmpeg, 썸네일·파형 캐시, 설정 값.
     /// FFmpeg는 백그라운드에서 찾고(ToolChanged), 창마다 다시 찾지 않는다.
@@ -774,6 +793,220 @@ namespace VideoEditor.Ui
                     StylePreviewGate.Release();
                 }
             }));
+        }
+
+        // ---------- 스티커 ----------
+
+        private IReadOnlyList<StickerItem> _builtinStickers;
+
+        /// <summary>내 스티커를 두는 곳(데이터 폴더\stickers — 깨끗한 SVG·PNG).</summary>
+        public string MyStickerFolder { get { return Path.Combine(Manager.DataDirectory, "stickers"); } }
+
+        /// <summary>
+        /// 기본 스티커(플러그인 폴더 stickers\의 SVG — 이름은 title, 이름순). 처음 한 번 읽어 둔다. 읽지 못한 파일은 빼고, 폴더가 없으면 빈 목록.
+        /// </summary>
+        public IReadOnlyList<StickerItem> BuiltinStickers()
+        {
+            if (_builtinStickers != null)
+                return _builtinStickers;
+            var list = new List<StickerItem>();
+            try
+            {
+                var folder = Path.Combine(Manager.PluginDirectory ?? "", "stickers");
+                if (Directory.Exists(folder))
+                {
+                    foreach (var file in Directory.GetFiles(folder, "*.svg").OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                    {
+                        var name = Path.GetFileName(file);
+                        if (!StickerLibrary.IsFileName(name, false) || new FileInfo(file).Length > StickerSvg.MaxChars * 4L)
+                            continue;
+                        var parse = StickerSvg.Parse(File.ReadAllText(file));
+                        if (parse.Sticker != null)
+                            list.Add(new StickerItem(StickerLibrary.Key(false, name), parse.Sticker.Title ?? Path.GetFileNameWithoutExtension(name), file, parse.Sticker));
+                    }
+                }
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                // 기본 스티커를 읽지 못해도 편집기는 연다(스티커 묶음만 빈다)
+            }
+            return _builtinStickers = list;
+        }
+
+        /// <summary>내 스티커(데이터 폴더 — 부를 때마다 새로 읽음, 파일 이름순). SVG는 다시 같은 상한으로 읽고, 읽지 못한 파일은 뺀다.</summary>
+        public List<StickerItem> MyStickers()
+        {
+            var list = new List<StickerItem>();
+            try
+            {
+                if (!Directory.Exists(MyStickerFolder))
+                    return list;
+                foreach (var file in Directory.GetFiles(MyStickerFolder).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                {
+                    var name = Path.GetFileName(file);
+                    if (!StickerLibrary.IsFileName(name, true))
+                        continue;
+                    if (StickerLibrary.IsPicture(name))
+                    {
+                        list.Add(new StickerItem(StickerLibrary.Key(true, name), StickerLibrary.NameFromFile(name), file, null));
+                        continue;
+                    }
+                    if (new FileInfo(file).Length > StickerSvg.MaxChars * 4L)
+                        continue;
+                    var sticker = StickerSvg.Cached(File.ReadAllText(file));
+                    if (sticker != null)
+                        list.Add(new StickerItem(StickerLibrary.Key(true, name), StickerLibrary.NameFromFile(name), file, sticker));
+                }
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+            }
+            return list;
+        }
+
+        /// <summary>키(builtin:파일·mine:파일)의 스티커. 없거나 규칙에 맞지 않는 키면 null.</summary>
+        public StickerItem FindSticker(string key)
+        {
+            if (!StickerLibrary.TryParseKey(key, out var mine, out _))
+                return null;
+            return (mine ? MyStickers() : BuiltinStickers()).FirstOrDefault(s => s.Key == key);
+        }
+
+        /// <summary>
+        /// 사용자 파일을 내 스티커에 더한다. SVG는 상한 안에서 읽어 경로만 남긴 깨끗한 SVG로 다시 써서(스크립트·외부 참조는 남지 않음) 두고,
+        /// PNG는 파일 크기(10MB)·가로세로(4096px)·PNG인지 확인해 그대로 복사한다. 이름은 파일 이름. 같은 그림은 한 번만.
+        /// 넣지 못하면 이유를 error에(사용자에게 보일 글), 넣었으면 그 스티커와 무시한 것들.
+        /// </summary>
+        public StickerItem AddMySticker(string path, out string error, out IReadOnlyList<string> ignored)
+        {
+            error = null;
+            ignored = Array.Empty<string>();
+            var name = StickerLibrary.FileStem(Path.GetFileNameWithoutExtension(path));
+            try
+            {
+                if (MyStickers().Count >= StickerLibrary.MaxMine)
+                {
+                    error = "내 스티커가 " + StickerLibrary.MaxMine + "개로 가득 찼습니다. 쓰지 않는 스티커를 지운 뒤 더하세요.";
+                    return null;
+                }
+                var info = new FileInfo(path);
+                string fileName;
+                if (StickerLibrary.IsPicture(path))
+                {
+                    if (info.Length > StickerLibrary.MaxPictureBytes)
+                    {
+                        error = "PNG가 너무 큽니다(10MB 넘음).";
+                        return null;
+                    }
+                    var bytes = File.ReadAllBytes(path);
+                    var size = PictureSize(bytes);
+                    if (size.Width <= 0 || size.Height <= 0)
+                    {
+                        error = "PNG 그림이 아닙니다.";
+                        return null;
+                    }
+                    if (size.Width > StickerLibrary.MaxPicturePixels || size.Height > StickerLibrary.MaxPicturePixels)
+                    {
+                        error = "PNG가 너무 큽니다(" + size.Width + "×" + size.Height + " — 가로세로 " + StickerLibrary.MaxPicturePixels + "px까지).";
+                        return null;
+                    }
+                    fileName = StickerLibrary.MineFileName(name, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)), ".png");
+                    Directory.CreateDirectory(MyStickerFolder);
+                    var target = Path.Combine(MyStickerFolder, fileName);
+                    if (!File.Exists(target))
+                        File.WriteAllBytes(target, bytes);
+                }
+                else
+                {
+                    // UTF-8 한 글자는 4바이트까지 — 글 상한보다 큰 파일은 읽지 않는다
+                    if (info.Length > StickerSvg.MaxChars * 4L)
+                    {
+                        error = "SVG가 너무 큽니다(" + (StickerSvg.MaxChars / 1024) + "KB 넘음).";
+                        return null;
+                    }
+                    var parse = StickerSvg.Parse(File.ReadAllText(path));
+                    ignored = parse.Ignored;
+                    if (parse.Sticker == null)
+                    {
+                        error = parse.Error;
+                        return null;
+                    }
+                    parse.Sticker.Title = name;
+                    var clean = StickerSvg.Write(parse.Sticker);
+                    fileName = StickerLibrary.MineFileName(name, StickerSvg.Hash(clean), ".svg");
+                    Directory.CreateDirectory(MyStickerFolder);
+                    var target = Path.Combine(MyStickerFolder, fileName);
+                    if (!File.Exists(target))
+                        File.WriteAllText(target, clean, new System.Text.UTF8Encoding(false));
+                }
+                return FindSticker(StickerLibrary.Key(true, fileName));
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is NotSupportedException)
+            {
+                error = "파일을 읽거나 쓰지 못했습니다: " + e.Message;
+                return null;
+            }
+        }
+
+        /// <summary>PNG 머리만 읽어 크기(PNG가 아니거나 읽지 못하면 0×0).</summary>
+        private static (int Width, int Height) PictureSize(byte[] bytes)
+        {
+            try
+            {
+                using (var stream = new MemoryStream(bytes))
+                {
+                    var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation | BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.None);
+                    if (!(decoder is PngBitmapDecoder) || decoder.Frames.Count == 0)
+                        return (0, 0);
+                    return (decoder.Frames[0].PixelWidth, decoder.Frames[0].PixelHeight);
+                }
+            }
+            catch (Exception e) when (e is NotSupportedException || e is FileFormatException || e is ArgumentException || e is InvalidOperationException || e is IOException)
+            {
+                return (0, 0);
+            }
+        }
+
+        /// <summary>내 스티커를 지운다(설정과 같이 실행 취소에 남지 않는다 — 이미 넣은 클립은 그림을 품고 있어 그대로). 지웠으면 true.</summary>
+        public bool RemoveMySticker(string key)
+        {
+            if (!StickerLibrary.TryParseKey(key, out var mine, out var fileName) || !mine)
+                return false;
+            try
+            {
+                var path = Path.Combine(MyStickerFolder, fileName);
+                if (!File.Exists(path))
+                    return false;
+                File.Delete(path);
+                return true;
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>그림(PNG) 스티커의 칸 그림(작게 디코드, 실패하면 null).</summary>
+        public static BitmapSource StickerPicture(string path, int width)
+        {
+            try
+            {
+                var image = new BitmapImage();
+                using (var stream = File.OpenRead(path))
+                {
+                    image.BeginInit();
+                    image.CacheOption = BitmapCacheOption.OnLoad;
+                    image.DecodePixelWidth = width;
+                    image.StreamSource = stream;
+                    image.EndInit();
+                }
+                image.Freeze();
+                return image;
+            }
+            catch (Exception e) when (e is NotSupportedException || e is FileFormatException || e is IOException || e is UnauthorizedAccessException || e is ArgumentException)
+            {
+                return null;
+            }
         }
 
         // ---------- 내 스타일 ----------
