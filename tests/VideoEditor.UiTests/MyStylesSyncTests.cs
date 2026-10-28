@@ -76,8 +76,9 @@ namespace VideoEditor.UiTests
                     Assert.Equal(Visibility.Collapsed, Ui.ById<TextBlock>(second, "StyleMineHint").Visibility);
                     // 둘째 창 미디어 패널에서 그 스타일을 고른다
                     Ui.Click(Ui.ById<Button>(second, "NewTextMine0"));
-                    Assert.Equal("스타일: 창 사이", Ui.ById<TextBlock>(second, "NewTextStyleNote").Text);
                 });
+                // 자동화 Invoke는 클릭을 디스패처에 넣어 나중에 돌린다 — 결과는 기다려서 본다
+                await ui.WaitUntil(() => Ui.ById<TextBlock>(second, "NewTextStyleNote").Text == "스타일: 창 사이", Wait, "둘째 창에서 고른 내 스타일");
                 // 썸네일도 그린다(둘째 창의 탭이 이미 보이는 중)
                 await ui.WaitUntil(() => Ui.ById<Image>(second, "StyleMine0Image")?.Source != null, Wait, "둘째 창 썸네일");
                 ui.Run(() => Ui.Snap(second, plugin.ShotFolder, "my-styles-sync"));

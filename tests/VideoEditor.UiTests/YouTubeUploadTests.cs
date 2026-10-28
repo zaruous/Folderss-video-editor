@@ -48,12 +48,16 @@ namespace VideoEditor.UiTests
                     Ui.ById<TextBox>(dialog, "YouTubeClientId").Text = "잘못된 값";
                     Ui.ById<PasswordBox>(dialog, "YouTubeClientSecret").Password = ClientSecret;
                     Ui.Click(Ui.ById<Button>(dialog, "YouTubeSaveClientButton"));
-                    Assert.Contains(".apps.googleusercontent.com", Ui.ById<TextBlock>(dialog, "YouTubeClientStatus").Text);
-                    Assert.Null(plugin.Manager.GetSetting("youtubeClientId"));
-
+                });
+                // 자동화 Invoke는 클릭을 디스패처에 넣어 나중에 돌린다 — 결과는 기다려서 본다
+                await ui.WaitUntil(() => Ui.ById<TextBlock>(dialog, "YouTubeClientStatus").Text.Contains(".apps.googleusercontent.com"), Wait, "잘못된 클라이언트 ID 안내");
+                Assert.Null(plugin.Manager.GetSetting("youtubeClientId"));
+                ui.Run(() =>
+                {
                     Ui.ById<TextBox>(dialog, "YouTubeClientId").Text = ClientId;
                     Ui.Click(Ui.ById<Button>(dialog, "YouTubeSaveClientButton"));
                 });
+                await ui.WaitUntil(() => Ui.ById<TextBox>(dialog, "YouTubeTitleBox") != null, Wait, "저장 뒤 올리기 칸");
 
                 // 저장하면 올리기 칸: 제목 = 파일 이름, 공개 범위 = 비공개, 아동용을 고르기 전에는 [올리기]가 꺼짐
                 ui.Run(() =>

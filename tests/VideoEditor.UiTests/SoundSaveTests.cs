@@ -76,8 +76,8 @@ namespace VideoEditor.UiTests
                     Assert.Contains("사운드를 파일로 저장… (2개)", Ui.ContextMenu(list, null));
                 });
                 ui.Post(() => Ui.ContextMenu(Ui.ById<ListBox>(window, "MediaList"), "사운드를 파일로 저장… (2개)"));
-                // 폴더 고르기(Windows 폴더 대화상자 — 폴더 칸에 경로를 넣고 [폴더 선택])
-                var title = await NativeDialogs.Open(ui, folder, Wait);
+                // 폴더 고르기(Windows 폴더 대화상자 — 폴더 칸에 경로를 넣고 [폴더 선택], 들어가기만 했으면 한 번 더)
+                var title = await NativeDialogs.PickFolder(ui, folder, Wait);
                 _out.WriteLine("폴더 창: " + title);
                 await ui.WaitUntil(() => MediaItem(window, "testsrc 사운드 (2).m4a") != null && MediaItem(window, "tone 사운드.wav") != null, Wait, "저장한 둘이 미디어에");
                 var status = ui.Run(() => Status(window));

@@ -42,6 +42,31 @@ namespace VideoEditor.UiTests.Headless
             return Fill(ui, path, timeout);
         }
 
+        /// <summary>
+        /// 폴더 고르기 대화상자가 뜨면 폴더 칸에 path를 넣고 [폴더 선택]을 누른다. 폴더 경로를 넣고 누르면 그 폴더로 들어가기만 하고 닫히지 않을 때가 있어,
+        /// 잠시 뒤에도 떠 있으면 칸을 비우고 한 번 더 누른다(들어간 지금 폴더를 고름). 대화상자 제목을 돌려준다.
+        /// </summary>
+        public static async Task<string> PickFolder(UiThread ui, string path, TimeSpan timeout)
+        {
+            var title = await Fill(ui, path, timeout);
+            var dialog = ThreadWindows(ui.NativeThreadId).FirstOrDefault(h => ClassOf(h) == "#32770" && IsWindowVisible(h) && TextOf(h) == title);
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(1.5);
+            while (dialog != IntPtr.Zero && IsWindowVisible(dialog))
+            {
+                if (DateTime.UtcNow > deadline)
+                {
+                    var edit = FileNameEdit(dialog);
+                    if (edit != IntPtr.Zero)
+                        SendMessageW(edit, WM_SETTEXT, IntPtr.Zero, "");
+                    await Task.Delay(100);
+                    PostMessageW(dialog, WM_COMMAND, (IntPtr)IDOK, Children(dialog).FirstOrDefault(h => GetDlgCtrlID(h) == IDOK && ClassOf(h) == "Button"));
+                    break;
+                }
+                await Task.Delay(100);
+            }
+            return title;
+        }
+
         private static async Task<string> Fill(UiThread ui, string path, TimeSpan timeout)
         {
             var deadline = DateTime.UtcNow + timeout;
