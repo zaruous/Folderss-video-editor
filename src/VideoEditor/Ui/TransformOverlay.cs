@@ -16,6 +16,7 @@ namespace VideoEditor.Ui
     /// 안쪽을 끌면 옮기고(X·Y, 화면 가운데 가까이 가면 붙음) 모서리를 끌면 가운데를 두고 크기를 바꾼다(크기 %).
     /// 글자는 옆 손잡이가 넷 더 있다: 왼쪽·오른쪽은 상자 너비, 위·아래는 상자 높이 — 반대쪽 옆은 그대로 두고, 두 번 누르면 자동(0)으로.
     /// 아트 요소는 모양 손잡이(노란 둥근 점 — <see cref="ArtHandles"/>)가 더 있다: 모서리 반경, 선·화살표 양 끝(반대쪽 끝은 그대로), 별 안쪽, 말풍선 꼬리 끝.
+    /// 틀 위쪽의 둥근 점을 끌면 돌린다(15° 단위, Shift는 자유롭게 — <c>TransformOverlay.Rotate.cs</c>).
     /// 틀 밖에서 보이는 클립을 누르면 그 클립을 고른다(맨 위 것, 빈 곳이면 고르기는 그대로). Esc는 끌기 취소.
     /// 끄는 동안은 틀만 움직이고, 놓을 때 한 번 편집한다(실행 취소 한 번). 미리 보기를 누른 뒤에는 화살표로 1px(Shift 10px)씩 옮긴다.
     /// </summary>
@@ -44,7 +45,7 @@ namespace VideoEditor.Ui
         private readonly Ellipse[] _shapeHandles = new Ellipse[2];
         private IReadOnlyList<ArtHandle> _shapeKinds = Array.Empty<ArtHandle>();
         private Clip _clip;
-        // 끄는 중: 0 = 아님, 1 = 옮기기, 2 = 크기, 3 = 상자 옆(_edge), 4 = 모양 손잡이(_shapeHandle)
+        // 끄는 중: 0 = 아님, 1 = 옮기기, 2 = 크기, 3 = 상자 옆(_edge), 4 = 모양 손잡이(_shapeHandle), 5 = 회전(TransformOverlay.Rotate.cs)
         private int _drag;
         private ArtHandle _shapeHandle;
         // 아트의 지금 모양·회전(끄는 동안 바뀜)과 끌기 시작 때 값
@@ -94,6 +95,8 @@ namespace VideoEditor.Ui
                 _shapeHandles[i].SetResourceReference(Shape.StrokeProperty, "AccentBrush");
                 Children.Add(_shapeHandles[i]);
             }
+            // 회전 손잡이(TransformOverlay.Rotate.cs)
+            CreateRotationHandle();
             session.Changed += (s, e) => Refresh();
             session.SelectionChanged += (s, e) => Refresh();
             session.PlayheadChanged += (s, e) => Refresh();
@@ -153,6 +156,7 @@ namespace VideoEditor.Ui
                 _handles[i].Visibility = visible && (i < 4 || HasBoxHandles) ? Visibility.Visible : Visibility.Collapsed;
             for (var i = 0; i < _shapeHandles.Length; i++)
                 _shapeHandles[i].Visibility = visible && i < _shapeKinds.Count ? Visibility.Visible : Visibility.Collapsed;
+            ShowRotationHandle(visible);
             if (!visible)
                 _guideX.Visibility = _guideY.Visibility = Visibility.Collapsed;
             Cursor = null;
@@ -278,6 +282,7 @@ namespace VideoEditor.Ui
                 SetLeft(_shapeHandles[i], shapePoints[i].X - _shapeHandles[i].Width / 2);
                 SetTop(_shapeHandles[i], shapePoints[i].Y - _shapeHandles[i].Height / 2);
             }
+            LayoutRotationHandle();
             if (_groupMoving)
                 LayoutGroup();
         }
@@ -304,6 +309,8 @@ namespace VideoEditor.Ui
             }
             if (shapeBest >= 0)
                 return shapeBest;
+            if (HitRotation(point))
+                return RotationHit;
             // 가장 가까운 손잡이(같으면 모서리). 틀이 작으면 잡는 거리를 줄여 안쪽(옮기기)이 손잡이에 가리지 않게 한다
             var reach = Math.Min(Handle, Math.Max(3, Math.Min(frame.Width, frame.Height) / 3));
             var points = HasBoxHandles ? corners.Concat(Edges(corners)).ToArray() : corners;
@@ -332,6 +339,8 @@ namespace VideoEditor.Ui
                 return Cursors.SizeAll;
             if (hit < 0)
                 return null;
+            if (hit == RotationHit)
+                return Cursors.Hand;
             if (hit >= FirstShape)
                 return Cursors.Cross;
             var angle = HandleAngles[hit] + (_clip?.Rotation ?? 0);
@@ -399,7 +408,7 @@ namespace VideoEditor.Ui
                     return false;
                 hit = Inside;
             }
-            _drag = hit == Inside ? 1 : hit < 4 ? 2 : hit >= FirstShape ? 4 : 3;
+            _drag = hit == RotationHit ? RotateDrag : hit == Inside ? 1 : hit < 4 ? 2 : hit >= FirstShape ? 4 : 3;
             _dragFrom = point;
             _pointerMoved = false;
             _startX = _x;
@@ -411,6 +420,8 @@ namespace VideoEditor.Ui
             _startArt = _art?.Clone();
             if (_drag == 4)
                 _shapeHandle = _shapeKinds[hit - FirstShape];
+            if (_drag == RotateDrag)
+                StartRotate(point);
             _startDistance = Math.Max(1, (point - Frame().Center).Length);
             if (_drag == 3)
             {
@@ -461,6 +472,10 @@ namespace VideoEditor.Ui
                 var distance = Math.Max(1, (point - center).Length);
                 _scale = Math.Max(0.05, Math.Min(4, _startScale * distance / _startDistance));
             }
+            else if (_drag == RotateDrag)
+            {
+                RotateMove(point);
+            }
             else if (_drag == 4)
             {
                 // 끌기 시작 때의 값에서 끈 만큼(화면 → 프로젝트 픽셀)
@@ -497,6 +512,7 @@ namespace VideoEditor.Ui
             _commands.Status(_groupMoving ? GroupStatus() : _drag == 1 ? "위치 X " + Math.Round(_x) + " · Y " + Math.Round(_y) + " (놓으면 바뀝니다, Esc는 취소)"
                 : _drag == 2 ? "크기 " + Math.Round(_scale * 100) + "% (놓으면 바뀝니다, Esc는 취소)"
                 : _drag == 4 ? ShapeStatus() + " (놓으면 바뀝니다, Esc는 취소)"
+                : _drag == RotateDrag ? RotateStatus()
                 : (_edge == BoxEdge.Left || _edge == BoxEdge.Right ? "상자 너비 " + Math.Round(_boxWidth) : "상자 높이 " + Math.Round(_boxHeight)) + "px (놓으면 바뀝니다, Esc는 취소)");
         }
 
@@ -524,6 +540,8 @@ namespace VideoEditor.Ui
                 return false;
             if (_drag == 4)
                 return ShapeUp();
+            if (_drag == RotateDrag)
+                return RotateUp();
             // 누르고 움직이지 않았으면 편집하지 않는다(자동 크기가 상한보다 커서 옆 손잡이를 누르기만 해도 값이 바뀌는 경우 등)
             var moved = _pointerMoved && (_x != _startX || _y != _startY || _scale != _startScale || _boxWidth != _startBoxWidth || _boxHeight != _startBoxHeight);
             var horizontal = _drag == 3 && (_edge == BoxEdge.Left || _edge == BoxEdge.Right);
@@ -674,9 +692,9 @@ namespace VideoEditor.Ui
         {
             if (e.Key == Key.Escape && _drag != 0)
             {
-                var shape = _drag == 4;
+                var drag = _drag;
                 Cancel();
-                _commands.Status(shape ? "모양 바꾸기를 취소했습니다." : "옮기기·크기 바꾸기를 취소했습니다.");
+                _commands.Status(drag == 4 ? "모양 바꾸기를 취소했습니다." : drag == RotateDrag ? "회전을 취소했습니다." : "옮기기·크기 바꾸기를 취소했습니다.");
                 e.Handled = true;
             }
         }
