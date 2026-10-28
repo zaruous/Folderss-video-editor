@@ -522,8 +522,9 @@ namespace VideoEditor.Ui
             {
                 result = Estimate(request);
             }
-            catch (Exception e) when (e is ArgumentException || e is InvalidOperationException || e is NotSupportedException)
+            catch (Exception)
             {
+                // 어림은 렌더 그래프를 만드는 중에 부른다 — 못 재면(글꼴 오류 등) 예전처럼 그리게 하고 그래프 만들기는 멈추지 않는다(그리기가 같은 까닭으로 실패하면 거기서 알린다)
                 return (0, 0);
             }
             lock (MeasureGate)
