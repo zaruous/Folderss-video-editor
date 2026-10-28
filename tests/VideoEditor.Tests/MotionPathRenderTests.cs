@@ -142,6 +142,37 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
+        public void KeyframedPositionPlusPath_AddUp_EndFrameExact()
+        {
+            // 위치 = 기준(사용자 키프레임) + 이동 경로 변위(두 가지를 따로 만든 뒤 머지에서 합친 곳). 키프레임으로 오른쪽 40, 경로로 아래 30 —
+            // 처음 장은 그 자리 그대로, 끝 장(10)은 (40, 30) 옮겨 둔 그림과 바이트까지 같다
+            var (project, clip) = BlueProject();
+            clip.Keyframes = new List<ClipKeyframe>
+            {
+                new ClipKeyframe { Property = KeyframeProperty.Position, Frame = 0, Value = clip.X, Y = clip.Y },
+                new ClipKeyframe { Property = KeyframeProperty.Position, Frame = 10, Value = clip.X + 40, Y = clip.Y }
+            };
+            clip.Animations = new List<ClipAnimation> { Path(AnimationEffect.PathLine, 10, AnimationEase.Linear, 0, 0, 0, 30) };
+            byte[] Plain(double x, double y, long frame)
+            {
+                var (keyframes, animations, oldX, oldY) = (clip.Keyframes, clip.Animations, clip.X, clip.Y);
+                (clip.Keyframes, clip.Animations, clip.X, clip.Y) = (null, null, oldX + x, oldY + y);
+                try
+                {
+                    return Frame(project, frame);
+                }
+                finally
+                {
+                    (clip.Keyframes, clip.Animations, clip.X, clip.Y) = (keyframes, animations, oldX, oldY);
+                }
+            }
+            Assert.Equal(0, MaxDiff(Plain(0, 0, 0), Frame(project, 0)));
+            var end = Frame(project, 10);
+            _out.WriteLine("끝 장 " + BlueBox(end));
+            Assert.Equal(0, MaxDiff(Plain(40, 30, 10), end));
+        }
+
+        [FfmpegFact]
         public async Task PathOnVideoImageAndStyledText_PreviewEqualsExport()
         {
             var (project, video) = BlueProject();
