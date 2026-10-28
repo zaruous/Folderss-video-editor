@@ -65,6 +65,14 @@ namespace VideoEditor.Core
             clip.FadeIn = Convert(clip.FadeIn);
             clip.FadeOut = Convert(clip.FadeOut);
             clip.TransitionIn = Convert(clip.TransitionIn);
+            if (clip.Animations != null)
+            {
+                foreach (var animation in clip.Animations)
+                {
+                    animation.Duration = Math.Max(1, Math.Min(ClipAnimations.MaxFrames, Convert(animation.Duration)));
+                    animation.Delay = Math.Min(ClipAnimations.MaxFrames, Convert(animation.Delay));
+                }
+            }
             // 타임라인 끝이 초 기준 위치에 오도록 원본 끝을 맞춘다(속도 반올림 보정)
             if (end > clip.Start)
                 TimelineEdits.SetDuration(clip, end - clip.Start);

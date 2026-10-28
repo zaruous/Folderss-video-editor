@@ -40,8 +40,9 @@ namespace VideoEditor.Core
         {
             var folder = Path.GetDirectoryName(Path.GetFullPath(path));
             var copy = FromSnapshot(Snapshot(project));
-            // 예전 형식 파일을 열어 저장해도 지금 형식으로 쓴다 — 아트 클립이 있을 때만 새 형식(없으면 예전 플러그인에서도 열린다)
-            copy.Version = copy.AllClips.Any(c => c.Kind == ClipKind.Art) ? Project.ArtVersion : Project.CurrentVersion;
+            // 예전 형식 파일을 열어 저장해도 지금 형식으로 쓴다 — 애니메이션·아트 클립이 있을 때만 새 형식(없으면 예전 플러그인에서도 열린다)
+            copy.Version = ClipAnimations.Any(copy) ? Project.AnimationVersion
+                : copy.AllClips.Any(c => c.Kind == ClipKind.Art) ? Project.ArtVersion : Project.CurrentVersion;
             foreach (var media in copy.Media)
                 media.Path = Project.Relative(folder, media.Path);
             foreach (var clip in copy.AllClips)
@@ -66,7 +67,7 @@ namespace VideoEditor.Core
             }
             if (project == null)
                 throw new InvalidDataException("프로젝트 파일이 비어 있습니다.");
-            if (project.Version > Project.ArtVersion)
+            if (project.Version > Project.AnimationVersion)
                 throw new InvalidDataException("더 새 버전의 플러그인에서 만든 프로젝트입니다(형식 " + project.Version + ").");
             Validate(project);
             var folder = Path.GetDirectoryName(Path.GetFullPath(path));
@@ -163,7 +164,12 @@ namespace VideoEditor.Core
                 clip.Words = CleanWords(clip);
                 // 동영상 효과: 동영상·사진 클립에만, 값은 효과 범위 안으로 — 모르는 효과는 남겨 두고 그리지 않는다(VideoEffects.Clean)
                 clip.Effects = VideoEffects.Clean(clip);
+                // 애니메이션: 화면 클립에만, 효과·분류·값을 규칙 안으로(예전 파일은 없음)
+                clip.Animations = ClipAnimations.Clean(clip);
             }
+            // 자막 트랙의 큐는 트랙 공통 모양으로 입히므로 움직이지 않는다
+            foreach (var clip in project.VideoTracks.Where(t => t.Subtitles).SelectMany(t => t.Clips))
+                clip.Animations = null;
             // 사운드 분리 링크: 같은 원본의 영상·사운드 짝만(예전 프로젝트는 링크 없음)
             ClipLinks.Normalize(project);
             foreach (var track in project.AllTracks)

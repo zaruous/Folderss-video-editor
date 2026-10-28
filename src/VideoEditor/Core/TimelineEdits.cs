@@ -127,6 +127,7 @@ namespace VideoEditor.Core
             clip.X = clip.Y = clip.Rotation = 0;
             clip.Scale = clip.Opacity = 1;
             clip.Effects = null;
+            clip.Animations = null;
         }
 
         // ---------- 놓기·옮기기 ----------
@@ -309,6 +310,7 @@ namespace VideoEditor.Core
             right.FadeIn = 0;
             right.TransitionIn = 0;
             clip.FadeOut = 0;
+            ClipAnimations.Split(clip, right);
             return right;
         }
 

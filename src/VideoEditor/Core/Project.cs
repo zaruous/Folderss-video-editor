@@ -194,6 +194,12 @@ namespace VideoEditor.Core
         [JsonConverter(typeof(LenientListConverter<ClipEffect>))]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public List<ClipEffect> Effects { get; set; }
+        /// <summary>
+        /// 애니메이션(<see cref="ClipAnimations"/> — 나타나기 1 + 강조 여러 개 + 사라지기 1, 화면 클립만). 없으면 null(저장할 때 빠져 예전 형식 그대로).
+        /// </summary>
+        [JsonConverter(typeof(LenientListConverter<ClipAnimation>))]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<ClipAnimation> Animations { get; set; }
 
         // 글자
         public string Text { get; set; }
@@ -274,6 +280,7 @@ namespace VideoEditor.Core
             copy.Style = Style?.Clone();
             copy.Art = Art?.Clone();
             copy.Effects = Effects?.Select(e => e?.Clone()).ToList();
+            copy.Animations = Animations?.Select(a => a?.Clone()).ToList();
             copy.Words = Words?.Select(w => new ClipWord { Text = w.Text, Start = w.Start, End = w.End }).ToList();
             return copy;
         }
@@ -338,6 +345,8 @@ namespace VideoEditor.Core
         public const int CurrentVersion = 2;
         /// <summary>아트 클립이 있는 프로젝트의 형식 — 아트가 없으면 계속 <see cref="CurrentVersion"/>으로 저장해 예전 플러그인에서도 열린다.</summary>
         public const int ArtVersion = 3;
+        /// <summary>애니메이션이 든 클립이 있는 프로젝트의 형식(아트가 있든 없든) — 없으면 <see cref="ArtVersion"/>·<see cref="CurrentVersion"/> 그대로.</summary>
+        public const int AnimationVersion = 4;
 
         public int Version { get; set; } = CurrentVersion;
         public int Width { get; set; } = 1920;
