@@ -35,7 +35,7 @@ namespace VideoEditor.Ui
         private int _pathIndex;
 
         /// <summary>경로를 보이는지(시험용).</summary>
-        internal bool HasPath { get { return _path != null && _pathLine != null && _pathLine.Visibility == Visibility.Visible; } }
+        public bool HasPath { get { return _path != null && _pathLine != null && _pathLine.Visibility == Visibility.Visible; } }
 
         /// <summary>경로 점 자리(화면 픽셀, 0번은 클립 자리) — 시험용. 경로가 없으면 빈 배열.</summary>
         internal Point[] PathPoints()
