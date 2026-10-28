@@ -34,6 +34,7 @@ namespace VideoEditor.Ui
         private readonly Button _start;
         private readonly Button _close;
         private readonly Button _openFolder;
+        private readonly Button _youTube;
         private CancellationTokenSource _cancel;
 
         public ExportDialog(EditorServices services, Project project, string suggestedPath)
@@ -131,10 +132,14 @@ namespace VideoEditor.Ui
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
             _openFolder = UiKit.TextButton("폴더 열기", "ExportOpenFolderButton", OpenFolder);
             _openFolder.Visibility = Visibility.Collapsed;
+            // 내보낸 파일을 바로 유튜브에 올린다(#9)
+            _youTube = UiKit.TextButton("유튜브에 올리기", "ExportYouTubeButton", () => YouTubeUploadDialog.Show(_services, this, ExportedPath));
+            _youTube.Visibility = Visibility.Collapsed;
             _start = UiKit.TextButton("내보내기", "ExportStartButton", () => _ = Start());
             _start.IsDefault = true;
             _close = UiKit.TextButton("닫기", "ExportCloseButton", CloseOrCancel);
             _close.IsCancel = true;
+            buttons.Children.Add(_youTube);
             buttons.Children.Add(_openFolder);
             buttons.Children.Add(_start);
             buttons.Children.Add(_close);
@@ -294,6 +299,7 @@ namespace VideoEditor.Ui
             _cancel = new CancellationTokenSource();
             _start.IsEnabled = false;
             _openFolder.Visibility = Visibility.Collapsed;
+            _youTube.Visibility = Visibility.Collapsed;
             _close.Content = new TextBlock { Text = "취소" };
             _progress.Visibility = Visibility.Visible;
             _progress.Value = 0;
@@ -311,6 +317,7 @@ namespace VideoEditor.Ui
                 ExportedPath = path;
                 _status.Text = "내보냈습니다: " + path + string.Format(" ({0:0.0}MB, {1:0.0}초)", new FileInfo(path).Length / 1048576.0, watch.Elapsed.TotalSeconds);
                 _openFolder.Visibility = Visibility.Visible;
+                _youTube.Visibility = Visibility.Visible;
             }
             catch (OperationCanceledException)
             {

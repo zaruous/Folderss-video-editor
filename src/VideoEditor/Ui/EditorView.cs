@@ -355,6 +355,7 @@ namespace VideoEditor.Ui
                 Item("자막 가져오기…", "", _commands.ImportSubtitles),
                 Item("음성 인식으로 자막 만들기…", "", () => _ = _commands.SpeechToText()),
                 Item("내보내기…", "Ctrl+E", _commands.Export),
+                Item("유튜브에 올리기…", "", () => YouTubeUploadDialog.PickAndShow(_services, this, _session.FilePath != null ? Path.GetDirectoryName(_session.FilePath) : null)),
                 null,
                 Item("프로젝트 설정…", "", _commands.ProjectSettings),
                 Item("FFmpeg 설정…", "", _commands.FfmpegSetup)));
