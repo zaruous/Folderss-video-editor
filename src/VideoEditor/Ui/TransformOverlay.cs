@@ -16,6 +16,7 @@ namespace VideoEditor.Ui
     /// 안쪽을 끌면 옮기고(X·Y, 화면 가운데 가까이 가면 붙음) 모서리를 끌면 가운데를 두고 크기를 바꾼다(크기 %).
     /// 글자는 옆 손잡이가 넷 더 있다: 왼쪽·오른쪽은 상자 너비, 위·아래는 상자 높이 — 반대쪽 옆은 그대로 두고, 두 번 누르면 자동(0)으로.
     /// 아트 요소는 모양 손잡이(노란 둥근 점 — <see cref="ArtHandles"/>)가 더 있다: 모서리 반경, 선·화살표 양 끝(반대쪽 끝은 그대로), 별 안쪽, 말풍선 꼬리 끝.
+    /// 이동 경로가 있으면 경로를 점선과 점으로 보이고 점을 끌어 고친다(<see cref="LayoutPath"/> — TransformOverlay.Path.cs).
     /// 틀 밖에서 보이는 클립을 누르면 그 클립을 고른다(맨 위 것, 빈 곳이면 고르기는 그대로). Esc는 끌기 취소.
     /// 끄는 동안은 틀만 움직이고, 놓을 때 한 번 편집한다(실행 취소 한 번). 미리 보기를 누른 뒤에는 화살표로 1px(Shift 10px)씩 옮긴다.
     /// </summary>
@@ -44,7 +45,7 @@ namespace VideoEditor.Ui
         private readonly Ellipse[] _shapeHandles = new Ellipse[2];
         private IReadOnlyList<ArtHandle> _shapeKinds = Array.Empty<ArtHandle>();
         private Clip _clip;
-        // 끄는 중: 0 = 아님, 1 = 옮기기, 2 = 크기, 3 = 상자 옆(_edge), 4 = 모양 손잡이(_shapeHandle)
+        // 끄는 중: 0 = 아님, 1 = 옮기기, 2 = 크기, 3 = 상자 옆(_edge), 4 = 모양 손잡이(_shapeHandle), 5 = 이동 경로 점(PathDrag)
         private int _drag;
         private ArtHandle _shapeHandle;
         // 아트의 지금 모양·회전(끄는 동안 바뀜)과 끌기 시작 때 값
@@ -156,6 +157,7 @@ namespace VideoEditor.Ui
             if (!visible)
                 _guideX.Visibility = _guideY.Visibility = Visibility.Collapsed;
             Cursor = null;
+            LayoutPath();
         }
 
         /// <summary>미리 보기 화면(비율 유지로 가운데)에서 프로젝트 1픽셀의 크기와 화면 왼쪽 위.</summary>
@@ -280,13 +282,19 @@ namespace VideoEditor.Ui
             }
             if (_groupMoving)
                 LayoutGroup();
+            // 이동 경로(TransformOverlay.Path.cs) — 클립을 끄는 동안 함께 움직인다
+            LayoutPath();
         }
 
-        /// <summary>점이 무엇 위에 있는지: 0~3 모서리 손잡이, 5~8 옆 손잡이(글자만), 9~ 모양 손잡이(아트만), 4 틀 안, -1 밖.</summary>
+        /// <summary>점이 무엇 위에 있는지: 0~3 모서리 손잡이, 5~8 옆 손잡이(글자만), 9~ 모양 손잡이(아트만), 99~ 이동 경로(TransformOverlay.Path.cs), 4 틀 안, -1 밖.</summary>
         private int Hit(Point point)
         {
             if (_clip == null)
                 return -1;
+            // 이동 경로의 점·점선이 먼저(작은 점이라 틀 안·손잡이와 겹쳐도 잡히게)
+            var pathHit = PathHit(point);
+            if (pathHit >= 0)
+                return pathHit;
             var frame = Frame();
             var corners = Corners(frame);
             // 모양 손잡이가 먼저(납작한 선의 끝점은 모서리 손잡이와 가깝다) — 둥근 점 크기만큼
@@ -357,6 +365,12 @@ namespace VideoEditor.Ui
                     e.Handled = true;
                 return;
             }
+            // Shift+누르기: 사용자 경로의 끝에 점을 더한다(TransformOverlay.Path.cs)
+            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0 && PathAppend(e.GetPosition(this)))
+            {
+                e.Handled = true;
+                return;
+            }
             if (e.ClickCount == 2 && PointerDoubleClick(e.GetPosition(this)))
             {
                 e.Handled = true;
@@ -385,6 +399,9 @@ namespace VideoEditor.Ui
                 return false;
             // 여럿 골랐으면 누른 클립을 앞세워 함께 옮긴다
             var hit = GroupLead(point) ? Inside : Hit(point);
+            // 사용자 경로의 점선은 두 번 눌러 점을 끼우는 자리 — 한 번 누름은 아무것도 하지 않는다(밑의 클립을 고르지 않게)
+            if (hit == PathLine)
+                return false;
             // 틀 안이라도 그 자리에 고른 클립보다 위에 보이는 클립이 있으면 그것을 고른다 — 화면 전체 배경을 고른 뒤에도 위의 글자를 누를 수 있게
             if (hit == Inside && Pick(point) is Clip above && above.Id != _clip.Id)
                 hit = -1;
@@ -399,7 +416,7 @@ namespace VideoEditor.Ui
                     return false;
                 hit = Inside;
             }
-            _drag = hit == Inside ? 1 : hit < 4 ? 2 : hit >= FirstShape ? 4 : 3;
+            _drag = hit == Inside ? 1 : hit < 4 ? 2 : hit >= FirstPath ? PathDrag : hit >= FirstShape ? 4 : 3;
             _dragFrom = point;
             _pointerMoved = false;
             _startX = _x;
@@ -411,6 +428,8 @@ namespace VideoEditor.Ui
             _startArt = _art?.Clone();
             if (_drag == 4)
                 _shapeHandle = _shapeKinds[hit - FirstShape];
+            if (_drag == PathDrag)
+                StartPathDrag(hit - FirstPath);
             _startDistance = Math.Max(1, (point - Frame().Center).Length);
             if (_drag == 3)
             {
@@ -447,6 +466,11 @@ namespace VideoEditor.Ui
             }
             if (point != _dragFrom)
                 _pointerMoved = true;
+            if (_drag == PathDrag)
+            {
+                PathMove(point);
+                return;
+            }
             var (zoom, _, _) = Screen();
             if (_drag == 1)
             {
@@ -524,6 +548,8 @@ namespace VideoEditor.Ui
                 return false;
             if (_drag == 4)
                 return ShapeUp();
+            if (_drag == PathDrag)
+                return PathUp();
             // 누르고 움직이지 않았으면 편집하지 않는다(자동 크기가 상한보다 커서 옆 손잡이를 누르기만 해도 값이 바뀌는 경우 등)
             var moved = _pointerMoved && (_x != _startX || _y != _startY || _scale != _startScale || _boxWidth != _startBoxWidth || _boxHeight != _startBoxHeight);
             var horizontal = _drag == 3 && (_edge == BoxEdge.Left || _edge == BoxEdge.Right);
@@ -598,6 +624,9 @@ namespace VideoEditor.Ui
         /// <summary>두 번 누름: 글자의 옆 손잡이면 그 방향 상자 크기를 자동(0)으로(실행 취소 한 번). 옆 손잡이가 아니면 false.</summary>
         private bool PointerDoubleClick(Point point)
         {
+            // 사용자 경로의 점은 빼고 점선에는 점을 끼운다(TransformOverlay.Path.cs)
+            if (PathDoubleClick(point))
+                return true;
             if (!HasBoxHandles || _drag != 0 || _playing())
                 return false;
             var hit = Hit(point);
@@ -674,9 +703,9 @@ namespace VideoEditor.Ui
         {
             if (e.Key == Key.Escape && _drag != 0)
             {
-                var shape = _drag == 4;
+                var drag = _drag;
                 Cancel();
-                _commands.Status(shape ? "모양 바꾸기를 취소했습니다." : "옮기기·크기 바꾸기를 취소했습니다.");
+                _commands.Status(drag == 4 ? "모양 바꾸기를 취소했습니다." : drag == PathDrag ? "경로 점 옮기기를 취소했습니다." : "옮기기·크기 바꾸기를 취소했습니다.");
                 e.Handled = true;
             }
         }
