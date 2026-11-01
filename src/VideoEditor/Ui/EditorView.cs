@@ -182,6 +182,7 @@ namespace VideoEditor.Ui
                 _services.ToolChanged -= _toolChanged;
                 _services.HelperChanged -= _helperChanged;
                 _commands.EffectHover.Dispose();
+                _commands.Source.Dispose();
                 _player.Dispose();
                 if (Interlocked.Exchange(ref _helperReleased, 1) == 0)
                     _services.ReleaseHelper();
@@ -300,6 +301,7 @@ namespace VideoEditor.Ui
                 return;
             _hostClosing = true;
             _player.Stop();
+            _commands.Source.Close();
             if (_session.Dirty)
                 _recovery.Write(_session);
         }
@@ -518,6 +520,7 @@ namespace VideoEditor.Ui
                 + "확대 Ctrl+= · 축소 Ctrl+- · 맞춤 Shift+Z\n"
                 + "새로 Ctrl+N · 열기 Ctrl+O · 저장 Ctrl+S · 다른 이름 Ctrl+Shift+S · 가져오기 Ctrl+I · 내보내기 Ctrl+E\n\n"
                 + "타임라인: 휠 = 가로 이동, Ctrl+휠 = 확대/축소, Shift+휠 = 세로 이동, 끄는 동안 Alt = 붙기 잠시 끔\n"
+                + "원본 보기(미디어를 한 번 누르기): 동영상은 아래 막대로 원본 위치 옮기기, Space 원본 재생, I/O 원본 In/Out, [타임라인에 넣기]·두 번 누르기 = 그 구간만, Esc 돌아가기\n"
                 + "미리 보기: 클립을 눌러 고르기, 틀 안 끌기 = 옮기기, 모서리 = 크기, 글자의 옆 손잡이 = 상자 너비·높이(두 번 누르면 자동), 누른 뒤 ←/→/↑/↓ = 1px 옮기기(Shift 10px)\n"
                 + "링크된 영상·사운드: Alt를 누른 채 끌기 시작하면 그 한 번만 그 클립만 옮기거나 다듬습니다");
         }
@@ -595,7 +598,8 @@ namespace VideoEditor.Ui
             {
                 switch (key)
                 {
-                    case Key.Space: action = _commands.TogglePlay; break;
+                    // 원본 보기에 동영상이 열려 있으면 Space·I·O는 그 원본의 재생·In/Out(재생 헤드·타임라인 In/Out은 그대로)
+                    case Key.Space: action = _commands.Source.IsVideo ? (Action)_commands.Source.TogglePlay : _commands.TogglePlay; break;
                     case Key.Left: action = shift ? (Action)(() => _commands.StepSeconds(-1)) : () => _commands.Step(-1); break;
                     case Key.Right: action = shift ? (Action)(() => _commands.StepSeconds(1)) : () => _commands.Step(1); break;
                     case Key.Up: action = shift ? (Action)(() => _commands.JumpMarker(-1)) : () => _commands.JumpEditPoint(-1); break;
@@ -605,8 +609,8 @@ namespace VideoEditor.Ui
                     case Key.Delete: case Key.Back: action = () => _commands.Delete(shift); break;
                     // 원본 보기가 열려 있으면 먼저 닫는다(고르기는 그대로)
                     case Key.Escape: action = _commands.Source.IsOpen ? (Action)_commands.Source.Close : _session.ClearSelection; break;
-                    case Key.I: action = _commands.MarkIn; break;
-                    case Key.O: action = _commands.MarkOut; break;
+                    case Key.I: action = _commands.Source.IsVideo ? (Action)_commands.Source.MarkIn : _commands.MarkIn; break;
+                    case Key.O: action = _commands.Source.IsVideo ? (Action)_commands.Source.MarkOut : _commands.MarkOut; break;
                     case Key.M: action = shift ? (Action)_commands.EditMarker : _commands.AddMarker; break;
                     case Key.Z: if (shift) action = _timeline.Canvas.ZoomToFit; break;
                     case Key.F1: action = ShowShortcuts; break;
