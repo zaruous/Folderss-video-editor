@@ -145,7 +145,7 @@ namespace VideoEditor.Ui
             {
                 var (zoom, _, _) = Screen();
                 var (x, y) = ScreenToPath(point);
-                if (MotionPaths.Nearest(Relative(_path.Points), x, y).Distance * zoom <= PathLineReach)
+                if (MotionPaths.Nearest(Relative(_path.Points), x, y, MotionPaths.IsSmooth(_path)).Distance * zoom <= PathLineReach)
                     return PathLine;
             }
             return -1;
@@ -255,7 +255,7 @@ namespace VideoEditor.Ui
                 return true;
             }
             var (x, y) = ScreenToPath(point);
-            var (segment, footX, footY, _) = MotionPaths.Nearest(points, x, y);
+            var (segment, footX, footY, _) = MotionPaths.Nearest(points, x, y, MotionPaths.IsSmooth(_path));
             points.Insert(segment + 1, new PathPoint(Math.Round(footX), Math.Round(footY)));
             EditPath(_clip.Id, _path.Effect, points);
             _commands.Status("경로에 점을 끼웠습니다(" + points.Count + "개).");

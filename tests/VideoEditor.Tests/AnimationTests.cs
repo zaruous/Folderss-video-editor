@@ -314,7 +314,8 @@ namespace VideoEditor.Tests
                         Assert.False(appearing.IsEmpty, def.Name);
                         Assert.Equal(rest, Pose(appearing, 12));
                         Assert.Equal(rest, Pose(appearing, 40));
-                        var start = Pose(appearing, 0);
+                        // 바로 나타나기는 길이가 없어 지연 0이면 0번 장부터 보인다 — 그 앞 장으로 본다
+                        var start = Pose(appearing, def.Instant ? -1 : 0);
                         Assert.True(start.Scale == 0 || start.Opacity == 0 || start.Fly == 1 || start.Visible == 0, def.Name + " " + ease + "은(는) 처음에 보이지 않는다");
                         // 구간 앞(지연)도 보이지 않는다
                         appear.Delay = 5;
@@ -869,6 +870,50 @@ namespace VideoEditor.Tests
             Assert.Contains("colorchannelmixer@an0=aa=0.8", filter);
             Assert.Contains(":eval=frame", filter);
             Assert.DoesNotContain("rotw(", filter);
+        }
+
+        [Fact]
+        public void Appear_InstantInAndOut_ExactFrame_DelayOnly()
+        {
+            var (project, video) = VideoProject();
+            var def = ClipAnimations.Def(AnimationEffect.Appear);
+            Assert.True(def.Instant);
+            Assert.Equal("바로 사라지기", def.DisplayName(AnimationKind.Out));
+            var appear = Make(AnimationEffect.Appear, AnimationKind.In, 15);
+            appear.Delay = 10;
+            appear.Ease = AnimationEase.Bounce;
+            var vanish = Make(AnimationEffect.Appear, AnimationKind.Out, 15);
+            vanish.Delay = 5;
+            video.Animations = new List<ClipAnimation> { appear, vanish };
+            // 길이 없이(저장된 길이는 쓰지 않음) 지연 장에서 바로: 9장까지 없고 10장부터, 54장까지 있고 55장(60 − 5)부터 없다
+            Assert.Equal((10L, 0L), AnimationMotion.Window(video, appear));
+            Assert.Equal((55L, 0L), AnimationMotion.Window(video, vanish));
+            var motion = AnimationMotion.ObjectMotion(video, false);
+            Assert.Equal(new[] { 0.0, 0, 1, 1, 1, 0, 0 }, new double[] { 0, 9, 10, 30, 54, 55, 59 }.Select(f => motion.Opacity.Eval(f)));
+            Assert.Null(motion.Scale);
+            Assert.Null(motion.ShiftX);
+            // 그래프: 불투명도를 바뀌는 두 장에서만 보낸다(장 사이 시각) — 처음은 0
+            var filter = RenderGraph.Build(project, Options()).Filter;
+            var commands = Regex.Match(filter, "sendcmd=c='([^']*)'").Groups[1].Value.Split(';');
+            Assert.Equal(new[] { "0.316667 colorchannelmixer@an0 aa 1", "1.816667 colorchannelmixer@an0 aa 0" }, commands);
+            Assert.Contains("colorchannelmixer@an0=aa=0", filter);
+            // 보이는 동안의 한 장은 예전 그래프와 같은 모양(필터 없음)
+            Assert.DoesNotContain("colorchannelmixer", RenderGraph.Build(project, Options(null, 20, 21)).Filter);
+
+            // 글자 클립: 단위를 나누지 않고(한 번에), 길이·이징 없이. 나타나기와 겹쳐도 사라지기는 그 장
+            var (_, text) = TextProject();
+            var typed = Make(AnimationEffect.Appear, AnimationKind.In, 15, text);
+            typed.Unit = AnimationUnit.Character;
+            typed.Stagger = 40;
+            text.Animations = new List<ClipAnimation> { typed };
+            var clean = ClipAnimations.Clean(text);
+            Assert.Equal((AnimationUnit.All, 0.0), (clean[0].Unit, clean[0].Stagger));
+            text.Animations = clean;
+            Assert.False(AnimationMotion.HasPerUnit(text));
+            Assert.Null(TextAnimationFrame.Of(text, FrameRate.Default));
+            // 단위별 모습(그리개가 쓸 때)도 그 장에 바로
+            Assert.Equal(new[] { 0.0, 1 }, new[] { 0.0, 1 }.Select(p => AnimationMotion.InPose(clean[0], p, 0, 1, 40).Opacity));
+            Assert.Equal(new[] { 1.0, 0 }, new[] { 0.0, 1 }.Select(p => AnimationMotion.OutPose(clean[0], p, 0, 1, 40).Opacity));
         }
 
         [Fact]

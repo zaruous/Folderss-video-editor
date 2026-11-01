@@ -88,9 +88,9 @@ namespace VideoEditor.UiTests
                     var tops = tabs.Items.Cast<TabItem>().Select(t => t.TranslatePoint(new Point(0, 0), tabs).Y).ToList();
                     _out.WriteLine("탭: " + string.Join(", ", tabs.Items.Cast<TabItem>().Select(t => t.Header)) + " · 윗변 " + string.Join(", ", tops.Select(y => y.ToString("0"))));
                     Assert.True(tops.Max() - tops.Min() < 1, "속성 탭 머리가 두 줄");
-                    Assert.Equal(12, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
+                    Assert.Equal(13, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
                     Assert.Equal(9, Ui.ById<WrapPanel>(window, "AnimationTilesEmphasis").Children.Count);
-                    Assert.Equal(13, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
+                    Assert.Equal(14, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
                     Ui.Snap(window, plugin.ShotFolder, "animation-tab-empty");
                     Ui.Click(Ui.ById<Button>(window, "AnimIn_Typewriter"));
                     Ui.Click(Ui.ById<Button>(window, "AnimEmphasis_Pulse"));
@@ -179,13 +179,13 @@ namespace VideoEditor.UiTests
                     window.UpdateLayout();
                     Assert.Null(Ui.ById<Button>(window, "AnimIn_Typewriter"));
                     Assert.Null(Ui.ById<Button>(window, "AnimEmphasis_Wave"));
-                    Assert.Equal(10, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
+                    Assert.Equal(11, Ui.ById<WrapPanel>(window, "AnimationTilesIn").Children.Count);
                     Assert.Equal(7, Ui.ById<WrapPanel>(window, "AnimationTilesEmphasis").Children.Count);
                     // 그려지기는 선·화살표·동그라미 치기·밑줄 요소에만, 떨어지기는 사라지기에만
                     Assert.Null(Ui.ById<Button>(window, "AnimIn_Draw"));
                     Assert.Null(Ui.ById<Button>(window, "AnimIn_Fall"));
                     Assert.NotNull(Ui.ById<Button>(window, "AnimOut_Fall"));
-                    Assert.Equal(11, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
+                    Assert.Equal(12, Ui.ById<WrapPanel>(window, "AnimationTilesOut").Children.Count);
                     // 좁은 속성 패널(1280×800 창에서 약 250px): 썸네일은 줄을 바꿔 패널 안에 들고, 긴 이름("흐려지며 가라앉기")은 칸 안에서 줄을 바꾼다
                     foreach (var id in new[] { "AnimationTilesIn", "AnimationTilesEmphasis", "AnimationTilesOut" })
                     {
@@ -224,6 +224,84 @@ namespace VideoEditor.UiTests
                     palette.SelectedItem = palette.Items.Cast<object>().First(i => (string)Get(i, "Name") == "파랑");
                 });
                 await ui.WaitUntil(() => (string)Get(Animations(ProjectClips(window)[0]).First(a => Get(a, "Effect").ToString() == "ColorChange"), "Color") == "#3B82F6", Wait, "파랑");
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
+
+        [EditorFact]
+        public async Task PathBandDrag_ChangesOneCycle_PathOptions_AppearHasNoLength()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                const string text = "경로 띠";
+                ui.Run(() => Ui.ById<TabControl>(window, "MediaTabs").SelectedIndex = 2);
+                await ui.WaitFor(() => Ui.ById<TextBox>(window, "NewTextBox"), Wait, "글자 탭");
+                ui.Run(() =>
+                {
+                    Ui.ById<TextBox>(window, "NewTextBox").Text = text;
+                    Ui.Click(Ui.ById<Button>(window, "AddTextButton"));
+                });
+                await ui.WaitUntil(() => Clips(window).Any(n => n.Contains(text)), Wait, "글자 클립");
+                ui.Run(() =>
+                {
+                    Ui.ById<TabControl>(window, "PropertyTabs").SelectedItem = Ui.ById<TabItem>(window, "AnimationTab");
+                    window.UpdateLayout();
+                    Ui.Click(Ui.ById<Button>(window, "AnimPath_PathCustom"));
+                    Ui.Click(Ui.ById<Button>(window, "AnimIn_Appear"));
+                });
+                await ui.WaitUntil(() => Animations(TextClip(window, text)).Count == 2, Wait, "경로·바로 나타나기");
+                object PathOf() => Animations(TextClip(window, text)).First(a => Get(a, "Kind").ToString() == "Path");
+
+                // 바로 나타나기: 길이·이징 줄이 없고 지연만, 타임라인 이름에 길이가 없다
+                await ui.WaitFor(() => Ui.ById<TextBox>(window, "AnimIn_Delay"), Wait, "지연 칸");
+                ui.Run(() =>
+                {
+                    Assert.Null(Ui.ById<TextBox>(window, "AnimIn_Duration"));
+                    Assert.Null(Ui.ById<ComboBox>(window, "AnimIn_Ease"));
+                    Assert.Contains(Clips(window), n => n.Contains("나타나기 바로 나타나기") && !n.Contains("바로 나타나기 0"));
+                });
+
+                // 경로 줄: 경로 방향으로 돌기·부드러운 곡선을 켜면 저장된다(한 단계씩)
+                await ui.WaitFor(() => Ui.ById<CheckBox>(window, "AnimPath_Smooth"), Wait, "곡선 칸");
+                ui.Run(() => Ui.ClickToggle(Ui.ById<CheckBox>(window, "AnimPath_Orient")));
+                await ui.WaitUntil(() => (bool)Get(PathOf(), "Orient"), Wait, "경로 방향으로 돌기");
+                ui.Run(() => Ui.ClickToggle(Ui.ById<CheckBox>(window, "AnimPath_Smooth")));
+                await ui.WaitUntil(() => (bool)Get(PathOf(), "Smooth"), Wait, "부드러운 곡선");
+                ui.Run(() => Ui.Snap(window, plugin.ShotFolder, "animation-path-options"));
+
+                // 타임라인 파란 경로 띠: 한 번이 끝나는 손잡이를 오른쪽으로 끌면 한 번 길이가 길어진다(놓을 때 한 단계)
+                var before = ui.Run(() => (long)Get(PathOf(), "Duration"));
+                ui.Run(() =>
+                {
+                    var clip = TextClip(window, text);
+                    var bounds = ClipBounds(window, clip);
+                    _out.WriteLine("클립 상자 " + bounds);
+                    Assert.True(bounds.Height >= 40, "경로 띠를 그리는 높이");
+                    var canvas = Canvas(window);
+                    var x = (double)canvas.GetType().GetMethod("FrameToX").Invoke(canvas, new object[] { (long)Get(clip, "Start") + before });
+                    // 띠는 클립 아랫변에서 18px 위, 굵기 3
+                    var y = bounds.Bottom - 18 - 1.5;
+                    Drag(window, new Point(x, y), new Point(x + 40, y), ModifierKeys.None);
+                });
+                await ui.WaitUntil(() => (long)Get(PathOf(), "Duration") > before, Wait, "경로 띠 끌기");
+                ui.Run(() =>
+                {
+                    _out.WriteLine("경로 한 번 " + before + " → " + Get(PathOf(), "Duration") + "장 · " + Status(window));
+                    Assert.StartsWith("이동 경로 한 번 길이", Status(window));
+                    // 클립은 옮겨지지 않았다
+                    Assert.Equal(0L, (long)Get(TextClip(window, text), "Start"));
+                    Ui.Snap(window, plugin.ShotFolder, "animation-path-band-dragged");
+                    Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control);
+                });
+                await ui.WaitUntil(() => (long)Get(PathOf(), "Duration") == before, Wait, "경로 띠 끌기 실행 취소");
+                Assert.True(ui.Run(() => (bool)Get(PathOf(), "Smooth")), "실행 취소는 한 단계만");
                 Assert.Empty(ui.TakeErrors());
             }
             finally

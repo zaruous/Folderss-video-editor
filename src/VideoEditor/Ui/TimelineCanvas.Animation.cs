@@ -11,11 +11,18 @@ namespace VideoEditor.Ui
     /// <summary>
     /// 타임라인의 애니메이션 띠(#4): 클립 아래 가장자리 안에 나타나기(초록, 클립 앞쪽)·사라지기(주황, 클립 뒤쪽) 구간을 띠로 그리고(위쪽은 클립 이름),
     /// 띠 안쪽 끝의 흰 손잡이를 끌면 길이를 바꾼다(놓을 때 실행 취소 한 단계). 강조가 있으면 띠 위에 점선.
+    /// 이동 경로(#42)는 그 위(◆ 줄 위)에 파란 띠 — 경로가 움직이는 구간 전체이고, 한 번이 끝나는 자리의 흰 손잡이를 끌면 한 번 길이를 바꾼다(높이 40px 이상인 클립만).
+    /// 바로 나타나기·사라지기는 길이가 없어 그 장에 가는 띠만 그리고 손잡이가 없다.
     /// </summary>
     internal sealed partial class TimelineCanvas
     {
         private static readonly Brush AnimationInBrush = Frozen(Color.FromArgb(0xE0, 0x22, 0xC5, 0x5E));
         private static readonly Brush AnimationOutBrush = Frozen(Color.FromArgb(0xE0, 0xF9, 0x73, 0x16));
+        private static readonly Brush AnimationPathBrush = Frozen(Color.FromArgb(0xE0, 0x3B, 0x82, 0xF6));
+        // 경로 띠: 굵기, 클립 아랫변에서 띠 아랫변까지(◆ 줄 위), 그리는 클립 높이
+        private const double PathBandHeight = 3;
+        private const double PathBandLift = 18;
+        private const double PathBandMinHeight = 40;
         private static readonly Pen AnimationHandlePen = FrozenPen(Brushes.White, 2);
         private static readonly Pen EmphasisPen = new Func<Pen>(() =>
         {
@@ -56,20 +63,63 @@ namespace VideoEditor.Ui
             }
         }
 
+        /// <summary>길이가 없는 효과(바로 나타나기·사라지기)인지 — 손잡이가 없다.</summary>
+        private static bool IsInstant(ClipAnimation animation)
+        {
+            return animation != null && ClipAnimations.Def(animation.Effect)?.Instant == true;
+        }
+
+        /// <summary>분류의 애니메이션(나타나기·사라지기·이동 경로).</summary>
+        private static ClipAnimation BandAnimation(Clip clip, AnimationKind kind)
+        {
+            return clip == null ? null : kind == AnimationKind.In ? ClipAnimations.In(clip) : kind == AnimationKind.Out ? ClipAnimations.Out(clip) : ClipAnimations.PathOf(clip);
+        }
+
+        /// <summary>이동 경로 띠(클립 안 시작, 한 번 길이, 끝 — 없으면 null). 끄는 중이면 끄는 한 번 길이로.</summary>
+        private (long Start, long Cycle, long End)? PathBand(Clip clip)
+        {
+            var path = ClipAnimations.PathOf(clip);
+            if (path == null)
+                return null;
+            if (_drag == DragKind.Animation && _animationLength > 0 && clip.Id == _dragClipId && _animationKind == AnimationKind.Path)
+            {
+                path = path.Clone();
+                path.Duration = _animationLength;
+            }
+            return AnimationMotion.EmphasisWindow(clip, path);
+        }
+
+        /// <summary>경로 띠의 윗변(화면 y).</summary>
+        private static double PathBandTop(Rect rect)
+        {
+            return rect.Bottom - PathBandLift - PathBandHeight;
+        }
+
         /// <summary>띠를 그린다(DrawClip 끝에서).</summary>
         private void DrawAnimationBands(DrawingContext dc, Clip clip, Rect rect)
         {
             if (clip.Animations == null || clip.Animations.Count == 0 || rect.Height < 14)
                 return;
             dc.PushClip(new RectangleGeometry(rect, 3, 3));
-            foreach (var (kind, start, length, _) in AnimationBands(clip))
+            foreach (var (kind, start, length, animation) in AnimationBands(clip))
             {
                 var left = FrameToX(clip.Start + start);
                 var right = FrameToX(clip.Start + start + length);
                 dc.DrawRectangle(kind == AnimationKind.In ? AnimationInBrush : AnimationOutBrush, null,
-                    new Rect(left, rect.Bottom - 1 - AnimationBandHeight, Math.Max(2, right - left), AnimationBandHeight));
+                    new Rect(IsInstant(animation) ? left - 1 : left, rect.Bottom - 1 - AnimationBandHeight, Math.Max(2, right - left), AnimationBandHeight));
+                if (IsInstant(animation))
+                    continue;
                 var handle = kind == AnimationKind.In ? right : left;
                 dc.DrawLine(AnimationHandlePen, new Point(handle, rect.Bottom - AnimationBandHeight - 5), new Point(handle, rect.Bottom - 1));
+            }
+            if (rect.Height >= PathBandMinHeight && PathBand(clip) is { } band)
+            {
+                var (pathStart, pathCycle, pathEnd) = band;
+                var top = PathBandTop(rect);
+                var left = FrameToX(clip.Start + pathStart);
+                dc.DrawRectangle(AnimationPathBrush, null, new Rect(left, top, Math.Max(2, FrameToX(clip.Start + pathEnd) - left), PathBandHeight));
+                var handle = FrameToX(clip.Start + Math.Min(pathEnd, pathStart + pathCycle));
+                dc.DrawLine(AnimationHandlePen, new Point(handle, top - 3), new Point(handle, top + PathBandHeight + 3));
             }
             foreach (var emphasis in ClipAnimations.Emphases(clip))
             {
@@ -80,7 +130,10 @@ namespace VideoEditor.Ui
             dc.Pop();
         }
 
-        /// <summary>점이 띠 손잡이 위인지(클립 아래쪽 띠 높이 안, 손잡이에서 좌우 5px).</summary>
+        /// <summary>
+        /// 점이 띠 손잡이 위인지(클립 아래쪽 띠 높이 안, 손잡이에서 좌우 5px). 경로 띠는 그 띠 높이 위아래 4px 안, length는 한 번 길이.
+        /// 바로 나타나기·사라지기는 손잡이가 없다.
+        /// </summary>
         private Clip HitAnimationHandle(Point point, out TimelineRow row, out AnimationKind kind, out long length)
         {
             kind = AnimationKind.In;
@@ -91,10 +144,25 @@ namespace VideoEditor.Ui
             foreach (var clip in row.Track.Clips.Where(c => c.Animations != null && c.Animations.Count > 0))
             {
                 var rect = ClipRect(row, clip.Start, clip.End);
-                if (rect.Height < 14 || point.Y > rect.Bottom || point.Y < rect.Bottom - AnimationBandHeight - 7 || point.X < rect.Left - AnimationGrip || point.X > rect.Right + AnimationGrip)
+                if (rect.Height < 14 || point.X < rect.Left - AnimationGrip || point.X > rect.Right + AnimationGrip)
+                    continue;
+                var top = PathBandTop(rect);
+                if (rect.Height >= PathBandMinHeight && point.Y >= top - 4 && point.Y <= top + PathBandHeight + 4 && PathBand(clip) is { } path)
+                {
+                    var handle = FrameToX(clip.Start + Math.Min(path.End, path.Start + path.Cycle));
+                    if (Math.Abs(point.X - handle) <= AnimationGrip)
+                    {
+                        kind = AnimationKind.Path;
+                        length = path.Cycle;
+                        return clip;
+                    }
+                }
+                if (point.Y > rect.Bottom || point.Y < rect.Bottom - AnimationBandHeight - 7)
                     continue;
                 foreach (var band in AnimationBands(clip))
                 {
+                    if (IsInstant(band.Animation))
+                        continue;
                     var handle = FrameToX(clip.Start + band.Start + (band.Kind == AnimationKind.In ? band.Length : 0));
                     if (Math.Abs(point.X - handle) <= AnimationGrip)
                     {
@@ -114,8 +182,10 @@ namespace VideoEditor.Ui
             if (clip == null)
                 return false;
             Cursor = row.Track.Locked ? Cursors.No : Cursors.SizeWE;
-            var animation = kind == AnimationKind.In ? ClipAnimations.In(clip) : ClipAnimations.Out(clip);
-            var tip = ClipAnimations.Name(animation) + " " + UiKit.Number(_session.Project.Rate.ToSeconds(length)) + "초 — 끌어 길이를 바꿉니다";
+            var animation = BandAnimation(clip, kind);
+            var tip = kind == AnimationKind.Path
+                ? ClipAnimations.Name(animation) + " 한 번 " + UiKit.Number(_session.Project.Rate.ToSeconds(length)) + "초 — 끌어 한 번 길이를 바꿉니다"
+                : ClipAnimations.Name(animation) + " " + UiKit.Number(_session.Project.Rate.ToSeconds(length)) + "초 — 끌어 길이를 바꿉니다";
             if (!Equals(ToolTip, tip))
                 ToolTip = tip;
             return true;
@@ -142,7 +212,7 @@ namespace VideoEditor.Ui
             return true;
         }
 
-        /// <summary>끄는 동안: 손잡이 자리 = 나타나기 끝·사라지기 시작(1프레임 ~ 클립에 들어가는 만큼).</summary>
+        /// <summary>끄는 동안: 손잡이 자리 = 나타나기 끝·사라지기 시작·경로 한 번의 끝(1프레임 ~ 클립에 들어가는 만큼).</summary>
         private void AnimationPointerMove(Point point)
         {
             if (!_dragStarted)
@@ -152,14 +222,21 @@ namespace VideoEditor.Ui
                 _dragStarted = true;
             }
             var clip = _session.Project.FindClip(_dragClipId);
-            var animation = clip == null ? null : _animationKind == AnimationKind.In ? ClipAnimations.In(clip) : ClipAnimations.Out(clip);
+            var animation = BandAnimation(clip, _animationKind);
             if (animation == null)
             {
                 CancelDrag();
                 return;
             }
-            var (start, length) = AnimationMotion.Window(clip, animation);
             var frame = XToFrame(point.X) - clip.Start;
+            if (_animationKind == AnimationKind.Path)
+            {
+                var (pathStart, _, _) = AnimationMotion.EmphasisWindow(clip, animation);
+                _animationLength = Math.Min(ClipAnimations.MaxFrames, Math.Max(1, Math.Min(clip.Duration - pathStart, frame - pathStart)));
+                InvalidateVisual();
+                return;
+            }
+            var (start, length) = AnimationMotion.Window(clip, animation);
             _animationLength = _animationKind == AnimationKind.In
                 ? Math.Max(1, Math.Min(clip.Duration - start, frame - start))
                 : Math.Max(1, Math.Min(start + length, start + length - frame));
@@ -180,14 +257,14 @@ namespace VideoEditor.Ui
             var ok = _session.Execute(p =>
             {
                 var clip = p.FindClip(clipId);
-                var animation = kind == AnimationKind.In ? ClipAnimations.In(clip) : ClipAnimations.Out(clip);
+                var animation = BandAnimation(clip, kind);
                 if (clip == null || animation == null)
                     return;
                 TimelineEdits.EnsureEditable(p.TrackOf(clip));
                 animation.Duration = length;
             });
             if (ok)
-                StatusMessage?.Invoke(ClipAnimations.KindName(kind) + " 길이 " + UiKit.Number(_session.Project.Rate.ToSeconds(length)) + "초");
+                StatusMessage?.Invoke(ClipAnimations.KindName(kind) + (kind == AnimationKind.Path ? " 한 번 길이 " : " 길이 ") + UiKit.Number(_session.Project.Rate.ToSeconds(length)) + "초");
             else if (_session.LastError != null)
                 StatusMessage?.Invoke(_session.LastError);
         }
@@ -200,7 +277,7 @@ namespace VideoEditor.Ui
             return string.Concat(clip.Animations.Select(a =>
             {
                 var def = ClipAnimations.Def(a.Effect);
-                return " · " + ClipAnimations.KindName(a.Kind) + " " + def?.DisplayName(a.Kind) + (a.Kind == AnimationKind.Emphasis ? "" : " " + UiKit.Number(rate.ToSeconds(a.Duration)) + "초");
+                return " · " + ClipAnimations.KindName(a.Kind) + " " + def?.DisplayName(a.Kind) + (a.Kind == AnimationKind.Emphasis || def?.Instant == true ? "" : " " + UiKit.Number(rate.ToSeconds(a.Duration)) + "초");
             }));
         }
     }
