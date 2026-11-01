@@ -1300,11 +1300,11 @@ namespace VideoEditor.UiTests
         [UiFact]
         public async Task Rasterizer_StylePresets_EachDrawsItsThumbnail()
         {
-            // 갤러리와 같은 요청(EditorServices.StylePreviewRequest: "가나Ab" 48px)으로 16개를 그린다
+            // 갤러리와 같은 요청(EditorServices.StylePreviewRequest: "가나Ab" 48px)으로 17개를 그린다
             var rasterizer = NewRasterizer();
             var services = rasterizer.GetType().Assembly.GetType("VideoEditor.Ui.EditorServices", true);
             var presets = Presets();
-            Assert.Equal(16, presets.Count);
+            Assert.Equal(17, presets.Count);
             var drawn = new System.Collections.Generic.List<Png>();
             for (var i = 0; i < presets.Count; i++)
             {
@@ -2322,8 +2322,8 @@ namespace VideoEditor.UiTests
                 var id = await AddStyledText(ui, window, "모음 ABC");
                 await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
                 var presets = Presets();
-                Assert.Equal(16, presets.Count);
-                // 꾸미기 탭 맨 위에 단추 16개 — 화면 낭독·글자로 찾기는 스타일 이름으로
+                Assert.Equal(17, presets.Count);
+                // 꾸미기 탭 맨 위에 단추 17개 — 화면 낭독·글자로 찾기는 스타일 이름으로
                 await ui.WaitFor(() => Ui.ById<Button>(window, "StylePreset" + (presets.Count - 1)), Wait, "스타일 모음 단추");
                 ui.Run(() =>
                 {
@@ -2339,7 +2339,7 @@ namespace VideoEditor.UiTests
                 await ui.WaitUntil(() => Enumerable.Range(0, presets.Count).All(i => Ui.ById<Image>(window, "StylePreset" + i + "Image")?.Source != null), Wait, "썸네일");
                 ui.Run(() =>
                 {
-                    // 16개라 좁은 속성 패널(시험 창 1280px에서 안쪽 약 200px)에도 한 줄에 셋 이상
+                    // 17개라 좁은 속성 패널(시험 창 1280px에서 안쪽 약 200px)에도 한 줄에 셋 이상
                     var gallery = Ui.ById<WrapPanel>(window, "StylePresets");
                     gallery.UpdateLayout();
                     double Top(int i) => Ui.ById<Button>(window, "StylePreset" + i).TranslatePoint(new Point(0, 0), gallery).Y;
@@ -2572,7 +2572,7 @@ namespace VideoEditor.UiTests
                 ui.Run(() => Ui.ById<TabControl>(window, "MediaTabs").SelectedIndex = 2);
                 await ui.WaitFor(() => Ui.ById<Button>(window, "NewTextStyle1"), Wait, "글자 탭 스타일");
                 // 썸네일이 그려지고, 처음엔 꾸미지 않음
-                await ui.WaitUntil(() => Enumerable.Range(0, 16).All(i => Ui.ById<Image>(window, "NewTextStyle" + i + "Image") != null), Wait, "스타일 썸네일");
+                await ui.WaitUntil(() => Enumerable.Range(0, 17).All(i => Ui.ById<Image>(window, "NewTextStyle" + i + "Image") != null), Wait, "스타일 썸네일");
                 await ui.WaitFor(() => Ui.ById<Button>(window, "NewTextMine0"), Wait, "내 스타일 단추");
                 var presets = Presets();
                 ui.Run(() =>
@@ -2937,7 +2937,7 @@ namespace VideoEditor.UiTests
                     Assert.Equal("채움 1", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine1")));
                     Assert.Equal("채움 49", System.Windows.Automation.AutomationProperties.GetName(Ui.ById<Button>(window, "StyleMine49")));
                 });
-                // 썸네일 66개(스타일 모음 16 + 내 스타일 50)가 시간 안에 모두 뜨고, 그동안 스레드 풀이 막히지 않는다
+                // 썸네일 67개(스타일 모음 17 + 내 스타일 50)가 시간 안에 모두 뜨고, 그동안 스레드 풀이 막히지 않는다
                 var thumbnails = Stopwatch.StartNew();
                 long slowest = 0;
                 await ui.WaitUntil(() =>
@@ -2946,9 +2946,9 @@ namespace VideoEditor.UiTests
                     Task.Run(() => 0).Wait();
                     slowest = Math.Max(slowest, probe.ElapsedMilliseconds);
                     return Enumerable.Range(0, 50).All(i => Ui.ById<Image>(window, "StyleMine" + i + "Image") != null)
-                        && Enumerable.Range(0, 16).All(i => Ui.ById<Image>(window, "StylePreset" + i + "Image") != null);
-                }, TimeSpan.FromSeconds(20), "썸네일 66개");
-                _out.WriteLine("썸네일 66개 " + thumbnails.ElapsedMilliseconds + "ms · 스레드 풀 응답 최대 " + slowest + "ms");
+                        && Enumerable.Range(0, 17).All(i => Ui.ById<Image>(window, "StylePreset" + i + "Image") != null);
+                }, TimeSpan.FromSeconds(20), "썸네일 67개");
+                _out.WriteLine("썸네일 67개 " + thumbnails.ElapsedMilliseconds + "ms · 스레드 풀 응답 최대 " + slowest + "ms");
                 Assert.True(slowest < 1000, "스레드 풀 응답 " + slowest + "ms");
                 await ui.WaitUntil(() => PreviewHasPicture(window), Wait, "글자 미리 보기");
                 Assert.Null(ui.Run(() => StyleOf(window, id)));

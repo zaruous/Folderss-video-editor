@@ -16,7 +16,7 @@ namespace VideoEditor.Ui
     internal static class StyleTiles
     {
         // 스타일 모음 단추: 어두운 바탕(흰 글자·속 빈 글자도 보이게)에 썸네일을 줄여 놓는다(배율은 모두 같고, 칠한 곳이 틀보다 크면 그것만 더 줄임).
-        // 16개라 좁은 속성 패널(안쪽 약 200px)에도 한 줄에 셋씩 들어가게 — 단추 한 칸 = 틀 56 + 안쪽 여백·테두리 4 + 사이 3 = 63px
+        // 17개라 좁은 속성 패널(안쪽 약 200px)에도 한 줄에 셋씩 들어가게 — 단추 한 칸 = 틀 56 + 안쪽 여백·테두리 4 + 사이 3 = 63px
         public const double TileWidth = 56;
         public const double TileHeight = 38;
         private const double ThumbnailScale = 0.34;

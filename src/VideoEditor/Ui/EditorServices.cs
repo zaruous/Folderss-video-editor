@@ -64,7 +64,7 @@ namespace VideoEditor.Ui
         private static readonly PriorityGate PictureGate = new PriorityGate(3);
         // 스타일 썸네일은 하나씩 그린다(TextStylePreview)
         private static readonly SemaphoreSlim StylePreviewGate = new SemaphoreSlim(1);
-        // 스타일 썸네일 캐시 상한: 스타일 모음 16개 + 내 스타일 50개에 여유
+        // 스타일 썸네일 캐시 상한: 스타일 모음 17개 + 내 스타일 50개에 여유
         private const int MaxStylePreviews = 96;
 
         private readonly Lazy<StyledTextRasterizer> _textRasterizer = new Lazy<StyledTextRasterizer>(() => new StyledTextRasterizer());
