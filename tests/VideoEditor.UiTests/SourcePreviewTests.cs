@@ -164,5 +164,150 @@ namespace VideoEditor.UiTests
                 await CloseEditor(ui, window);
             }
         }
+
+        /// <summary>미리 보기 화면 그림 전체의 해시(바뀌었는지 보기).</summary>
+        private static long PictureHash(Window window)
+        {
+            var bitmap = Ui.ById<Image>(window, "PreviewImage").Source as BitmapSource;
+            if (bitmap == null)
+                return 0;
+            var converted = new FormatConvertedBitmap(bitmap, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+            var pixels = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4];
+            converted.CopyPixels(pixels, bitmap.PixelWidth * 4, 0);
+            long hash = 17;
+            foreach (var b in pixels)
+                hash = hash * 31 + b;
+            return hash;
+        }
+
+        private static string SourceTime(Window window)
+        {
+            return AutomationProperties.GetName(Ui.ById<FrameworkElement>(window, "SourceTimecode")) ?? "";
+        }
+
+        private static bool SourcePlaying(Window window)
+        {
+            var glyph = (TextBlock)Ui.ById<Button>(window, "SourcePlayButton").Content;
+            return glyph.Text == "";
+        }
+
+        private static void SeekSource(Window window, double frame)
+        {
+            Ui.ById<Slider>(window, "SourceSlider").Value = frame;
+        }
+
+        private static object LastClip(Window window, string path)
+        {
+            return ProjectClips(window).LastOrDefault(c => ((string)Get(c, "Path") ?? "").EndsWith(path));
+        }
+
+        [EditorFact]
+        public async Task VideoSource_ScrubPlayInOut_InsertsOnlyTheRange_IOOutsideSetTimelineMarks()
+        {
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            var window = await Open(ui, plugin);
+            try
+            {
+                await Import(ui, window, "testsrc.mp4");
+                ui.Run(() => ClickMedia(window, "testsrc.mp4"));
+                await ui.WaitUntil(() => SourceLabel(window)?.StartsWith("원본 · testsrc.mp4") == true && !SourceLabel(window).Contains("불러오는 중"), Wait, "동영상 원본 보기");
+                ui.Run(() => Assert.Equal(Visibility.Visible, Ui.ById<FrameworkElement>(window, "SourceTransport").Visibility));
+                var max = ui.Run(() => Ui.ById<Slider>(window, "SourceSlider").Maximum);
+                Assert.True(max >= 60, "원본 길이(프레임): " + max);
+
+                // 원본 위치를 옮기면 그 프레임 — 재생 헤드는 그대로, 원본 보기도 그대로
+                await ui.WaitUntil(() => PictureHash(window) != 0, Wait, "첫 그림");
+                var before = ui.Run(() => PictureHash(window));
+                var time = ui.Run(() => SourceTime(window));
+                ui.Run(() => SeekSource(window, max - 5));
+                await ui.WaitUntil(() => PictureHash(window) != before && SourceTime(window) != time, Wait, "원본 위치 옮기기");
+                ui.Run(() =>
+                {
+                    Assert.Equal(0, Playhead(window));
+                    Assert.NotNull(SourceLabel(window));
+                    Ui.Snap(window, plugin.ShotFolder, "source-scrub");
+                });
+
+                // Space = 원본 재생/멈춤(타임라인 재생이 아님 — 원본 보기가 닫히지 않고 재생 헤드도 그대로)
+                ui.Run(() =>
+                {
+                    SeekSource(window, 0);
+                    Key(window, System.Windows.Input.Key.Space);
+                });
+                await ui.WaitUntil(() => SourcePlaying(window), Wait, "Space로 원본 재생");
+                await ui.WaitUntil(() => !SourceTime(window).StartsWith("00:00:00:00"), Wait, "원본 재생이 나아감");
+                // 3초짜리라 그 사이 끝까지 가 스스로 멈췄으면 누르지 않는다(누르면 처음부터 다시 재생)
+                ui.Run(() =>
+                {
+                    if (SourcePlaying(window))
+                        Key(window, System.Windows.Input.Key.Space);
+                });
+                await ui.WaitUntil(() => !SourcePlaying(window), Wait, "Space로 원본 멈춤");
+                ui.Run(() =>
+                {
+                    Assert.Equal(0, Playhead(window));
+                    Assert.NotNull(SourceLabel(window));
+                    Assert.Null(Get(Project(window), "MarkIn"));
+                });
+
+                // I/O = 원본 In/Out(타임라인 In/Out은 그대로) → [타임라인에 넣기] = 그 구간만, 실행 취소 한 번에 사라짐
+                ui.Run(() =>
+                {
+                    SeekSource(window, 15);
+                    Key(window, System.Windows.Input.Key.I);
+                    SeekSource(window, 44);
+                    Key(window, System.Windows.Input.Key.O);
+                    Assert.Null(Get(Project(window), "MarkIn"));
+                    Assert.Null(Get(Project(window), "MarkOut"));
+                    Assert.Contains("In 00:00:00:15", SourceTime(window));
+                    Ui.Click(Ui.ById<Button>(window, "SourceInsertButton"));
+                });
+                await ui.WaitUntil(() => LastClip(window, "testsrc.mp4") != null, Wait, "구간 넣기");
+                ui.Run(() =>
+                {
+                    var clip = LastClip(window, "testsrc.mp4");
+                    Assert.Equal(15L, (long)Get(clip, "SourceIn"));
+                    Assert.Equal(45L, (long)Get(clip, "SourceOut"));
+                    Assert.Equal(30L, (long)Get(clip, "Duration"));
+                    Assert.NotNull(SourceLabel(window));
+                    Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control);
+                });
+                await ui.WaitUntil(() => ProjectClips(window).Count == 0, Wait, "실행 취소 한 번");
+
+                // 미디어 [타임라인에 추가](두 번 누르기와 같은 길)도 원본 In/Out 구간만
+                ui.Run(() =>
+                {
+                    Ui.ById<ListBox>(window, "MediaList").SelectedItem = MediaRow(window, "testsrc.mp4");
+                    Ui.Click(Ui.ById<Button>(window, "AddToTimelineButton"));
+                });
+                await ui.WaitUntil(() => LastClip(window, "testsrc.mp4") != null, Wait, "[+]로 구간 넣기");
+                ui.Run(() =>
+                {
+                    Assert.Equal(15L, (long)Get(LastClip(window, "testsrc.mp4"), "SourceIn"));
+                    Assert.Equal(45L, (long)Get(LastClip(window, "testsrc.mp4"), "SourceOut"));
+                    Key(window, System.Windows.Input.Key.Z, ModifierKeys.Control);
+                });
+                await ui.WaitUntil(() => ProjectClips(window).Count == 0, Wait, "다시 실행 취소");
+
+                // 원본 보기를 닫으면 I/O는 다시 타임라인 In/Out
+                ui.Run(() => Key(window, System.Windows.Input.Key.Escape));
+                await ui.WaitUntil(() => SourceLabel(window) == null, Wait, "Esc로 닫기");
+                ui.Run(() =>
+                {
+                    Key(window, System.Windows.Input.Key.Right);
+                    Key(window, System.Windows.Input.Key.I);
+                    Key(window, System.Windows.Input.Key.Right);
+                    Key(window, System.Windows.Input.Key.Right);
+                    Key(window, System.Windows.Input.Key.O);
+                    Assert.Equal(1L, (long?)Get(Project(window), "MarkIn"));
+                    Assert.Equal(3L, (long?)Get(Project(window), "MarkOut"));
+                });
+            }
+            finally
+            {
+                await CloseEditor(ui, window);
+            }
+        }
     }
 }

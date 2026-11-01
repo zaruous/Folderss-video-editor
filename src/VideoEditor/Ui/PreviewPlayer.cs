@@ -98,7 +98,11 @@ namespace VideoEditor.Ui
             EnsureBitmap(width, height);
             Bitmap.WritePixels(new Int32Rect(0, 0, width, height), bgra, width * 4, 0);
             ShownFrame = frame;
+            FrameShown?.Invoke(this, EventArgs.Empty);
         }
+
+        /// <summary>한 장을 그렸다(<see cref="ShownFrame"/>이 바뀜 — UI 스레드에서).</summary>
+        public event EventHandler FrameShown;
 
         /// <summary>frame 위치를 그린다(이전 요청은 버림). UI 스레드에서 부른다.</summary>
         public void RequestFrame(Project project, long frame)

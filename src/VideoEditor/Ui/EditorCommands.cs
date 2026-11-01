@@ -60,7 +60,8 @@ namespace VideoEditor.Ui
             }
             StopForSource();
             if (Source.ShowMedia(media))
-                Status("원본 보기: " + media.Name + " — Esc 또는 ×로 돌아갑니다(재생·재생 헤드를 옮겨도).");
+                Status("원본 보기: " + media.Name + (Source.IsVideo ? " — Space 원본 재생 · I/O 원본 In/Out · [타임라인에 넣기]로 그 구간만" : "")
+                       + " — Esc 또는 ×로 돌아갑니다(타임라인 재생·재생 헤드를 옮겨도).");
         }
 
         /// <summary>
@@ -1140,6 +1141,8 @@ namespace VideoEditor.Ui
             var trackId = track?.Id;
             string adopted = null;
             var placed = 0;
+            // 원본 보기에서 In/Out을 정한 동영상을 끌어 놓으면 그 구간만(편집 전에 읽어 둔다)
+            var ranges = infos.Select(Source.RangeFor).ToList();
             if (!Run(p =>
             {
                 foreach (var info in infos)
@@ -1157,10 +1160,10 @@ namespace VideoEditor.Ui
                     return;
                 var position = frame;
                 Track newTrack = null;
-                foreach (var info in infos)
+                for (var i = 0; i < infos.Count; i++)
                 {
                     var target = trackId != null ? p.FindTrack(trackId) : null;
-                    var clip = PlaceMedia(p, info, target, position, ref newTrack);
+                    var clip = PlaceMedia(p, infos[i], target, position, ref newTrack, ranges[i]);
                     position = clip.End;
                     placed++;
                 }
@@ -1175,19 +1178,45 @@ namespace VideoEditor.Ui
             return infos.Count;
         }
 
-        /// <summary>미디어 클립을 만든다(사진은 설정의 길이·맞춤 방식 — 기본은 화면 채우기).</summary>
-        private Clip NewClip(MediaInfo media, FrameRate rate, long frame)
+        /// <summary>
+        /// 미디어 클립을 만든다(사진은 설정의 길이·맞춤 방식 — 기본은 화면 채우기). range(원본 보기의 In/Out — <see cref="SourcePreview.RangeFor"/>)를 주면
+        /// 그 원본 구간만(SourceIn/SourceOut). 그 사이 프로젝트 레이트가 바뀌었으면(빈 프로젝트가 첫 동영상에 맞춤) 초로 바꿔 옮긴다.
+        /// </summary>
+        private Clip NewClip(MediaInfo media, FrameRate rate, long frame, (long In, long Out, FrameRate Rate)? range = null)
         {
             var clip = TimelineEdits.CreateClip(media, rate, frame, rate.ToFrames(_services.ImageSeconds));
             if (media.Kind == MediaKind.Image)
                 clip.Fit = _services.PhotoFit;
+            if (range != null && media.Kind == MediaKind.Video)
+            {
+                var r = range.Value;
+                var from = r.Rate.Equals(rate) ? r.In : rate.ToFrames(r.Rate.ToSeconds(r.In));
+                var to = r.Rate.Equals(rate) ? r.Out : rate.ToFrames(r.Rate.ToSeconds(r.Out));
+                clip.SourceIn = Math.Max(0, Math.Min(clip.SourceOut - 1, from));
+                clip.SourceOut = Math.Max(clip.SourceIn + 1, Math.Min(clip.SourceOut, to));
+            }
             return clip;
         }
 
-        /// <summary>미디어를 트랙에 놓는다. 종류가 맞지 않으면 알맞은 트랙으로(오디오 → 오디오 트랙, 동영상을 오디오 트랙에 놓으면 소리만).</summary>
-        private Clip PlaceMedia(Project p, MediaInfo media, Track target, long frame, ref Track newTrack)
+        /// <summary>
+        /// 원본 보기(동영상)에서 정한 In/Out 구간만 타임라인 끝(주 트랙)에 놓는다 — 미디어 [타임라인에 추가]·두 번 누르기와 같은 자리·같은 길.
+        /// In/Out을 정하지 않았으면 전체. 실행 취소 한 번에 사라진다.
+        /// </summary>
+        public void InsertSource()
         {
-            var clip = NewClip(media, p.Rate, frame);
+            var media = Source.IsVideo ? Project.FindMedia(Source.MediaPath) : null;
+            if (media == null)
+            {
+                Status("원본 보기에서 동영상을 열면 그 구간을 넣을 수 있습니다.");
+                return;
+            }
+            AddToTimeline(media);
+        }
+
+        /// <summary>미디어를 트랙에 놓는다. 종류가 맞지 않으면 알맞은 트랙으로(오디오 → 오디오 트랙, 동영상을 오디오 트랙에 놓으면 소리만).</summary>
+        private Clip PlaceMedia(Project p, MediaInfo media, Track target, long frame, ref Track newTrack, (long In, long Out, FrameRate Rate)? range = null)
+        {
+            var clip = NewClip(media, p.Rate, frame, range);
             var isAudio = media.Kind == MediaKind.Audio;
             // 빈 곳이나 자막 트랙에 놓으면 새 트랙(동영상은 자막 아래) — 앞서 만든 새 트랙은 종류가 같을 때만 다시 쓴다
             if (target == null || target.Subtitles)
@@ -1209,17 +1238,22 @@ namespace VideoEditor.Ui
             return clip;
         }
 
-        /// <summary>미디어를 타임라인 끝에 붙인다(동영상·사진 → 주 트랙, 오디오 → 오디오 트랙).</summary>
+        /// <summary>
+        /// 미디어를 타임라인 끝에 붙인다(동영상·사진 → 주 트랙, 오디오 → 오디오 트랙). 원본 보기가 그 동영상을 보고 In/Out을 정했으면 그 구간만.
+        /// </summary>
         public void AddToTimeline(MediaInfo media)
         {
+            var range = Source.RangeFor(media);
+            var rate = Project.Rate;
+            var what = range == null ? media.Name : media.Name + "의 " + rate.Timecode(range.Value.In) + "~" + rate.Timecode(range.Value.Out) + " 구간";
             Run(p =>
             {
-                var clip = NewClip(media, p.Rate, 0);
+                var clip = NewClip(media, p.Rate, 0, range);
                 var track = media.Kind == MediaKind.Audio
                     ? p.AudioTracks.FirstOrDefault(t => !t.Locked) ?? TimelineEdits.AddTrack(p, TrackKind.Audio)
                     : p.MainTrack;
                 TimelineEdits.Append(p, track, clip);
-            }, media.Name + "을(를) 타임라인 끝에 놓았습니다.");
+            }, what + "을(를) 타임라인 끝에 놓았습니다.");
         }
 
         public void RemoveMedia(string[] paths)

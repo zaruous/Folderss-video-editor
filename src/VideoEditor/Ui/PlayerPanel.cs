@@ -202,6 +202,8 @@ namespace VideoEditor.Ui
             AutomationProperties.SetName(sourceClose, "원본 보기 닫기");
             sourceClose.Click += (s, e) => source.Close();
             screen.Children.Add(sourceClose);
+            var transport = SourceTransport(source, commands);
+            screen.Children.Add(transport);
             Children.Add(screen);
 
             // 보일 그림: 효과 칸 미리 보기 > 원본 보기(그림이 오면) > 재생 헤드 화면
@@ -212,6 +214,7 @@ namespace VideoEditor.Ui
                 sourceText.Text = showSource ? source.Label + (source.Frame == null ? " · 불러오는 중…" : "") : "";
                 AutomationProperties.SetName(sourceLabel, sourceText.Text);
                 sourceLabel.Visibility = sourceClose.Visibility = showSource ? Visibility.Visible : Visibility.Collapsed;
+                transport.Visibility = showSource && source.IsVideo ? Visibility.Visible : Visibility.Collapsed;
                 // 원본 보기 동안은 미리 보기 틀(옮기기·크기)을 숨긴다 — 보이는 그림이 재생 헤드 화면이 아니므로
                 overlay.Visibility = source.IsOpen ? Visibility.Collapsed : Visibility.Visible;
                 UpdatePlaceholder();
@@ -254,6 +257,106 @@ namespace VideoEditor.Ui
             Unloaded += (s, e) => services.ToolChanged -= toolChanged;
             UpdateTime();
             UpdatePlaceholder();
+        }
+
+        /// <summary>
+        /// 원본 보기(동영상 미디어)의 아래 막대: [재생] 원본 위치 슬라이더(In~Out 구간 표시) 원본 타임코드 [In][Out][타임라인에 넣기].
+        /// 타임라인 재생 헤드와 따로 움직인다 — 슬라이더를 끌면 원본 플레이어가 잠깐 모아 마지막 위치만 그린다.
+        /// </summary>
+        private static FrameworkElement SourceTransport(SourcePreview source, EditorCommands commands)
+        {
+            Button Make(string text, string id, string tip, Action click)
+            {
+                var button = new Button
+                {
+                    Content = text,
+                    MinWidth = 30,
+                    Padding = new Thickness(6, 1, 6, 1),
+                    Margin = new Thickness(2, 0, 2, 0),
+                    Foreground = Brushes.White,
+                    Background = new SolidColorBrush(Color.FromArgb(0xC8, 0, 0, 0)),
+                    BorderBrush = SourceBrush,
+                    ToolTip = tip,
+                    Focusable = false
+                };
+                AutomationProperties.SetAutomationId(button, id);
+                AutomationProperties.SetName(button, tip);
+                button.Click += (s, e) => click();
+                return button;
+            }
+            var play = Make(UiKit.GlyphPlay, "SourcePlayButton", "원본 재생/일시 정지 (Space)", source.TogglePlay);
+            var playGlyph = new TextBlock { Text = UiKit.GlyphPlay, FontFamily = UiKit.IconFont, FontSize = 12 };
+            play.Content = playGlyph;
+            var markIn = Make("In", "SourceMarkInButton", "원본 In 점 (I)", source.MarkIn);
+            var markOut = Make("Out", "SourceMarkOutButton", "원본 Out 점 (O) — 이 프레임까지", source.MarkOut);
+            var insert = Make("타임라인에 넣기", "SourceInsertButton", "원본 In~Out 구간만 타임라인 끝에 넣기(In/Out이 없으면 전체 — 미디어 두 번 누르기와 같음)", commands.InsertSource);
+            var time = new TextBlock { Foreground = Brushes.White, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 4, 0) };
+            AutomationProperties.SetAutomationId(time, "SourceTimecode");
+            var slider = new Slider
+            {
+                Minimum = 0,
+                SmallChange = 1,
+                IsMoveToPointEnabled = true,
+                IsSelectionRangeEnabled = true,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 4, 0),
+                Focusable = false
+            };
+            AutomationProperties.SetAutomationId(slider, "SourceSlider");
+            AutomationProperties.SetName(slider, "원본 위치");
+            var updating = false;
+            slider.ValueChanged += (s, e) =>
+            {
+                if (!updating)
+                    source.Seek((long)Math.Round(e.NewValue));
+            };
+
+            var right = new StackPanel { Orientation = Orientation.Horizontal };
+            right.Children.Add(time);
+            right.Children.Add(markIn);
+            right.Children.Add(markOut);
+            right.Children.Add(insert);
+            var row = new DockPanel();
+            DockPanel.SetDock(play, Dock.Left);
+            row.Children.Add(play);
+            DockPanel.SetDock(right, Dock.Right);
+            row.Children.Add(right);
+            row.Children.Add(slider);
+            var bar = new Border
+            {
+                Child = row,
+                Background = new SolidColorBrush(Color.FromArgb(0xC8, 0, 0, 0)),
+                BorderBrush = SourceBrush,
+                BorderThickness = new Thickness(0, 2, 0, 0),
+                Padding = new Thickness(6, 4, 6, 4),
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Visibility = Visibility.Collapsed
+            };
+            AutomationProperties.SetAutomationId(bar, "SourceTransport");
+
+            void Update()
+            {
+                if (!source.IsVideo)
+                    return;
+                var rate = source.Rate;
+                updating = true;
+                slider.Maximum = Math.Max(0, source.Length - 1);
+                slider.LargeChange = Math.Max(1, rate.NominalFps);
+                slider.Value = source.Position;
+                slider.SelectionStart = source.InPoint ?? 0;
+                slider.SelectionEnd = source.OutPoint ?? slider.Maximum;
+                slider.IsSelectionRangeEnabled = source.InPoint.HasValue || source.OutPoint.HasValue;
+                updating = false;
+                var text = rate.Timecode(source.Position) + " / " + rate.Timecode(source.Length);
+                if (source.InPoint.HasValue || source.OutPoint.HasValue)
+                    text += "  ·  In " + rate.Timecode(source.InPoint ?? 0) + " ~ Out " + rate.Timecode(source.OutPoint ?? source.Length - 1);
+                time.Text = text;
+                AutomationProperties.SetName(time, text);
+                playGlyph.Text = source.IsPlaying ? UiKit.GlyphPause : UiKit.GlyphPlay;
+            }
+            source.TransportChanged += (s, e) => Update();
+            source.Changed += (s, e) => Update();
+            return bar;
         }
 
         private void UpdateTime()
