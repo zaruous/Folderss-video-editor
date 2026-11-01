@@ -83,12 +83,16 @@ namespace VideoEditor.Ui
             if (def.Path)
                 FitPath(animation);
             var length = kind == AnimationKind.Emphasis ? animation.Duration * animation.Repeat : animation.Duration;
+            // 바로 나타나기·사라지기: 길이가 없어 반쯤 지연한 장에서 바뀐다(멈춘 썸네일은 보이는 장)
+            if (def.Instant)
+                length = 20;
             _period = length + 20;
             _clip = TimelineEdits.CreateText(string.Concat(Letters), 0, _period);
-            animation.Delay = kind == AnimationKind.Out ? 4 : 0;
+            animation.Delay = def.Instant ? _period / 2 : kind == AnimationKind.Out ? 4 : 0;
             _clip.Animations = new List<ClipAnimation> { animation };
             // 멈춘 썸네일: 움직임이 반쯤인 장
-            _still = kind == AnimationKind.Out ? _period - 4 - animation.Duration / 2 : animation.Duration * 2 / 5;
+            _still = def.Instant ? (kind == AnimationKind.In ? _period - 1 : 0)
+                : kind == AnimationKind.Out ? _period - 4 - animation.Duration / 2 : animation.Duration * 2 / 5;
             Show(_still);
             MouseEnter += (s, e) => Start();
             MouseLeave += (s, e) => Stop();

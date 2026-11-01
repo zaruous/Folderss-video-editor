@@ -18,7 +18,7 @@ namespace VideoEditor.Core
     }
 
     /// <summary>
-    /// 효과. 나타나기·사라지기: 서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기·떠오르기·커지며 돌기·가운데서 갈라지기·흐림에서 선명하게·그려지기,
+    /// 효과. 나타나기·사라지기: 바로 나타나기(길이 없음)·서서히·날아오기·확대·튀어 오르기·닦아내기·돌며 나타나기·타자기·흩어지기·떠오르기·커지며 돌기·가운데서 갈라지기·흐림에서 선명하게·그려지기,
     /// 사라지기만: 떨어지기,
     /// 강조: 맥박·흔들기·회전·크게·작게·투명도 바꾸기·색 바꾸기·광선 깜빡임·물결·굵게 깜빡이기.
     /// 이동 경로: 직선·호·원·물결·사용자 경로(이름 앞에 Path — 강조 효과 이름과 겹치지 않게).
@@ -54,7 +54,9 @@ namespace VideoEditor.Core
         Wave,
         BoldFlash,
         Fall,
-        Draw
+        Draw,
+        // #42: 바로 나타나기·바로 사라지기
+        Appear
     }
 
     /// <summary>
@@ -131,6 +133,15 @@ namespace VideoEditor.Core
         /// <summary>색("#RRGGBB" — 색 바꾸기·광선 깜빡임). 색을 쓰지 않는 효과는 null.</summary>
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string Color { get; set; }
+        /// <summary>이동 경로의 경로 방향으로 돌기: 진행 방향(0° = 오른쪽)만큼 돌린다 — 기준 회전·회전 효과에 더한다(#42).</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Orient { get; set; }
+        /// <summary>사용자 경로를 찍은 점을 지나는 부드러운 곡선으로 잇는지(아니면 곧은 선, #42).</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Smooth { get; set; }
+        /// <summary>물결 경로의 물결 수(오르내림 횟수). null이면 <see cref="MotionPaths.WaveCount"/>(#42 전 프로젝트와 같다).</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? Waves { get; set; }
 
         public ClipAnimation Clone()
         {
@@ -182,6 +193,8 @@ namespace VideoEditor.Core
         public bool OutOnly { get; init; }
         /// <summary>획을 그리는 효과(그려지기) — 선·화살표·동그라미 치기·밑줄 요소에만 넣고(<see cref="ArtShape.Draws"/>) 그리개가 장마다 그린다.</summary>
         public bool Strokes { get; init; }
+        /// <summary>길이 없이 그 장에 바로 바뀌는 효과(바로 나타나기·사라지기 — 지연만 쓴다, 구간 길이 0).</summary>
+        public bool Instant { get; init; }
         /// <summary>고를 수 있는 방향(비었으면 방향 없음). 첫 값이 기본.</summary>
         public IReadOnlyList<AnimationDirection> Directions { get; init; } = Array.Empty<AnimationDirection>();
         public AnimationEase DefaultEase { get; init; }
@@ -233,6 +246,8 @@ namespace VideoEditor.Core
         /// <summary>효과 목록(탭에 보이는 차례).</summary>
         public static IReadOnlyList<AnimationEffectDef> All { get; } = new[]
         {
+            new AnimationEffectDef { Effect = AnimationEffect.Appear, Name = "바로 나타나기", OutName = "바로 사라지기",
+                Description = "지연이 끝나는 장에 바로 나타나고, 끝에서 지연만큼 앞의 장에서 바로 사라집니다(길이 없음).", Instant = true, DefaultSeconds = 0 },
             new AnimationEffectDef { Effect = AnimationEffect.Fade, Name = "서서히", Description = "투명에서 서서히 보이고, 서서히 투명해집니다.", DefaultSeconds = 0.5 },
             new AnimationEffectDef { Effect = AnimationEffect.Fly, Name = "날아오기", OutName = "날아가기", Description = "화면 밖에서 날아와 제자리에 멈추고, 화면 밖으로 날아갑니다.",
                 Directions = EightWays, DefaultEase = AnimationEase.Out, DefaultSeconds = 0.6 },
@@ -510,7 +525,7 @@ namespace VideoEditor.Core
                 if (!def.Directions.Contains(a.Direction))
                     a.Direction = def.DefaultDirection;
                 // 강조는 글자 전용(물결·굵게 깜빡이기)만 단위를 나눈다
-                if (clip.Kind != ClipKind.Text || !Enum.IsDefined(a.Unit) || def.Path || (def.Emphasis && !def.TextOnly))
+                if (clip.Kind != ClipKind.Text || !Enum.IsDefined(a.Unit) || def.Path || def.Instant || (def.Emphasis && !def.TextOnly))
                     a.Unit = AnimationUnit.All;
                 if (def.NeedsUnits && a.Unit == AnimationUnit.All)
                     a.Unit = AnimationUnit.Character;
@@ -521,15 +536,23 @@ namespace VideoEditor.Core
                 a.Delay = Math.Max(0, Math.Min(MaxFrames, a.Delay));
                 a.Repeat = def.Repeats ? Math.Max(0, Math.Min(MaxRepeat, a.Repeat)) : 1;
                 a.Amount = def.Amount == null ? 0 : double.IsFinite(a.Amount) ? Math.Max(def.Amount.Min, Math.Min(def.Amount.Max, a.Amount)) : def.Amount.Default;
+                if (def.Instant)
+                    a.Stagger = 0;
                 if (def.Path)
                 {
                     a.Stagger = 0;
                     a.Points = MotionPaths.Clean(a.Effect, a.Points);
+                    if (a.Effect != AnimationEffect.PathCustom)
+                        a.Smooth = false;
+                    a.Waves = a.Effect != AnimationEffect.PathWave || a.Waves == null ? null : Math.Max(1, Math.Min(MotionPaths.MaxWaves, a.Waves.Value));
                 }
                 else
                 {
                     a.Points = null;
                     a.RoundTrip = false;
+                    a.Orient = false;
+                    a.Smooth = false;
+                    a.Waves = null;
                 }
                 a.Color = def.DefaultColor == null ? null : Rgb(a.Color, def.DefaultColor);
                 result.Add(a);

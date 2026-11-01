@@ -49,7 +49,7 @@ namespace VideoEditor.Ui
             var hint = UiKit.Label((text
                 ? "효과는 위치·크기·회전 위에 더해 움직입니다. 글자는 단어·글자별로도 움직입니다(한글은 음절). 타임라인 클립 위쪽 띠의 끝을 끌어 나타나기·사라지기 길이를 바꿉니다."
                 : "효과는 위치·크기·회전 위에 더해 움직입니다. 타임라인 클립 위쪽 띠의 끝을 끌어 나타나기·사라지기 길이를 바꿉니다.")
-                + " 이동 경로는 미리 보기에 점선과 점으로 보이고, 점을 끌어 고칩니다(클립을 옮기면 경로도 함께).", true);
+                + " 이동 경로는 미리 보기에 점선과 점으로 보이고, 점을 끌어 고칩니다(클립을 옮기면 경로도 함께). 타임라인의 파란 경로 띠 끝을 끌면 한 번 길이가 바뀝니다.", true);
             hint.TextWrapping = TextWrapping.Wrap;
             panel.Children.Add(hint);
 
@@ -119,10 +119,11 @@ namespace VideoEditor.Ui
                 var current = kind == AnimationKind.In ? ClipAnimations.In(c) : kind == AnimationKind.Out ? ClipAnimations.Out(c) : ClipAnimations.PathOf(c);
                 if (current != null && current.Effect == def.Effect)
                     return;
-                // 길이·지연은 바꾸기 전 값을 이어받는다(효과만 바꿔 보기 쉽게)
+                // 길이·지연은 바꾸기 전 값을 이어받는다(효과만 바꿔 보기 쉽게). 길이 없는 바로 나타나기·사라지기와 오가면 길이는 새 효과의 기본값
                 if (current != null)
                 {
-                    animation.Duration = current.Duration;
+                    if (!def.Instant && ClipAnimations.Def(current.Effect)?.Instant != true)
+                        animation.Duration = current.Duration;
                     animation.Delay = current.Delay;
                 }
                 ClipAnimations.Set(c, kind, animation);
@@ -202,7 +203,7 @@ namespace VideoEditor.Ui
                 Choice("방향", "Direction", def.Directions, d => ClipAnimations.DirectionName(effect, d), a => a.Direction, (a, v) => a.Direction = v);
             var current0 = Find(_session.Project.FindClip(id));
             // 단위: 나타나기·사라지기와 글자 전용 강조(물결·굵게 깜빡이기)
-            if (text && kind != AnimationKind.Path && (kind != AnimationKind.Emphasis || def.TextOnly))
+            if (text && kind != AnimationKind.Path && !def.Instant && (kind != AnimationKind.Emphasis || def.TextOnly))
             {
                 var units = def.NeedsUnits ? new[] { AnimationUnit.Word, AnimationUnit.Character } : new[] { AnimationUnit.All, AnimationUnit.Word, AnimationUnit.Character };
                 Choice("단위", "Unit", units, ClipAnimations.UnitName, a => a.Unit, (a, v) =>
@@ -219,13 +220,17 @@ namespace VideoEditor.Ui
                             a.Stagger = Math.Max(0, Math.Min(100, v));
                     }));
             }
-            box.Children.Add(NumberRow(kind == AnimationKind.Emphasis || kind == AnimationKind.Path ? "한 번 길이" : "길이", prefix + "Duration", 0.1, 10, "초", id,
-                c => rate.ToSeconds(Find(c)?.Duration ?? 0), (c, v) =>
-                {
-                    var a = Find(c);
-                    if (a != null)
-                        a.Duration = Math.Max(1, Math.Min(ClipAnimations.MaxFrames, rate.ToFrames(Math.Max(0, v))));
-                }));
+            // 바로 나타나기·사라지기는 길이가 없다(지연만)
+            if (!def.Instant)
+            {
+                box.Children.Add(NumberRow(kind == AnimationKind.Emphasis || kind == AnimationKind.Path ? "한 번 길이" : "길이", prefix + "Duration", 0.1, 10, "초", id,
+                    c => rate.ToSeconds(Find(c)?.Duration ?? 0), (c, v) =>
+                    {
+                        var a = Find(c);
+                        if (a != null)
+                            a.Duration = Math.Max(1, Math.Min(ClipAnimations.MaxFrames, rate.ToFrames(Math.Max(0, v))));
+                    }));
+            }
             box.Children.Add(NumberRow("지연", prefix + "Delay", 0, 10, "초", id,
                 c => rate.ToSeconds(Find(c)?.Delay ?? 0), (c, v) =>
                 {
@@ -245,7 +250,7 @@ namespace VideoEditor.Ui
                     element.ToolTip = "0이면 클립 끝까지 되풀이합니다.";
                 box.Children.Add(repeat);
             }
-            if (effect != AnimationEffect.Typewriter)
+            if (effect != AnimationEffect.Typewriter && !def.Instant)
             {
                 var eases = (AnimationEase[])Enum.GetValues(typeof(AnimationEase));
                 Choice("이징", "Ease", eases, ClipAnimations.EaseName, a => a.Ease, (a, v) => a.Ease = v);
@@ -272,26 +277,44 @@ namespace VideoEditor.Ui
             return box;
         }
 
-        /// <summary>이동 경로 줄: 되돌아오기(한 번 안에서 갔다가 시작 자리로)와 미리 보기에서 고치는 법.</summary>
+        /// <summary>
+        /// 이동 경로 줄: 되돌아오기(한 번 안에서 갔다가 시작 자리로), 경로 방향으로 돌기, 부드러운 곡선(사용자 경로), 물결 수(물결)와 미리 보기에서 고치는 법.
+        /// </summary>
         private void AddPathRows(StackPanel box, string id, string prefix, AnimationEffect effect, Func<Clip, ClipAnimation> find, Action<Action<ClipAnimation>, string> change, List<Action> local)
         {
-            var roundTrip = new CheckBox { Content = "갔다가 돌아옴", VerticalAlignment = VerticalAlignment.Center };
-            AutomationProperties.SetAutomationId(roundTrip, prefix + "RoundTrip");
-            roundTrip.ToolTip = "한 번 길이 안에서 앞 절반은 경로를 따라 가고, 뒤 절반은 같은 길로 돌아옵니다(시작 자리에 남음).";
-            roundTrip.Click += (s, e) =>
+            CheckBox Toggle(string content, string automation, string tip, Func<ClipAnimation, bool> get, Action<ClipAnimation, bool> set)
             {
-                if (_updating)
-                    return;
-                var value = roundTrip.IsChecked == true;
-                change(a => a.RoundTrip = value, null);
-            };
-            local.Add(() =>
+                var check = new CheckBox { Content = content, VerticalAlignment = VerticalAlignment.Center, ToolTip = tip };
+                AutomationProperties.SetAutomationId(check, prefix + automation);
+                check.Click += (s, e) =>
+                {
+                    if (_updating)
+                        return;
+                    var value = check.IsChecked == true;
+                    change(a => set(a, value), null);
+                };
+                local.Add(() =>
+                {
+                    var current = find(_session.Project.FindClip(id));
+                    if (current != null)
+                        check.IsChecked = get(current);
+                });
+                return check;
+            }
+            box.Children.Add(Row("되돌아오기", Toggle("갔다가 돌아옴", "RoundTrip", "한 번 길이 안에서 앞 절반은 경로를 따라 가고, 뒤 절반은 같은 길로 돌아옵니다(시작 자리에 남음).",
+                a => a.RoundTrip, (a, v) => a.RoundTrip = v)));
+            box.Children.Add(Row("돌기", Toggle("경로 방향으로 돌기", "Orient", "진행 방향(오른쪽이 0°)으로 돌립니다. 회전·회전 효과에 더합니다.", a => a.Orient, (a, v) => a.Orient = v)));
+            if (effect == AnimationEffect.PathCustom)
+                box.Children.Add(Row("잇기", Toggle("부드러운 곡선", "Smooth", "찍은 점을 곧은 선 대신 점을 지나는 부드러운 곡선으로 잇습니다.", a => a.Smooth, (a, v) => a.Smooth = v)));
+            if (effect == AnimationEffect.PathWave)
             {
-                var current = find(_session.Project.FindClip(id));
-                if (current != null)
-                    roundTrip.IsChecked = current.RoundTrip;
-            });
-            box.Children.Add(Row("되돌아오기", roundTrip));
+                box.Children.Add(NumberRow("물결 수", prefix + "Waves", 1, MotionPaths.MaxWaves, "번", id, c => MotionPaths.Waves(find(c)), (c, v) =>
+                {
+                    var a = find(c);
+                    if (a != null)
+                        a.Waves = (int)Math.Max(1, Math.Min(MotionPaths.MaxWaves, Math.Round(v)));
+                }));
+            }
             var how = UiKit.Label(MotionPaths.CanAddPoints(effect)
                 ? "미리 보기에서 점을 끌어 고칩니다. Shift+누르기는 끝에 점을 더하고, 선을 두 번 누르면 사이에 더하고, 점을 두 번 누르면 뺍니다."
                 : "미리 보기에서 점을 끌어 고칩니다(첫 점은 클립 자리 — 클립을 옮기면 경로도 함께).", true);

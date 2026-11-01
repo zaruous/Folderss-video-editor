@@ -39,8 +39,14 @@ namespace VideoEditor.Core
         public const int MaxPoints = 32;
         /// <summary>점 좌표 상한(프로젝트 픽셀, 절댓값).</summary>
         public const double MaxOffset = 100000;
-        /// <summary>물결 수(경로 하나에 오르내림 두 번).</summary>
+        /// <summary>물결 수 기본값(경로 하나에 오르내림 두 번 — 물결 수를 정하지 않은 예전 프로젝트도 이 값).</summary>
         public const int WaveCount = 2;
+        /// <summary>물결 수 상한.</summary>
+        public const int MaxWaves = 20;
+        // 부드러운 곡선 마디의 길이를 잴 때 나누는 수(심프슨 — 짝수)
+        private const int LengthSteps = 32;
+        // 부드러운 곡선을 점선·가까운 자리 찾기로 나누는 수(마디마다)
+        private const int CurveSamples = 16;
         // 끝 자리를 정확히(1/1024 픽셀로 맞춤 — 삼각 함수 오차로 overlay가 버림한 위치가 한 픽셀 어긋나지 않게)
         private const double SnapSteps = 1024;
 
@@ -63,6 +69,18 @@ namespace VideoEditor.Core
                 default:
                     return 2;
             }
+        }
+
+        /// <summary>물결 수(정하지 않았으면 <see cref="WaveCount"/>, 1~<see cref="MaxWaves"/>).</summary>
+        public static int Waves(ClipAnimation animation)
+        {
+            return Math.Max(1, Math.Min(MaxWaves, animation?.Waves ?? WaveCount));
+        }
+
+        /// <summary>점을 지나는 부드러운 곡선으로 잇는 사용자 경로인지.</summary>
+        public static bool IsSmooth(ClipAnimation animation)
+        {
+            return animation != null && animation.Smooth && animation.Effect == AnimationEffect.PathCustom;
         }
 
         /// <summary>점을 더하고 뺄 수 있는 경로(사용자 경로).</summary>
@@ -143,9 +161,9 @@ namespace VideoEditor.Core
                 case AnimationEffect.PathCircle:
                     return Snap(Circle(p0, points[1], animation.Direction != AnimationDirection.Left, s));
                 case AnimationEffect.PathWave:
-                    return Snap(Wave(p0, points[1], animation.Amount, s));
+                    return Snap(Wave(p0, points[1], animation.Amount, Waves(animation), s));
                 case AnimationEffect.PathCustom:
-                    return Snap(Polyline(points, s));
+                    return Snap(Polyline(points, IsSmooth(animation), s));
                 default:
                     return Snap(Line(p0, points[^1], s));
             }
@@ -166,7 +184,16 @@ namespace VideoEditor.Core
             if (animation?.Points != null && (animation.Effect == AnimationEffect.PathLine || animation.Effect == AnimationEffect.PathCustom))
             {
                 var p0 = animation.Points[0];
-                return animation.Points.Select(p => (p.X - p0.X, p.Y - p0.Y)).ToList();
+                if (!IsSmooth(animation))
+                    return animation.Points.Select(p => (p.X - p0.X, p.Y - p0.Y)).ToList();
+                // 부드러운 곡선: 마디마다 마디 안의 t로 고르게 나눈 자리(찍은 점을 반드시 지난다)
+                var samples = new List<(double X, double Y)> { (0, 0) };
+                foreach (var piece in Pieces(Corners(animation.Points).Corners, true))
+                {
+                    for (var k = 1; k <= CurveSamples; k++)
+                        samples.Add(piece.At((double)k / CurveSamples));
+                }
+                return samples;
             }
             return Enumerable.Range(0, count + 1).Select(i => OffsetAt(animation, (double)i / count)).ToList();
         }
@@ -218,8 +245,8 @@ namespace VideoEditor.Core
             return (x, y);
         }
 
-        /// <summary>물결: 시작에서 끝까지 곧게 가며 옆으로(진행 방향 왼쪽이 먼저 — 오른쪽으로 가면 위로) 높이만큼 <see cref="WaveCount"/>번 오르내린다.</summary>
-        private static (MotionExpr X, MotionExpr Y) Wave(PathPoint p0, PathPoint p1, double height, MotionExpr s)
+        /// <summary>물결: 시작에서 끝까지 곧게 가며 옆으로(진행 방향 왼쪽이 먼저 — 오른쪽으로 가면 위로) 높이만큼 waves번 오르내린다.</summary>
+        private static (MotionExpr X, MotionExpr Y) Wave(PathPoint p0, PathPoint p1, double height, int waves, MotionExpr s)
         {
             double dx = p1.X - p0.X, dy = p1.Y - p0.Y;
             var length = Math.Sqrt(dx * dx + dy * dy);
@@ -227,41 +254,40 @@ namespace VideoEditor.Core
                 return (MotionExpr.Num(0), MotionExpr.Num(0));
             // 진행 방향의 왼쪽(화면은 y가 아래라 (dy, −dx))
             double nx = dy / length, ny = -dx / length;
-            var swing = MotionExpr.Sin(Exact(2 * Math.PI * WaveCount) * s);
+            var swing = MotionExpr.Sin(Exact(2 * Math.PI * waves) * s);
             return (Exact(dx) * s + Exact(nx * height) * swing, Exact(dy) * s + Exact(ny * height) * swing);
         }
 
-        /// <summary>사용자 경로: 점을 곧은 선으로 잇고 길이에 맞춰 일정한 빠르기로(길이 0인 마디는 건너뜀). s가 0~1 밖이면 첫·마지막 마디를 이어 늘인다.</summary>
-        private static (MotionExpr X, MotionExpr Y) Polyline(IReadOnlyList<PathPoint> points, MotionExpr s)
+        /// <summary>
+        /// 사용자 경로: 점을 곧은 선(smooth면 점을 지나는 부드러운 곡선)으로 잇고 마디 길이에 맞춰 나눈다(길이 0인 마디는 건너뜀 — 곧은 선은 일정한 빠르기).
+        /// s가 0~1 밖이면 첫·마지막 마디를 이어 늘인다.
+        /// </summary>
+        private static (MotionExpr X, MotionExpr Y) Polyline(IReadOnlyList<PathPoint> points, bool smooth, MotionExpr s)
         {
-            var p0 = points[0];
-            var corners = new List<PathPoint> { p0 };
-            foreach (var p in points.Skip(1))
-            {
-                var last = corners[^1];
-                if (Math.Abs(p.X - last.X) > 1e-9 || Math.Abs(p.Y - last.Y) > 1e-9)
-                    corners.Add(p);
-            }
+            return Pick(points, smooth, s, (piece, t) => (Poly(piece.Ax, piece.Bx, piece.Cx, piece.Dx, t), Poly(piece.Ay, piece.By, piece.Cy, piece.Dy, t)));
+        }
+
+        /// <summary>
+        /// 사용자 경로에서 u(= 전체 길이 × s)가 든 마디를 고르는 식: 마지막 마디부터 앞으로 감싼다(u가 i번째 마디 끝보다 작으면 그 마디).
+        /// make는 마디와 그 안의 t(마디 길이로 나눈 자리 — 0~1)로 값 식 둘을 만든다. 마디가 없으면 (0, 0).
+        /// </summary>
+        private static (MotionExpr X, MotionExpr Y) Pick(IReadOnlyList<PathPoint> points, bool smooth, MotionExpr s, Func<Piece, MotionExpr, (MotionExpr X, MotionExpr Y)> make)
+        {
+            var corners = Corners(points).Corners;
             if (corners.Count < 2)
                 return (MotionExpr.Num(0), MotionExpr.Num(0));
-            var lengths = new double[corners.Count];
-            for (var i = 1; i < corners.Count; i++)
-            {
-                double dx = corners[i].X - corners[i - 1].X, dy = corners[i].Y - corners[i - 1].Y;
-                lengths[i] = lengths[i - 1] + Math.Sqrt(dx * dx + dy * dy);
-            }
-            var total = lengths[^1];
-            var u = Exact(total) * s;
+            var pieces = Pieces(corners, smooth);
+            var lengths = new double[pieces.Count + 1];
+            for (var i = 0; i < pieces.Count; i++)
+                lengths[i + 1] = lengths[i] + pieces[i].Length;
+            var u = Exact(lengths[^1]) * s;
             (MotionExpr X, MotionExpr Y) Segment(int i)
             {
-                var a = corners[i];
-                var b = corners[i + 1];
                 var t = (u - Exact(lengths[i])) / Exact(lengths[i + 1] - lengths[i]);
-                return (Exact(a.X - p0.X) + Exact(b.X - a.X) * t, Exact(a.Y - p0.Y) + Exact(b.Y - a.Y) * t);
+                return make(pieces[i], t);
             }
-            // 마지막 마디부터 앞으로 감싼다: u가 i번째 마디 끝보다 작으면 그 마디
-            var (x, y) = Segment(corners.Count - 2);
-            for (var i = corners.Count - 3; i >= 0; i--)
+            var (x, y) = Segment(pieces.Count - 1);
+            for (var i = pieces.Count - 2; i >= 0; i--)
             {
                 var (sx, sy) = Segment(i);
                 var inside = MotionExpr.Lt(u, Exact(lengths[i + 1]));
@@ -269,6 +295,189 @@ namespace VideoEditor.Core
                 y = MotionExpr.If(inside, sy, y);
             }
             return (x, y);
+        }
+
+        /// <summary>a + (b + (c + d t) t) t — 곧은 선은 c = d = 0이라 예전 식(a + b × t) 그대로다.</summary>
+        private static MotionExpr Poly(double a, double b, double c, double d, MotionExpr t)
+        {
+            return Exact(a) + (Exact(b) + (Exact(c) + Exact(d) * t) * t) * t;
+        }
+
+        /// <summary>같은 자리 점을 뺀 꺾이는 점들과 그 원래 번호.</summary>
+        private static (List<PathPoint> Corners, List<int> Index) Corners(IReadOnlyList<PathPoint> points)
+        {
+            var corners = new List<PathPoint> { points[0] };
+            var index = new List<int> { 0 };
+            for (var i = 1; i < points.Count; i++)
+            {
+                var last = corners[^1];
+                if (Math.Abs(points[i].X - last.X) > 1e-9 || Math.Abs(points[i].Y - last.Y) > 1e-9)
+                {
+                    corners.Add(points[i]);
+                    index.Add(i);
+                }
+            }
+            return (corners, index);
+        }
+
+        /// <summary>사용자 경로의 마디 하나: 시작점 기준 자리 A + B t + C t² + D t³(t = 0에 앞 점, 1에 뒤 점)과 길이. 곧은 선은 C = D = 0이고 길이는 두 점 거리.</summary>
+        private sealed class Piece
+        {
+            public double Ax, Ay, Bx, By, Cx, Cy, Dx, Dy, Length;
+
+            public bool Straight { get { return Cx == 0 && Cy == 0 && Dx == 0 && Dy == 0; } }
+
+            public (double X, double Y) At(double t)
+            {
+                return (Ax + (Bx + (Cx + Dx * t) * t) * t, Ay + (By + (Cy + Dy * t) * t) * t);
+            }
+
+            /// <summary>t에서의 진행 방향(크기는 뜻이 없다).</summary>
+            public (double X, double Y) Tangent(double t)
+            {
+                return (Bx + (2 * Cx + 3 * Dx * t) * t, By + (2 * Cy + 3 * Dy * t) * t);
+            }
+        }
+
+        /// <summary>
+        /// 꺾이는 점(같은 자리 없음)을 잇는 마디들. smooth면 점을 지나는 부드러운 곡선 — 구심 Catmull-Rom을 3차 에르미트로 바꾼 것이라
+        /// 점 사이가 고르지 않아도 고리·뾰족한 곳이 생기지 않는다. 양 끝은 이웃 점을 반대로 비춘 점을 앞·뒤 점으로 써서 첫·끝 마디가 그 방향으로 나가고 들어온다.
+        /// 곡선 마디 길이는 심프슨 적분(<see cref="LengthSteps"/>칸). 점이 둘이면 곡선도 곧은 선이다.
+        /// </summary>
+        private static List<Piece> Pieces(List<PathPoint> corners, bool smooth)
+        {
+            var p0 = corners[0];
+            var n = corners.Count - 1;
+            var pieces = new List<Piece>();
+            for (var i = 0; i < n; i++)
+            {
+                var a = corners[i];
+                var b = corners[i + 1];
+                if (!smooth || n < 2)
+                {
+                    double dx = b.X - a.X, dy = b.Y - a.Y;
+                    pieces.Add(new Piece { Ax = a.X - p0.X, Ay = a.Y - p0.Y, Bx = dx, By = dy, Length = Math.Sqrt(dx * dx + dy * dy) });
+                    continue;
+                }
+                var before = i > 0 ? corners[i - 1] : new PathPoint(2 * a.X - b.X, 2 * a.Y - b.Y);
+                var after = i + 2 <= n ? corners[i + 2] : new PathPoint(2 * b.X - a.X, 2 * b.Y - a.Y);
+                // 매듭 간격 = 거리의 제곱근(구심)
+                static double Knot(PathPoint p, PathPoint q) => Math.Max(1e-6, Math.Sqrt(Math.Sqrt((q.X - p.X) * (q.X - p.X) + (q.Y - p.Y) * (q.Y - p.Y))));
+                double d0 = Knot(before, a), d1 = Knot(a, b), d2 = Knot(b, after);
+                double Start(double q0, double q1, double q2) => ((q1 - q0) / d0 - (q2 - q0) / (d0 + d1) + (q2 - q1) / d1) * d1;
+                double End(double q1, double q2, double q3) => ((q2 - q1) / d1 - (q3 - q1) / (d1 + d2) + (q3 - q2) / d2) * d1;
+                double m1x = Start(before.X, a.X, b.X), m1y = Start(before.Y, a.Y, b.Y);
+                double m2x = End(a.X, b.X, after.X), m2y = End(a.Y, b.Y, after.Y);
+                var piece = new Piece
+                {
+                    Ax = a.X - p0.X,
+                    Ay = a.Y - p0.Y,
+                    Bx = m1x,
+                    By = m1y,
+                    Cx = 3 * (b.X - a.X) - 2 * m1x - m2x,
+                    Cy = 3 * (b.Y - a.Y) - 2 * m1y - m2y,
+                    Dx = 2 * (a.X - b.X) + m1x + m2x,
+                    Dy = 2 * (a.Y - b.Y) + m1y + m2y
+                };
+                double Speed(double t)
+                {
+                    var (tx, ty) = piece.Tangent(t);
+                    return Math.Sqrt(tx * tx + ty * ty);
+                }
+                var sum = Speed(0) + Speed(1);
+                for (var k = 1; k < LengthSteps; k++)
+                    sum += (k % 2 == 1 ? 4 : 2) * Speed((double)k / LengthSteps);
+                piece.Length = Math.Max(1e-6, sum / (3.0 * LengthSteps));
+                pieces.Add(piece);
+            }
+            return pieces;
+        }
+
+        // ---------- 진행 방향 ----------
+
+        /// <summary>
+        /// 경로 위 자리 s에서의 진행 방향(도, 시간식 — 0 = 오른쪽, 화면에서 시계 방향이 +; 회전과 같은 뜻). 경로 방향으로 돌기(<see cref="ClipAnimation.Orient"/>)가 쓴다.
+        /// 직선은 한 각도, 호·원은 둘레의 접선(도는 쪽), 물결·곡선은 그 자리의 기울기, 꺾은선은 마디마다 그 마디의 각도.
+        /// </summary>
+        public static MotionExpr Heading(ClipAnimation animation, MotionExpr s)
+        {
+            var points = animation?.Points;
+            if (points == null || points.Count < 2)
+                return MotionExpr.Num(0);
+            var p0 = points[0];
+            const double degrees = 180 / Math.PI;
+            switch (animation.Effect)
+            {
+                case AnimationEffect.PathArc when points.Count >= 3:
+                {
+                    var (pm, p1) = (points[1], points[2]);
+                    if (!Circumcircle(p0, pm, p1, out var cx, out var cy, out _))
+                        return Chord(p0, p1);
+                    var a0 = Math.Atan2(p0.Y - cy, p0.X - cx);
+                    var toEnd = Turn(Math.Atan2(p1.Y - cy, p1.X - cx) - a0);
+                    var toMiddle = Turn(Math.Atan2(pm.Y - cy, pm.X - cx) - a0);
+                    var sweep = toMiddle < toEnd ? toEnd : toEnd - 2 * Math.PI;
+                    return Exact(a0 * degrees + (sweep > 0 ? 90 : -90)) + Exact(sweep * degrees) * s;
+                }
+                case AnimationEffect.PathCircle:
+                {
+                    var opposite = points[1];
+                    if (Math.Abs(opposite.X - p0.X) < 1e-9 && Math.Abs(opposite.Y - p0.Y) < 1e-9)
+                        return MotionExpr.Num(0);
+                    var a0 = Math.Atan2(p0.Y - opposite.Y, p0.X - opposite.X);
+                    var sweep = (animation.Direction != AnimationDirection.Left ? 1 : -1) * 2 * Math.PI;
+                    return Exact(a0 * degrees + (sweep > 0 ? 90 : -90)) + Exact(sweep * degrees) * s;
+                }
+                case AnimationEffect.PathWave:
+                {
+                    var p1 = points[1];
+                    double dx = p1.X - p0.X, dy = p1.Y - p0.Y;
+                    var length = Math.Sqrt(dx * dx + dy * dy);
+                    if (length < 1e-9)
+                        return MotionExpr.Num(0);
+                    // 물결 변위의 s 미분: d + n × 높이 × k × cos(k s)
+                    var k = 2 * Math.PI * Waves(animation);
+                    var swing = MotionExpr.Call("cos", v => Math.Cos(v[0]), Exact(k) * s);
+                    double nx = dy / length, ny = -dx / length;
+                    return Angle(Exact(dx) + Exact(nx * animation.Amount * k) * swing, Exact(dy) + Exact(ny * animation.Amount * k) * swing);
+                }
+                case AnimationEffect.PathCustom:
+                    return Pick(points, IsSmooth(animation), s, (piece, t) =>
+                    {
+                        if (piece.Straight)
+                        {
+                            var angle = MotionExpr.Num(Math.Atan2(piece.By, piece.Bx) * degrees);
+                            return (angle, angle);
+                        }
+                        var curve = Angle(Exact(piece.Bx) + (Exact(2 * piece.Cx) + Exact(3 * piece.Dx) * t) * t, Exact(piece.By) + (Exact(2 * piece.Cy) + Exact(3 * piece.Dy) * t) * t);
+                        return (curve, curve);
+                    }).X;
+                default:
+                    return Chord(p0, points[^1]);
+            }
+        }
+
+        /// <summary><see cref="Heading(ClipAnimation, MotionExpr)"/>를 C#에서 계산한 값(시험·썸네일).</summary>
+        public static double HeadingAt(ClipAnimation animation, double s)
+        {
+            return Heading(animation, MotionExpr.Num(s)).Eval(0);
+        }
+
+        /// <summary>τ의 진행 방향(도, 시간식) — 경로 시작 전(지연)은 시작 자리의, 다 한 뒤는 끝 자리의 방향. 되돌아오기는 간 움직임을 거꾸로 돌린 것이라 돌아오는 동안 각도도 거꾸로 되짚는다.</summary>
+        public static MotionExpr Rotation(Clip clip, ClipAnimation animation)
+        {
+            return Heading(animation, Progress(clip, animation));
+        }
+
+        private static MotionExpr Chord(PathPoint p0, PathPoint p1)
+        {
+            return MotionExpr.Num(Math.Atan2(p1.Y - p0.Y, p1.X - p0.X) * 180 / Math.PI);
+        }
+
+        /// <summary>방향 (x, y)의 각도(도) 식.</summary>
+        private static MotionExpr Angle(MotionExpr x, MotionExpr y)
+        {
+            return MotionExpr.Call("atan2", v => Math.Atan2(v[0], v[1]), y, x) * Exact(180 / Math.PI);
         }
 
         /// <summary>세 점을 지나는 원(한 줄이면 false).</summary>
@@ -333,21 +542,40 @@ namespace VideoEditor.Core
         /// <summary>
         /// 경로 선에서 화면 점에 가장 가까운 마디(사용자 경로 — 점 i와 i+1 사이면 i)와 그 위의 자리. 점은 시작점 기준(프로젝트 픽셀). 마디가 없으면 -1.
         /// </summary>
-        public static (int Segment, double X, double Y, double Distance) Nearest(IReadOnlyList<PathPoint> points, double x, double y)
+        /// <remarks>smooth면 점을 지나는 곡선(<see cref="IsSmooth"/>) 위에서 찾는다 — 마디마다 잘게 나눈 선으로.</remarks>
+        public static (int Segment, double X, double Y, double Distance) Nearest(IReadOnlyList<PathPoint> points, double x, double y, bool smooth = false)
         {
             var best = (-1, 0.0, 0.0, double.MaxValue);
-            if (points == null)
+            if (points == null || points.Count < 2)
                 return best;
-            for (var i = 0; i + 1 < points.Count; i++)
+            void Try(int segment, (double X, double Y) a, (double X, double Y) b)
             {
-                double ax = points[i].X, ay = points[i].Y, bx = points[i + 1].X, by = points[i + 1].Y;
-                double dx = bx - ax, dy = by - ay;
+                double dx = b.X - a.X, dy = b.Y - a.Y;
                 var length2 = dx * dx + dy * dy;
-                var t = length2 < 1e-12 ? 0 : Math.Max(0, Math.Min(1, ((x - ax) * dx + (y - ay) * dy) / length2));
-                double px = ax + dx * t, py = ay + dy * t;
+                var t = length2 < 1e-12 ? 0 : Math.Max(0, Math.Min(1, ((x - a.X) * dx + (y - a.Y) * dy) / length2));
+                double px = a.X + dx * t, py = a.Y + dy * t;
                 var distance = Math.Sqrt((x - px) * (x - px) + (y - py) * (y - py));
                 if (distance < best.Item4)
-                    best = (i, px, py, distance);
+                    best = (segment, px, py, distance);
+            }
+            var (corners, index) = Corners(points);
+            if (!smooth || corners.Count < 3)
+            {
+                for (var i = 0; i + 1 < points.Count; i++)
+                    Try(i, (points[i].X, points[i].Y), (points[i + 1].X, points[i + 1].Y));
+                return best;
+            }
+            var p0 = corners[0];
+            var pieces = Pieces(corners, true);
+            for (var k = 0; k < pieces.Count; k++)
+            {
+                // 이 마디 사이에 끼우면 원래 점 번호로 index[k + 1] 앞
+                for (var j = 0; j < CurveSamples; j++)
+                {
+                    var a = pieces[k].At((double)j / CurveSamples);
+                    var b = pieces[k].At((double)(j + 1) / CurveSamples);
+                    Try(index[k + 1] - 1, (p0.X + a.X, p0.Y + a.Y), (p0.X + b.X, p0.Y + b.Y));
+                }
             }
             return best;
         }

@@ -285,6 +285,242 @@ namespace VideoEditor.Tests
             Assert.Equal(-1, MotionPaths.Nearest(new List<PathPoint> { new PathPoint(0, 0) }, 0, 0).Segment);
         }
 
+        // ---------- #42: 경로 방향으로 돌기 · 부드러운 곡선 · 물결 수 ----------
+
+        /// <summary>경로 위 자리 s에서 가운데 차분으로 잰 진행 방향(도).</summary>
+        private static double MeasuredHeading(ClipAnimation path, double s, double step = 1e-3)
+        {
+            var (x0, y0) = MotionPaths.OffsetAt(path, s - step);
+            var (x1, y1) = MotionPaths.OffsetAt(path, s + step);
+            return Math.Atan2(y1 - y0, x1 - x0) * 180 / Math.PI;
+        }
+
+        /// <summary>두 각도(도)가 360의 배수만큼을 빼고 tolerance 안인지.</summary>
+        private static void SameAngle(double expected, double actual, double tolerance, string what)
+        {
+            var diff = ((actual - expected) % 360 + 540) % 360 - 180;
+            Assert.True(Math.Abs(diff) <= tolerance, what + ": 기대 " + expected.ToString("0.###") + "°, 실제 " + actual.ToString("0.###") + "°");
+        }
+
+        [Fact]
+        public void Orient_HeadingFollowsTheTravel_LineCircleArcWaveCustomCurve()
+        {
+            // 직선: 한 각도(오른쪽 아래 45°), 상수
+            var line = Path(AnimationEffect.PathLine, 10, 0, 0, 100, 100);
+            Assert.Equal(45, MotionPaths.HeadingAt(line, 0.3), 9);
+            // 원(시계 방향, 시작이 위): 처음은 오른쪽(0°), 1/4 바퀴에 아래(90°) — 반대로 돌면 처음은 왼쪽(180°)
+            var circle = Path(AnimationEffect.PathCircle, 10, 0, 0, 0, 300);
+            Assert.Equal(0, MotionPaths.HeadingAt(circle, 0), 9);
+            SameAngle(90, MotionPaths.HeadingAt(circle, 0.25), 1e-9, "원 1/4");
+            circle.Direction = AnimationDirection.Left;
+            SameAngle(180, MotionPaths.HeadingAt(circle, 0), 1e-9, "반대로 도는 원");
+            // 장마다 진행 방향(차분으로 잰 것)과 같다: 호·원·물결(세 번)·꺾은선·곡선
+            var wave = Path(AnimationEffect.PathWave, 10, 0, 0, 600, -80);
+            wave.Amount = 60;
+            wave.Waves = 3;
+            var custom = Path(AnimationEffect.PathCustom, 10, 0, 0, 150, -150, 300, 0, 450, -150, 500, 100);
+            var curve = Path(AnimationEffect.PathCustom, 10, 0, 0, 150, -150, 300, 0, 450, -150, 500, 100);
+            curve.Smooth = true;
+            var paths = new[] { Path(AnimationEffect.PathArc, 10, 0, 0, 137, -91, 311, 23), circle, wave, custom, curve };
+            foreach (var path in paths)
+            {
+                foreach (var s in new[] { 0.03, 0.17, 0.31, 0.49, 0.62, 0.77, 0.91 })
+                {
+                    // 꺾은선은 꺾이는 점 근처를 피한다(차분이 두 마디에 걸침)
+                    var measured = MeasuredHeading(path, s);
+                    SameAngle(measured, MotionPaths.HeadingAt(path, s), 0.5, path.Effect + (path.Smooth ? "(곡선)" : "") + " s=" + s);
+                }
+            }
+        }
+
+        [Fact]
+        public void Orient_AddsToBaseAndRotateEffect_RoundTripRetracesWithoutFlip_GraphRotates()
+        {
+            var (project, clip) = VideoProject();
+            var circle = Path(AnimationEffect.PathCircle, 20, 0, 0, 0, 200);
+            circle.Delay = 4;
+            clip.Animations = new List<ClipAnimation> { circle };
+            // 켜지 않으면 회전이 없다(예전 그대로)
+            Assert.Null(AnimationMotion.ObjectMotion(clip, false).Rotation);
+            circle.Orient = true;
+            var motion = AnimationMotion.ObjectMotion(clip, false);
+            // 지연 동안은 시작 자리의 방향, 장마다 그 자리의 진행 방향, 다 돈 뒤는 끝 자리(원은 시작과 같음)
+            foreach (var f in new double[] { 0, 4, 9, 14, 19, 24, 40 })
+            {
+                var s = Math.Max(0, Math.Min(1, (f - 4) / 20));
+                SameAngle(MotionPaths.HeadingAt(circle, s), motion.Rotation.Eval(f), 1e-9, f + "장");
+            }
+            // 회전 효과와 더한다(합치는 곳 RotateChain: 기준 회전 + 효과)
+            var rotate = ClipAnimations.Create(ClipAnimations.Def(AnimationEffect.Rotate), AnimationKind.Emphasis, FrameRate.Default);
+            rotate.Duration = 10;
+            rotate.Amount = 90;
+            rotate.Ease = AnimationEase.Linear;
+            clip.Animations = new List<ClipAnimation> { rotate, circle };
+            var both = AnimationMotion.ObjectMotion(clip, false);
+            foreach (var f in new double[] { 0, 5, 9, 14, 30 })
+                Assert.Equal(motion.Rotation.Eval(f) + 90 * Math.Min(1, f / 10), both.Rotation.Eval(f), 9);
+            // 되돌아오기: 돌아오는 동안 간 움직임을 거꾸로 되짚는다(같은 자리 = 같은 각도, 뒤집지 않음)
+            var line = Path(AnimationEffect.PathCustom, 20, 0, 0, 100, 0, 100, 100);
+            line.Orient = true;
+            line.RoundTrip = true;
+            clip.Animations = new List<ClipAnimation> { line };
+            var back = AnimationMotion.ObjectMotion(clip, false);
+            Assert.Equal(0, back.Rotation.Eval(2), 9);
+            Assert.Equal(90, back.Rotation.Eval(8), 9);
+            Assert.Equal(90, back.Rotation.Eval(12), 9);
+            Assert.Equal(0, back.Rotation.Eval(18), 9);
+
+            // 그래프: 직선의 진행 방향은 한 각도라 rotate 각도 하나, 기준 회전(클립 30°)에 더한다
+            clip.Rotation = 30;
+            var straight = Path(AnimationEffect.PathLine, 10, 0, 0, 100, 100);
+            straight.Orient = true;
+            clip.Animations = new List<ClipAnimation> { straight };
+            var filter = RenderGraph.Build(project, Options(20, 30)).Filter;
+            Assert.Contains("rotate=a='75*PI/180'", filter);
+            // 원은 장마다 바뀌는 각도 식
+            clip.Rotation = 0;
+            clip.Animations = new List<ClipAnimation> { circle };
+            Assert.Matches("rotate=a='[^']*round\\(t\\*30/1\\)[^']*\\*PI/180'", RenderGraph.Build(project, Options()).Filter);
+        }
+
+        [Fact]
+        public void SmoothCurve_PassesThePoints_EndsExactly_TwoPointsIsTheLine()
+        {
+            var (_, clip) = VideoProject();
+            var points = new double[] { 0, 0, 137, -91, 311, 23, 377, 205, 120, 260 };
+            var polyline = Path(AnimationEffect.PathCustom, 24, points);
+            var curve = Path(AnimationEffect.PathCustom, 24, points);
+            curve.Smooth = true;
+            // 시작은 (0, 0), 끝 장은 끝점에 정확히(1/1024 픽셀로 맞춤)
+            Assert.Equal((0.0, 0.0), MotionPaths.OffsetAt(curve, 0));
+            Assert.Equal((120.0, 260.0), MotionPaths.OffsetAt(curve, 1));
+            curve.Delay = 3;
+            curve.Ease = AnimationEase.Elastic;
+            clip.Animations = new List<ClipAnimation> { curve };
+            var motion = AnimationMotion.ObjectMotion(clip, false);
+            Assert.Equal((120.0, 260.0), (motion.ShiftX.Eval(27), motion.ShiftY.Eval(27)));
+            Assert.Equal((120.0, 260.0), (motion.ShiftX.Eval(59), motion.ShiftY.Eval(59)));
+            var text = motion.ShiftX.ToFfmpeg("t");
+            Assert.Contains("if(lt(", text);
+            Assert.DoesNotMatch("[0-9][eE][-+]?[0-9]", text);
+            // 점선은 마디마다 16칸 — 찍은 점을 지난다
+            var samples = MotionPaths.Samples(curve, 8);
+            Assert.Equal(1 + 4 * 16, samples.Count);
+            for (var k = 1; k <= 4; k++)
+                Near((points[k * 2], points[k * 2 + 1]), samples[k * 16], 1e-9);
+            // 곧은 선이 아니다(첫 마디 가운데가 꺾은선보다 바깥으로 부푼다)
+            var mid = samples[8];
+            Assert.True(Math.Abs(mid.X - 68.5) + Math.Abs(mid.Y + 45.5) > 3, "곡선 가운데 " + mid);
+            // 점이 둘이면 곡선도 직선과 같은 식(같은 글)
+            var two = Path(AnimationEffect.PathCustom, 10, 0, 0, 200, 40);
+            clip.Animations = new List<ClipAnimation> { two };
+            var straight = AnimationMotion.ObjectMotion(clip, false).ShiftX.ToFfmpeg("t");
+            two.Smooth = true;
+            Assert.Equal(straight, AnimationMotion.ObjectMotion(clip, false).ShiftX.ToFfmpeg("t"));
+            // 부드러운 곡선을 끄면 꺾은선(다른 식)
+            clip.Animations = new List<ClipAnimation> { polyline };
+            Assert.NotEqual(text, AnimationMotion.ObjectMotion(clip, false).ShiftX.ToFfmpeg("t"));
+        }
+
+        [Fact]
+        public void SmoothCurve_NearestFindsTheCurve_InsertsBetweenTheRightPoints()
+        {
+            var points = new List<PathPoint> { new PathPoint(0, 0), new PathPoint(100, -100), new PathPoint(200, 0), new PathPoint(300, -100) };
+            var curve = Path(AnimationEffect.PathCustom, 10);
+            curve.Points = points;
+            curve.Smooth = true;
+            // 둘째 마디 위의 한 자리: 곡선 위에서는 거의 0, 꺾은선에서는 떨어져 있다
+            var on = MotionPaths.Samples(curve, 8)[16 + 5];
+            var (segment, _, _, distance) = MotionPaths.Nearest(points, on.X, on.Y, true);
+            Assert.Equal(1, segment);
+            Assert.True(distance < 0.5, "곡선 위 거리 " + distance);
+            Assert.True(MotionPaths.Nearest(points, on.X, on.Y).Distance > distance);
+        }
+
+        [Fact]
+        public void WaveCount_SetsTheSwings_DefaultIsTwo_CleanClamps()
+        {
+            var wave = Path(AnimationEffect.PathWave, 10, 0, 0, 600, 0);
+            wave.Amount = 60;
+            // 정하지 않으면 두 번(예전과 같은 자리) — 첫 마루는 1/8
+            Assert.Null(wave.Waves);
+            Near((75, -60), MotionPaths.OffsetAt(wave, 0.125), 1e-3);
+            var (_, clip) = VideoProject();
+            clip.Animations = new List<ClipAnimation> { wave };
+            var two = AnimationMotion.ObjectMotion(clip, false).ShiftY.ToFfmpeg("t");
+            wave.Waves = 2;
+            Assert.Equal(two, AnimationMotion.ObjectMotion(clip, false).ShiftY.ToFfmpeg("t"));
+            // 세 번: 마루는 1/12, 5/12, 9/12, 골은 3/12 — 끝은 끝점
+            wave.Waves = 3;
+            Near((50, -60), MotionPaths.OffsetAt(wave, 1.0 / 12), 1e-3);
+            Near((150, 60), MotionPaths.OffsetAt(wave, 3.0 / 12), 1e-3);
+            Near((450, -60), MotionPaths.OffsetAt(wave, 9.0 / 12), 1e-3);
+            Assert.Equal((600.0, 0.0), MotionPaths.OffsetAt(wave, 1));
+            // 읽을 때 1~20으로, 물결이 아니면 버린다(곡선은 사용자 경로만, 돌기·곡선·물결 수는 경로가 아니면 버린다)
+            wave.Waves = 0;
+            Assert.Equal(1, ClipAnimations.Clean(clip)[0].Waves);
+            wave.Waves = 99;
+            Assert.Equal(MotionPaths.MaxWaves, ClipAnimations.Clean(clip)[0].Waves);
+            var line = Path(AnimationEffect.PathLine, 10);
+            line.Waves = 5;
+            line.Smooth = true;
+            line.Orient = true;
+            var fade = ClipAnimations.Create(ClipAnimations.Def(AnimationEffect.Fade), AnimationKind.In, FrameRate.Default);
+            fade.Orient = true;
+            fade.Smooth = true;
+            fade.Waves = 3;
+            clip.Animations = new List<ClipAnimation> { fade, line };
+            var clean = ClipAnimations.Clean(clip);
+            Assert.Equal((false, false, (int?)null), (clean[0].Orient, clean[0].Smooth, clean[0].Waves));
+            Assert.Equal((true, false, (int?)null), (clean[1].Orient, clean[1].Smooth, clean[1].Waves));
+        }
+
+        [Fact]
+        public void Save_NewPathFieldsOptional_ReleasedFormat4LoadsUnchanged()
+        {
+            var project = TestProjects.Empty(magnetic: false);
+            var clip = TimelineEdits.CreateText("경로", 0, 60);
+            TimelineEdits.Place(project, project.MainTrack, clip, 0);
+            var custom = Path(AnimationEffect.PathCustom, 30, 0, 0, 100, -50, 200, 0);
+            clip.Animations = new List<ClipAnimation> { custom };
+            // 새 값을 쓰지 않으면 저장 글에 새 키가 없다(v0.3.0이 쓴 글과 같다) — 형식은 4 그대로
+            var plain = ProjectFile.Snapshot(project);
+            Assert.DoesNotContain("\"Orient\"", plain);
+            Assert.DoesNotContain("\"Smooth\"", plain);
+            Assert.DoesNotContain("\"Waves\"", plain);
+            // v0.3.0이 쓴 글(새 키 없음)을 읽으면 꺼진 값이고, 다시 쓰면 같은 글
+            var loaded = ProjectFile.FromSnapshot(plain);
+            var path = ClipAnimations.PathOf(loaded.MainTrack.Clips[0]);
+            Assert.Equal((false, false, (int?)null), (path.Orient, path.Smooth, path.Waves));
+            Assert.Equal(plain, ProjectFile.Snapshot(loaded));
+            // 켜면 저장되고 읽힌다
+            custom.Orient = true;
+            custom.Smooth = true;
+            var wave = Path(AnimationEffect.PathWave, 30, 0, 0, 300, 0);
+            wave.Waves = 4;
+            var other = TimelineEdits.CreateText("물결", 0, 60);
+            TimelineEdits.Place(project, TimelineEdits.AddTrack(project, TrackKind.Video), other, 0);
+            other.Animations = new List<ClipAnimation> { wave };
+            var json = JsonNode.Parse(ProjectFile.Snapshot(project));
+            // 저장 형식은 4 그대로(새 값은 형식 4 안의 선택 키)
+            var file = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "fv-path42-" + Guid.NewGuid().ToString("N") + ".fvproj");
+            try
+            {
+                ProjectFile.Save(project, file);
+                Assert.Equal(Project.AnimationVersion, (int)JsonNode.Parse(File.ReadAllText(file))["Version"]);
+                Assert.Equal(4, Project.AnimationVersion);
+            }
+            finally
+            {
+                File.Delete(file);
+            }
+            var back = ProjectFile.FromSnapshot(json.ToJsonString());
+            var customBack = ClipAnimations.PathOf(back.AllClips.First(c => c.Text == "경로"));
+            var waveBack = ClipAnimations.PathOf(back.AllClips.First(c => c.Text == "물결"));
+            Assert.Equal((true, true), (customBack.Orient, customBack.Smooth));
+            Assert.Equal(4, waveBack.Waves);
+        }
+
         // ---------- 렌더 그래프 ----------
 
         [Fact]

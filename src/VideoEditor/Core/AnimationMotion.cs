@@ -431,14 +431,16 @@ namespace VideoEditor.Core
         /// <summary>
         /// 나타나기·사라지기의 구간(클립 안 프레임 [Start, Start + Length)). 나타나기는 지연 뒤부터, 사라지기는 끝에서 지연만큼 앞에서 끝난다.
         /// 사라지기는 나타나기가 끝난 뒤에서 시작한다(짧은 클립에서 둘이 겹치면 사라지기를 줄인다).
+        /// 바로 나타나기·사라지기(<see cref="AnimationEffectDef.Instant"/>)는 길이 0 — 나타나기는 지연 장부터 보이고, 사라지기는 클립 끝 − 지연 장부터 없다.
         /// </summary>
         public static (long Start, long Length) Window(Clip clip, ClipAnimation animation)
         {
             var duration = clip.Duration;
+            var length = ClipAnimations.Def(animation.Effect)?.Instant == true ? 0 : Math.Max(1, animation.Duration);
             if (animation.Kind == AnimationKind.Out)
             {
                 var end = Math.Max(0, duration - Math.Max(0, animation.Delay));
-                var start = Math.Max(0, end - Math.Max(1, animation.Duration));
+                var start = Math.Max(0, end - length);
                 var before = ClipAnimations.In(clip);
                 if (before != null)
                 {
@@ -448,7 +450,7 @@ namespace VideoEditor.Core
                 return (start, end - start);
             }
             var begin = Math.Min(duration, Math.Max(0, animation.Delay));
-            return (begin, Math.Min(Math.Max(1, animation.Duration), duration - begin));
+            return (begin, Math.Min(length, duration - begin));
         }
 
         /// <summary>강조의 구간: 시작, 한 번의 길이, 끝(반복을 다 한 뒤 또는 클립 끝).</summary>
@@ -559,6 +561,9 @@ namespace VideoEditor.Core
                         shiftX = shiftX == null ? pathX : shiftX + pathX;
                     if (pathY.Constant != 0)
                         shiftY = shiftY == null ? pathY : shiftY + pathY;
+                    // 경로 방향으로 돌기: 진행 방향을 회전 효과와 함께 더한다(합치는 곳은 RenderGraph.RotateChain — 기준 회전 + 효과)
+                    if (animation.Orient)
+                        Rotate(MotionPaths.Rotation(clip, animation));
                     continue;
                 }
                 if (animation.Kind == AnimationKind.Emphasis)
@@ -580,6 +585,10 @@ namespace VideoEditor.Core
                 var (vx, vy) = Vector(animation.Direction);
                 switch (animation.Effect)
                 {
+                    case AnimationEffect.Appear:
+                        // 길이 0인 구간: 그 장부터 1(나타나기) 또는 0(사라지기) — 이징 없이
+                        Fade(rest);
+                        break;
                     case AnimationEffect.Fade:
                     case AnimationEffect.Scatter:
                         Fade(e);
@@ -750,6 +759,9 @@ namespace VideoEditor.Core
             var (vx, vy) = Vector(animation.Direction);
             switch (animation.Effect)
             {
+                case AnimationEffect.Appear:
+                    pose.Opacity = q >= 1 ? 1 : 0;
+                    break;
                 case AnimationEffect.Fade:
                     pose.Opacity = e;
                     break;

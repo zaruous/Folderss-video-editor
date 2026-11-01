@@ -347,8 +347,9 @@ namespace VideoEditor.Tests
             foreach (var path in paths)
             {
                 var name = string.Join(".", path.Select(p => p.Name));
-                // 이동 경로의 점·되돌아오기(overlay)와 색 바꾸기·광선의 색(FFmpeg 체인)은 글자별 장(그리개 PNG)에 영향이 없어 키에 없다
-                if (notDrawn.Contains(name) || name.StartsWith("Animation.", StringComparison.Ordinal) && (name.EndsWith(".Points", StringComparison.Ordinal) || name.EndsWith(".RoundTrip", StringComparison.Ordinal) || name.EndsWith(".Color", StringComparison.Ordinal)))
+                // 이동 경로의 점·되돌아오기·돌기·곡선·물결 수(overlay·회전)와 색 바꾸기·광선의 색(FFmpeg 체인)은 글자별 장(그리개 PNG)에 영향이 없어 키에 없다
+                var pathOnly = new[] { ".Points", ".RoundTrip", ".Orient", ".Smooth", ".Waves", ".Color" };
+                if (notDrawn.Contains(name) || name.StartsWith("Animation.", StringComparison.Ordinal) && pathOnly.Any(n => name.EndsWith(n, StringComparison.Ordinal)))
                     continue;
                 var kind = kindFor.TryGetValue(name, out var used) ? used : ArtKind.Rectangle;
                 var baseline = WithArt(kind).Key(1);

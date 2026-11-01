@@ -173,6 +173,135 @@ namespace VideoEditor.Tests
         }
 
         [FfmpegFact]
+        public void Orient_LineEndIsTheRotatedStill_CurveAndWaveCountEndExactly()
+        {
+            // 경로 방향으로 돌기(#42): 오른쪽 아래 45°로 가는 직선 — 끝 장은 같은 직선에 45° 돌기를 다 한 회전 효과를 준 그림과 바이트까지 같다
+            var (project, clip) = BlueProject();
+            var line = Path(AnimationEffect.PathLine, 10, AnimationEase.InOut, 0, 0, 40, 40);
+            line.Orient = true;
+            clip.Animations = new List<ClipAnimation> { line };
+            var oriented = Frame(project, 12);
+            var plain = Path(AnimationEffect.PathLine, 10, AnimationEase.InOut, 0, 0, 40, 40);
+            var rotate = ClipAnimations.Create(ClipAnimations.Def(AnimationEffect.Rotate), AnimationKind.Emphasis, project.Rate);
+            rotate.Duration = 1;
+            rotate.Amount = 45;
+            rotate.Direction = AnimationDirection.Right;
+            clip.Animations = new List<ClipAnimation> { plain, rotate };
+            var expected = Frame(project, 12);
+            _out.WriteLine("돌린 끝 장 " + BlueBox(oriented) + " · 돌리지 않은 상자 (120, 100, 279, 219)");
+            Assert.Equal(0, MaxDiff(expected, oriented));
+            // 돌아 있다(마름모라 상자가 넓다)
+            var box = BlueBox(oriented);
+            Assert.True(box.Right - box.Left > 185, "45° 돈 상자 " + box);
+
+            // 부드러운 곡선 사용자 경로·물결 세 번: 끝 장은 끝점에 둔 그림과 바이트까지 같다
+            var curve = Path(AnimationEffect.PathCustom, 12, AnimationEase.Out, 0, 0, 33, -20, 50, 17, 13, 41, -9, 30);
+            curve.Smooth = true;
+            var wave = Path(AnimationEffect.PathWave, 12, AnimationEase.Linear, 0, 0, 57, 31);
+            wave.Waves = 3;
+            wave.Amount = 25;
+            foreach (var (path, x, y) in new[] { (curve, -9.0, 30.0), (wave, 57.0, 31.0) })
+            {
+                clip.Animations = new List<ClipAnimation> { path };
+                var middle = BlueBox(Frame(project, 6));
+                _out.WriteLine(path.Effect + " 가운데 장 " + middle);
+                Assert.Equal(0, MaxDiff(StillAt(project, clip, x, y, 12), Frame(project, 12)));
+            }
+        }
+
+        [FfmpegFact]
+        public void Appear_InstantInAndOut_OnTheExactFrame()
+        {
+            // 바로 나타나기(지연 6)·바로 사라지기(지연 4): 5장은 없고 6장은 정지 그림 그대로, 클립 끝 − 5장은 그대로이고 끝 − 4장은 없다
+            var (project, clip) = BlueProject();
+            var appear = ClipAnimations.Create(ClipAnimations.Def(AnimationEffect.Appear), AnimationKind.In, project.Rate);
+            appear.Delay = 6;
+            var vanish = ClipAnimations.Create(ClipAnimations.Def(AnimationEffect.Appear), AnimationKind.Out, project.Rate);
+            vanish.Delay = 4;
+            clip.Animations = new List<ClipAnimation> { appear, vanish };
+            Assert.Equal((-1, -1, -1, -1), BlueBox(Frame(project, 5)));
+            Assert.Equal(0, MaxDiff(StillAt(project, clip, 0, 0, 6), Frame(project, 6)));
+            var gone = clip.Duration - 4;
+            Assert.Equal(0, MaxDiff(StillAt(project, clip, 0, 0, gone - 1), Frame(project, gone - 1)));
+            Assert.Equal((-1, -1, -1, -1), BlueBox(Frame(project, gone)));
+        }
+
+        [FfmpegFact]
+        public async Task OrientCurveWaveCountAppear_PreviewEqualsExport()
+        {
+            var (project, video) = BlueProject();
+            var circle = Path(AnimationEffect.PathCircle, 20, AnimationEase.InOut, 0, 0, 0, 60);
+            circle.Orient = true;
+            video.Rotation = 10;
+            var rotate = ClipAnimations.Create(ClipAnimations.Def(AnimationEffect.Rotate), AnimationKind.Emphasis, project.Rate);
+            rotate.Duration = 15;
+            rotate.Amount = 30;
+            video.Animations = new List<ClipAnimation> { rotate, circle };
+            var image = TimelineEdits.CreateClip(FfmpegMedia.Probe(FfmpegMedia.RedImage), project.Rate, 0, 30);
+            TimelineEdits.Place(project, TimelineEdits.AddTrack(project, TrackKind.Video), image, 0);
+            image.Scale = 0.3;
+            image.X = -80;
+            var curve = Path(AnimationEffect.PathCustom, 18, AnimationEase.Linear, 0, 0, 40, -30, 80, 0, 40, 30);
+            curve.Smooth = true;
+            curve.Orient = true;
+            curve.RoundTrip = true;
+            var appear = ClipAnimations.Create(ClipAnimations.Def(AnimationEffect.Appear), AnimationKind.In, project.Rate);
+            appear.Delay = 4;
+            image.Animations = new List<ClipAnimation> { appear, curve };
+            var text = TimelineEdits.CreateText("경로", 0, 30);
+            text.Style = TextStyle.FromLegacy(text);
+            TimelineEdits.Place(project, TimelineEdits.AddTrack(project, TrackKind.Video), text, 0);
+            var wave = Path(AnimationEffect.PathWave, 15, AnimationEase.Linear, 0, 0, 120, 0);
+            wave.Amount = 20;
+            wave.Waves = 4;
+            wave.Orient = true;
+            var vanish = ClipAnimations.Create(ClipAnimations.Def(AnimationEffect.Appear), AnimationKind.Out, project.Rate);
+            vanish.Delay = 3;
+            text.Animations = new List<ClipAnimation> { wave, vanish };
+            await AssertPreviewEqualsExport(project, new long[] { 3, 4, 9, 14, 22, 26, 27, 29 }, new FrameColorRasterizer());
+        }
+
+        /// <summary>미리 보기 한 장과 내보낸 같은 장의 평균 차이가 작다(인코딩 손실만).</summary>
+        private async Task AssertPreviewEqualsExport(Project project, long[] checks, ITextRasterizer rasterizer)
+        {
+            var previews = checks.Select(f => Frame(project, f, rasterizer)).ToList();
+            var output = System.IO.Path.Combine(FfmpegMedia.Folder, "path42-" + Guid.NewGuid().ToString("N") + ".mp4");
+            try
+            {
+                await Exporter.Export(FfmpegMedia.Tool, project, new ExportSettings
+                {
+                    OutputPath = output,
+                    Width = Width,
+                    Height = Height,
+                    Encoder = "mpeg4",
+                    Quality = 0,
+                    From = 0,
+                    To = project.Duration
+                }, null, CancellationToken.None, rasterizer);
+                for (var i = 0; i < checks.Length; i++)
+                {
+                    var exported = await FfmpegRunner.RunBytes(FfmpegMedia.Tool.FfmpegPath,
+                        new[] { "-hide_banner", "-nostdin", "-loglevel", "error", "-i", output, "-vf", "select=eq(n\\," + checks[i] + ")", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1" },
+                        TimeSpan.FromMinutes(1), CancellationToken.None);
+                    Assert.Equal(previews[i].Length, exported.Length);
+                    long diff = 0;
+                    for (var k = 0; k < exported.Length; k++)
+                    {
+                        if (k % 4 != 3)
+                            diff += Math.Abs(previews[i][k] - exported[k]);
+                    }
+                    var mean = diff / (exported.Length * 0.75);
+                    _out.WriteLine(checks[i] + "장: 평균 차이 " + mean.ToString("0.00"));
+                    Assert.True(mean < 4, checks[i] + "장 미리 보기와 내보내기의 평균 차이 " + mean);
+                }
+            }
+            finally
+            {
+                File.Delete(output);
+            }
+        }
+
+        [FfmpegFact]
         public async Task PathOnVideoImageAndStyledText_PreviewEqualsExport()
         {
             var (project, video) = BlueProject();
