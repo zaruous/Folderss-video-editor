@@ -36,12 +36,56 @@ namespace VideoEditor.Ui
             _player = player;
             _owner = owner;
             EffectHover = new EffectHoverPreview(session, services, player, owner.Dispatcher);
+            Source = new SourcePreview(session, services, player, owner.Dispatcher);
+            Source.Failed += Status;
         }
 
         public TimelineView Timeline { get; set; }
 
         /// <summary>효과 칸에 마우스를 올려 둔 동안 고른 클립에 그 효과를 얹어 미리 보기 화면에 보이기(효과 탭이 부르고 플레이어 패널이 보인다).</summary>
         public EffectHoverPreview EffectHover { get; }
+
+        /// <summary>원본 보기: 미디어 패널·타임라인에서 누른 것 하나를 미리 보기 화면에 잠시 보이기(플레이어 패널이 보인다).</summary>
+        public SourcePreview Source { get; }
+
+        /// <summary>미디어 하나를 원본 보기로(재생 중이면 멈춘다). 오디오·FFmpeg 없는 동영상은 열지 않는다.</summary>
+        public void ShowMediaSource(MediaInfo media)
+        {
+            if (media == null)
+                return;
+            if (media.Kind == MediaKind.Audio)
+            {
+                Source.Close();
+                return;
+            }
+            StopForSource();
+            if (Source.ShowMedia(media))
+                Status("원본 보기: " + media.Name + " — Esc 또는 ×로 돌아갑니다(재생·재생 헤드를 옮겨도).");
+        }
+
+        /// <summary>
+        /// 타임라인에서 누른 클립을 원본 보기로 — 재생 헤드가 클립 밖일 때만(안이면 프로그램 화면에 이미 보이고 미리 보기에서 바로 옮기고 고칠 수 있게 둔다).
+        /// 재생 중이면 멈추고 보인다.
+        /// </summary>
+        public void ShowClipSource(Clip clip)
+        {
+            if (clip == null)
+            {
+                Source.Close();
+                return;
+            }
+            StopForSource();
+            if (clip.Contains(_session.Playhead) || !Source.ShowClip(clip))
+                Source.Close();
+        }
+
+        private void StopForSource()
+        {
+            if (!_player.IsPlaying)
+                return;
+            _player.Stop();
+            RefreshPreview();
+        }
 
         /// <summary>상태 줄 글.</summary>
         public event Action<string> StatusChanged;
@@ -194,6 +238,16 @@ namespace VideoEditor.Ui
         public void SetSpeed(string id, double speed)
         {
             Run(p => TimelineEdits.SetSpeed(p, p.FindClip(id), speed), "속도 ×" + UiKit.Number(speed));
+        }
+
+        /// <summary>여러 클립의 속도를 한 번에(실행 취소 한 단계 — 속성 패널에서 같은 종류를 여럿 골랐을 때). 없어진 클립은 건너뛴다.</summary>
+        public void SetSpeed(IReadOnlyList<string> ids, double speed)
+        {
+            Run(p =>
+            {
+                foreach (var clip in ids.Select(p.FindClip).Where(c => c != null).ToList())
+                    TimelineEdits.SetSpeed(p, clip, speed);
+            }, ids.Count + "개 클립 속도 ×" + UiKit.Number(speed));
         }
 
         /// <summary>속도·길이(Ctrl+R): 동영상·오디오는 속도, 사진·글자는 길이(초)를 묻는다.</summary>

@@ -25,6 +25,14 @@ namespace VideoEditor.Ui
         private readonly Button _play;
         private readonly ToggleButton _mute;
         private readonly ComboBox _quality = new ComboBox { Width = 72, VerticalAlignment = VerticalAlignment.Center };
+        // 원본 보기 표시 색(호박색 — 화면 위 검은 바탕에 얹으므로 테마와 관계없이 같은 색)
+        private static readonly Brush SourceBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xF0, 0xA9, 0x4A)));
+
+        private static Brush Freeze(Brush brush)
+        {
+            brush.Freeze();
+            return brush;
+        }
 
         public PlayerPanel(EditorSession session, EditorServices services, EditorCommands commands, PreviewPlayer player)
         {
@@ -158,19 +166,69 @@ namespace VideoEditor.Ui
             };
             AutomationProperties.SetAutomationId(_placeholder, "PreviewPlaceholder");
             screen.Children.Add(_placeholder);
+            // 원본 보기(미디어·클립을 눌렀을 때 — SourcePreview): 왼쪽 위 호박색 "원본 · 이름", 오른쪽 위 [× 돌아가기]
+            var source = commands.Source;
+            var sourceText = new TextBlock { Foreground = Brushes.White, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis };
+            var sourceLabel = new Border
+            {
+                Child = sourceText,
+                Background = new SolidColorBrush(Color.FromArgb(0xC8, 0, 0, 0)),
+                BorderBrush = SourceBrush,
+                BorderThickness = new Thickness(3, 0, 0, 0),
+                CornerRadius = new CornerRadius(2),
+                Padding = new Thickness(7, 3, 8, 3),
+                Margin = new Thickness(8, 8, 96, 8),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                IsHitTestVisible = false,
+                Visibility = Visibility.Collapsed
+            };
+            AutomationProperties.SetAutomationId(sourceLabel, "SourcePreviewLabel");
+            screen.Children.Add(sourceLabel);
+            var sourceClose = new Button
+            {
+                Content = "× 돌아가기",
+                Padding = new Thickness(8, 2, 8, 2),
+                Margin = new Thickness(8),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Foreground = Brushes.White,
+                Background = new SolidColorBrush(Color.FromArgb(0xC8, 0, 0, 0)),
+                BorderBrush = SourceBrush,
+                ToolTip = "원본 보기를 닫고 재생 헤드 화면으로 (Esc)",
+                Visibility = Visibility.Collapsed
+            };
+            AutomationProperties.SetAutomationId(sourceClose, "SourcePreviewClose");
+            AutomationProperties.SetName(sourceClose, "원본 보기 닫기");
+            sourceClose.Click += (s, e) => source.Close();
+            screen.Children.Add(sourceClose);
             Children.Add(screen);
+
+            // 보일 그림: 효과 칸 미리 보기 > 원본 보기(그림이 오면) > 재생 헤드 화면
+            void ShowPicture()
+            {
+                _image.Source = hover.Frame ?? (source.IsOpen ? source.Frame : null) ?? player.Bitmap;
+                var showSource = source.IsOpen && hover.Frame == null;
+                sourceText.Text = showSource ? source.Label + (source.Frame == null ? " · 불러오는 중…" : "") : "";
+                AutomationProperties.SetName(sourceLabel, sourceText.Text);
+                sourceLabel.Visibility = sourceClose.Visibility = showSource ? Visibility.Visible : Visibility.Collapsed;
+                // 원본 보기 동안은 미리 보기 틀(옮기기·크기)을 숨긴다 — 보이는 그림이 재생 헤드 화면이 아니므로
+                overlay.Visibility = source.IsOpen ? Visibility.Collapsed : Visibility.Visible;
+                UpdatePlaceholder();
+            }
+            source.Changed += (s, e) => ShowPicture();
 
             hover.Changed += (s, e) =>
             {
                 var showing = hover.Frame != null;
-                _image.Source = showing ? hover.Frame : player.Bitmap;
+                ShowPicture();
                 hoverText.Text = showing ? "미리 보기: " + hover.Effect.Name : "";
                 AutomationProperties.SetName(hoverLabel, hoverText.Text);
                 hoverLabel.Visibility = showing ? Visibility.Visible : Visibility.Collapsed;
             };
             player.BitmapChanged += (s, e) =>
             {
-                if (hover.Frame == null)
+                if (hover.Frame == null && source.Frame == null)
                     _image.Source = player.Bitmap;
             };
             player.StateChanged += (s, e) =>
@@ -209,7 +267,9 @@ namespace VideoEditor.Ui
         private void UpdatePlaceholder()
         {
             string text = null;
-            if (_services.Tool == null)
+            if (_commands.Source.IsOpen)
+                text = null;
+            else if (_services.Tool == null)
                 text = "FFmpeg가 없어 미리 보기를 할 수 없습니다.\n파일 › FFmpeg 설정에서 설치하세요.";
             else if (_session.Project.Duration == 0)
                 text = "미디어를 가져와 타임라인에 놓으면 여기에 보입니다.";

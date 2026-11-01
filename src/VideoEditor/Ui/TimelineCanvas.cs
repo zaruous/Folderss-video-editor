@@ -28,6 +28,7 @@ namespace VideoEditor.Ui
     /// 타임라인 그리기·조작(눈금자 + 트랙 줄 + 클립 + 재생 헤드). 위(번호 큰) 동영상 트랙이 위에, 오디오 트랙은 아래에 그린다.
     /// 마우스: 눈금자 끌기 = 재생 헤드 이동, 클립 끌기 = 옮기기(다른 트랙으로도), 가장자리 끌기 = 다듬기(붙기 켜면 편집점·재생 헤드·마커에 붙음),
     /// 휠 = 가로 이동, Ctrl+휠 = 확대/축소, Shift+휠 = 세로 이동. 파일·미디어를 끌어 놓으면 MediaDropped.
+    /// 클립 누르기 = 고르기, Ctrl+누르기 = 더하기·빼기, Shift+누르기 = 기준 클립부터 범위로 고르기(Ctrl+Shift면 더하기 — <see cref="EditorSession.SelectRange"/>).
     /// 링크된 영상·사운드(사운드 분리)는 함께 옮기고 다듬는다 — 끌기 시작할 때 Alt면 그 한 번만 그 클립만.
     /// 조작은 Pointer* 메서드로 모여 있어 화면 시험이 마우스 없이 부를 수 있다.
     /// </summary>
@@ -170,6 +171,8 @@ namespace VideoEditor.Ui
         public event Action<string, string> VideoEffectDropped;
         /// <summary>오른쪽 클릭: 클립(없으면 null), 트랙(없으면 null), 프레임. 받은 쪽이 메뉴를 연다.</summary>
         public event Action<Clip, Track, long> ContextRequested;
+        /// <summary>클립을 눌렀다(고른 뒤) — 원본 보기로 보인다. 빈 곳·눈금자를 누르면 null(원본 보기를 닫는다).</summary>
+        public event Action<Clip> ClipPressed;
 
         public bool Snapping { get; set; }
 
@@ -453,6 +456,7 @@ namespace VideoEditor.Ui
             {
                 _drag = DragKind.Scrub;
                 _dragStarted = true;
+                ClipPressed?.Invoke(null);
                 _session.Playhead = XToFrame(point.X);
                 return;
             }
@@ -477,7 +481,19 @@ namespace VideoEditor.Ui
             if (clip == null)
             {
                 if ((modifiers & ModifierKeys.Control) == 0)
+                {
                     _session.ClearSelection();
+                    ClipPressed?.Invoke(null);
+                }
+                return;
+            }
+            // Shift+누르기 = 기준 클립부터 여기까지 범위로 고르기(Ctrl+Shift면 더하기) — 끌기는 하지 않는다
+            if ((modifiers & ModifierKeys.Shift) != 0)
+            {
+                _session.SelectRange(clip, (modifiers & ModifierKeys.Control) != 0);
+                var count = _session.SelectedIds.Count;
+                StatusMessage?.Invoke(count + "개 클립을 골랐습니다" + (_session.PropertyGroup.Count > 1 ? " — 같은 종류라 속성 패널에서 함께 고칠 수 있습니다." : "."));
+                ClipPressed?.Invoke(clip);
                 return;
             }
             if ((modifiers & ModifierKeys.Control) != 0)
@@ -486,6 +502,9 @@ namespace VideoEditor.Ui
                 _session.Select(new[] { clip });
             else
                 _session.SetPrimary(clip);
+            // 고른 클립을 원본 보기로(Ctrl+누르기로 뺐으면 보이지 않음 — 고르기가 풀리면 원본 보기도 닫힌다)
+            if (_session.IsSelected(clip))
+                ClipPressed?.Invoke(clip);
             if (row.Track.Locked)
             {
                 StatusMessage?.Invoke("'" + row.Track.Name + "' 트랙이 잠겨 있습니다.");
@@ -526,6 +545,8 @@ namespace VideoEditor.Ui
                 if (Math.Abs(point.X - _downPoint.X) < DragThreshold && Math.Abs(point.Y - _downPoint.Y) < DragThreshold)
                     return;
                 _dragStarted = true;
+                // 옮기기·다듬기를 시작하면 원본 보기를 닫는다(결과는 재생 헤드 화면에서 본다)
+                ClipPressed?.Invoke(null);
             }
             var project = _session.Project;
             var clip = project.FindClip(_dragClipId);

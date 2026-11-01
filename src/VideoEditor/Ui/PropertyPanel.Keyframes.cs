@@ -22,7 +22,7 @@ namespace VideoEditor.Ui
         {
             if (_keyRefreshers.Count == 0)
                 return;
-            var keyed = ClipKeyframes.Has(_session.PrimaryClip);
+            var keyed = ClipKeyframes.Has(_session.PropertyClip);
             var was = _updating;
             _updating = true;
             try
@@ -144,7 +144,7 @@ namespace VideoEditor.Ui
                 var frame = KeyFrame(c);
                 var ease = eases[combo.SelectedIndex];
                 if (c.Keyframes?.Any(k => k.Frame == frame && k.Ease != ease) == true)
-                    Edit(id, x => ClipKeyframes.SetEase(x, frame, ease), null);
+                    _commands.EditClip(id, (p, x) => ClipKeyframes.SetEase(x, frame, ease), null);
             };
             var easeRow = Row("키 이징", combo);
             panel.Children.Add(easeRow);

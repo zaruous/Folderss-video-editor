@@ -124,6 +124,21 @@ namespace VideoEditor.Ui
                 _dragStart = e.GetPosition(_list);
                 _dragFromItem = OnItem(_list, e);
             };
+            // 한 번 누르기(끌지 않고 놓기) = 그 미디어를 미리 보기 화면에 원본 그대로(원본 보기 — Esc로 돌아감). 끌어 놓기는 DoDragDrop 안에서 놓여 여기 오지 않는다
+            _list.PreviewMouseLeftButtonUp += (s, e) =>
+            {
+                if (_dragFromItem && e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(_list, source) is ListBoxItem item)
+                    ShowSource(item);
+            };
+            // ↑↓·Home·End로 고른 미디어를 옮기면 원본 보기도 따라간다(캡처를 넘겨 보기)
+            _list.KeyUp += (s, e) =>
+            {
+                if (e.Key == Key.Up || e.Key == Key.Down || e.Key == Key.Home || e.Key == Key.End || e.Key == Key.PageUp || e.Key == Key.PageDown)
+                {
+                    if (Keyboard.FocusedElement is ListBoxItem item && item.IsSelected)
+                        ShowSource(item);
+                }
+            };
             _list.PreviewMouseMove += (s, e) =>
             {
                 if (e.LeftButton != MouseButtonState.Pressed || !_dragFromItem || _list.SelectedItems.Count == 0)
@@ -183,6 +198,13 @@ namespace VideoEditor.Ui
         }
 
         /// <summary>마우스가 목록 항목 위에서 눌렸는지(스크롤바를 끌 때 끌어 놓기·두 번 누르기가 시작되지 않게).</summary>
+        private void ShowSource(ListBoxItem item)
+        {
+            var row = _list.ItemContainerGenerator.ItemFromContainer(item) as FrameworkElement ?? item.Content as FrameworkElement;
+            if (row?.Tag is MediaInfo media)
+                _commands.ShowMediaSource(media);
+        }
+
         private static bool OnItem(ItemsControl list, MouseEventArgs e)
         {
             return e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(list, source) != null;

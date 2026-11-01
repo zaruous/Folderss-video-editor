@@ -66,7 +66,7 @@ namespace VideoEditor.Core
             foreach (var clip in ClipLinks.WithLinked(Project, list))
                 _selection.Add(clip.Id);
             if (list.Count > 0)
-                _primary = list[0].Id;
+                _primary = _anchor = list[0].Id;
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -83,17 +83,115 @@ namespace VideoEditor.Core
             {
                 foreach (var c in clips)
                     _selection.Add(c.Id);
-                _primary = clip.Id;
+                _primary = _anchor = clip.Id;
             }
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
 
         private string _primary;
+        // Shift+누르기 범위의 기준 클립 — 보통 누르기·Ctrl+누르기로 정하고, 범위를 고르는 동안은 그대로 둔다
+        private string _anchor;
+
+        /// <summary>
+        /// 범위 고르기(Shift+누르기): 기준 클립(마지막으로 보통 누른 클립)부터 target까지 — 두 클립의 트랙과 그 사이 트랙(타임라인에 보이는 차례)에서
+        /// 시작이 두 클립의 시작 사이에 드는 클립 모두. 기준이 없으면 target 하나. add면 지금 고른 것에 더한다. 기준은 그대로, 속성 패널은 target을 보인다.
+        /// </summary>
+        public void SelectRange(Clip target, bool add = false)
+        {
+            if (target == null)
+                return;
+            var anchor = _anchor != null ? Project.FindClip(_anchor) : null;
+            if (anchor == null)
+            {
+                Select(new[] { target }, add);
+                return;
+            }
+            var order = DisplayTracks(Project);
+            var a = order.IndexOf(Project.TrackOf(anchor));
+            var b = order.IndexOf(Project.TrackOf(target));
+            if (a < 0 || b < 0)
+            {
+                Select(new[] { target }, add);
+                return;
+            }
+            var from = Math.Min(anchor.Start, target.Start);
+            var to = Math.Max(anchor.Start, target.Start);
+            var range = new List<Clip> { target };
+            for (var i = Math.Min(a, b); i <= Math.Max(a, b); i++)
+                range.AddRange(order[i].Clips.Where(c => c != target && c.Start >= from && c.Start <= to));
+            if (!add)
+                _selection.Clear();
+            foreach (var clip in ClipLinks.WithLinked(Project, range))
+                _selection.Add(clip.Id);
+            _primary = target.Id;
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>타임라인에 보이는 트랙 차례: 동영상 트랙(위 번호부터) → 오디오 트랙.</summary>
+        public static List<Track> DisplayTracks(Project project)
+        {
+            var tracks = Enumerable.Reverse(project.VideoTracks).ToList();
+            tracks.AddRange(project.AudioTracks);
+            return tracks;
+        }
+
+        /// <summary>
+        /// 속성 패널에서 함께 고칠 수 있는 클립의 종류: 자막 큐 · 글자 · 요소(모양별) · 분리한 사운드 · 동영상 · 사진 · 오디오.
+        /// </summary>
+        public static string PropertyKind(Project project, Clip clip)
+        {
+            if (project.TrackOf(clip)?.Subtitles == true)
+                return "subtitle";
+            if (clip.Kind == ClipKind.Text)
+                return "text";
+            if (clip.Kind == ClipKind.Art)
+                return "art:" + (clip.Art?.Kind ?? ArtKind.Rectangle);
+            if (clip.AudioOnly)
+                return "audio-only";
+            return "media:" + clip.MediaKind;
+        }
+
+        /// <summary>
+        /// 속성 패널이 함께 고칠 클립들(첫째가 값을 보일 클립 — <see cref="PropertyClip"/>). 하나(또는 링크된 짝)면 그 하나,
+        /// 여럿이면 링크된 영상·사운드 짝은 마지막으로 누른 쪽과 같은 쪽만 남기고 남은 것이 모두 같은 종류(<see cref="PropertyKind"/>)일 때 그것들. 아니면 빈 목록.
+        /// </summary>
+        public List<Clip> PropertyGroup
+        {
+            get
+            {
+                var single = PrimaryClip;
+                if (single != null)
+                    return new List<Clip> { single };
+                var clips = SelectedClips;
+                if (clips.Count < 2)
+                    return new List<Clip>();
+                var primary = clips.FirstOrDefault(c => c.Id == _primary) ?? clips[0];
+                var ids = new HashSet<string>(clips.Select(c => c.Id));
+                // 짝이 함께 골라졌으면 누른 쪽(영상 또는 사운드)과 같은 쪽만
+                var group = clips.Where(c =>
+                {
+                    var partner = ClipLinks.LinkedPartner(Project, c);
+                    return partner == null || !ids.Contains(partner.Id) || c.AudioOnly == primary.AudioOnly;
+                }).ToList();
+                var kind = PropertyKind(Project, primary);
+                if (group.Count < 2 || group.Any(c => PropertyKind(Project, c) != kind))
+                    return new List<Clip>();
+                group.Remove(primary);
+                group.Insert(0, primary);
+                return group;
+            }
+        }
+
+        /// <summary>속성 패널이 값을 보일 클립(<see cref="PropertyGroup"/>의 첫째) — 없으면 null.</summary>
+        public Clip PropertyClip { get { return PropertyGroup.FirstOrDefault(); } }
 
         /// <summary>이미 고른 클립을 다시 눌렀다: 속성 패널이 그 클립을 보이게(링크된 짝 가운데 누른 쪽).</summary>
         public void SetPrimary(Clip clip)
         {
-            if (clip == null || !_selection.Contains(clip.Id) || clip.Id == _primary)
+            if (clip == null || !_selection.Contains(clip.Id))
+                return;
+            _anchor = clip.Id;
+            if (clip.Id == _primary)
                 return;
             _primary = clip.Id;
             SelectionChanged?.Invoke(this, EventArgs.Empty);

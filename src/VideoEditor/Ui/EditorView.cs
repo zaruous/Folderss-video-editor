@@ -144,6 +144,8 @@ namespace VideoEditor.Ui
             _timeline.Canvas.VideoEffectDropped += _commands.DropVideoEffect;
             _commands.TransitionsApplied += _timeline.Canvas.FlashTransitions;
             _timeline.Canvas.ContextRequested += OpenClipMenu;
+            // 타임라인 클립을 누르면 그 클립 하나를 원본 보기로(재생 헤드가 클립 밖일 때 — SourcePreview)
+            _timeline.Canvas.ClipPressed += _commands.ShowClipSource;
             _session.Changed += (s, e) =>
             {
                 UpdateInfo();
@@ -531,6 +533,9 @@ namespace VideoEditor.Ui
             var alt = (mods & ModifierKeys.Alt) != 0;
             // 글 입력 칸에서는 글자·이동 키를 그 칸에 둔다(파일 명령만 받음)
             var typing = Keyboard.FocusedElement is TextBox || Keyboard.FocusedElement is ComboBox || Keyboard.FocusedElement is ComboBoxItem;
+            // 목록(미디어 등)에서는 ↑↓·Home·End를 목록에 둔다(고른 미디어를 넘겨 보며 원본 보기)
+            if (Keyboard.FocusedElement is ListBox || Keyboard.FocusedElement is ListBoxItem)
+                typing |= !ctrl && !alt && (key == Key.Up || key == Key.Down || key == Key.Home || key == Key.End || key == Key.PageUp || key == Key.PageDown);
             Action action = null;
             if (ctrl && !alt)
             {
@@ -598,7 +603,8 @@ namespace VideoEditor.Ui
                     case Key.Home: action = shift ? (Action)(() => _commands.GoSelectedClip(false)) : () => _commands.GoTo(0); break;
                     case Key.End: action = shift ? (Action)(() => _commands.GoSelectedClip(true)) : () => _commands.GoTo(_session.Project.Duration); break;
                     case Key.Delete: case Key.Back: action = () => _commands.Delete(shift); break;
-                    case Key.Escape: action = _session.ClearSelection; break;
+                    // 원본 보기가 열려 있으면 먼저 닫는다(고르기는 그대로)
+                    case Key.Escape: action = _commands.Source.IsOpen ? (Action)_commands.Source.Close : _session.ClearSelection; break;
                     case Key.I: action = _commands.MarkIn; break;
                     case Key.O: action = _commands.MarkOut; break;
                     case Key.M: action = shift ? (Action)_commands.EditMarker : _commands.AddMarker; break;

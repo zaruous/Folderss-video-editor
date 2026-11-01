@@ -27,6 +27,11 @@ namespace VideoEditor.Ui
         private TabItem _effectsTab;
         private string _shownKey;
         private bool _updating;
+        // 함께 고치는 클립들(같은 종류를 여럿 골랐을 때 — 첫째가 값을 보이는 클립). 하나만 골랐으면 그 하나
+        private List<string> _group = new List<string>();
+
+        /// <summary>같은 종류의 클립을 여럿 골라 함께 고치는 중인가.</summary>
+        private bool Multi { get { return _group.Count > 1; } }
 
         public PropertyPanel(EditorSession session, EditorServices services, EditorCommands commands)
         {
@@ -50,15 +55,16 @@ namespace VideoEditor.Ui
 
         private Clip Selected()
         {
-            return _session.PrimaryClip;
+            return _session.PropertyClip;
         }
 
         private void Update()
         {
             var clips = _session.SelectedClips;
-            // 하나, 또는 링크된 영상·사운드 짝이면 누른 쪽
-            var clip = _session.PrimaryClip;
-            var key = clip != null ? "clip:" + clip.Id : clips.Count > 1 ? "many:" + clips.Count : "project";
+            // 하나, 또는 링크된 영상·사운드 짝이면 누른 쪽, 같은 종류를 여럿 골랐으면 마지막으로 누른 것(값을 보이고 고치면 모두에)
+            var group = _session.PropertyGroup;
+            var clip = group.FirstOrDefault();
+            var key = clip != null ? "clip:" + string.Join(",", group.Select(c => c.Id)) : clips.Count > 1 ? "many:" + clips.Count : "project";
             if (key == _shownKey)
             {
                 _updating = true;
@@ -74,10 +80,11 @@ namespace VideoEditor.Ui
                 return;
             }
             _shownKey = key;
+            _group = group.Select(c => c.Id).ToList();
             _refreshers.Clear();
             _keyRefreshers.Clear();
             _effectsTab = null;
-            _body.Content = clip != null ? ClipView(clip) : clips.Count > 1 ? Note(clips.Count + "개 클립을 골랐습니다. 하나를 고르면 속성을 바꿀 수 있습니다.") : ProjectView();
+            _body.Content = clip != null ? ClipView(clip) : clips.Count > 1 ? Note(clips.Count + "개 클립을 골랐습니다. 종류가 달라 함께 고칠 수 없습니다 — 같은 종류(동영상끼리·글자끼리·자막끼리 등)만 고르거나 하나를 고르세요.") : ProjectView();
         }
 
         private static UIElement Note(string text)
@@ -121,8 +128,16 @@ namespace VideoEditor.Ui
                 if (c == null)
                     return;
                 var rate = _session.Project.Rate;
-                title.Text = c.Name;
                 var kind = _session.Project.TrackOf(c)?.Subtitles == true ? "자막" : Kind(c);
+                if (Multi)
+                {
+                    // 여럿을 함께 고칠 때: 머리는 개수, 보이는 값은 마지막으로 누른 클립의 것
+                    title.Text = kind + " " + _group.Count + "개 함께 고치기";
+                    timing.Text = "보이는 값: " + c.Name + " · 바꾸면 고른 " + _group.Count + "개 모두에 넣습니다(실행 취소 한 단계).";
+                    timing.TextWrapping = TextWrapping.Wrap;
+                    return;
+                }
+                title.Text = c.Name;
                 timing.Text = kind + " · " + rate.Timecode(c.Start) + " ~ " + rate.Timecode(c.End) + " (" + rate.Timecode(c.Duration) + ")";
             });
             DockPanel.SetDock(head, Dock.Top);
@@ -485,7 +500,7 @@ namespace VideoEditor.Ui
             foreach (var (text, to) in new[] { ("아래로", index + 1), ("위로", index - 1) })
             {
                 var target = to;
-                var move = UiKit.TextButton(text, "EffectMove" + (target > index ? "Down" : "Up") + index, () => _commands.EditClip(id, (p, c) =>
+                var move = UiKit.TextButton(text, "EffectMove" + (target > index ? "Down" : "Up") + index, () => EditClip(id, (p, c) =>
                 {
                     if (EffectOf(c) != null)
                         VideoEffects.Move(p, c, index, target);
@@ -618,7 +633,7 @@ namespace VideoEditor.Ui
                 foreach (var preset in new[] { 0.5, 1.0, 1.5, 2.0 })
                 {
                     var value = preset;
-                    var button = UiKit.TextButton("×" + UiKit.Number(preset), "PropSpeedPreset" + UiKit.Number(preset * 10, "0"), () => _commands.SetSpeed(id, value));
+                    var button = UiKit.TextButton("×" + UiKit.Number(preset), "PropSpeedPreset" + UiKit.Number(preset * 10, "0"), () => SetSpeed(id, value));
                     button.MinWidth = 40;
                     button.Padding = new Thickness(4, 2, 4, 2);
                     row.Children.Add(button);
@@ -627,7 +642,7 @@ namespace VideoEditor.Ui
                 {
                     double value;
                     if (!_updating && UiKit.TryNumber(box.Text, out value))
-                        _commands.SetSpeed(id, value);
+                        SetSpeed(id, value);
                 }
                 box.KeyDown += (s, e) =>
                 {
@@ -667,12 +682,15 @@ namespace VideoEditor.Ui
             var box = new TextBox { AcceptsReturn = true, MinHeight = 60, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 6) };
             AutomationProperties.SetAutomationId(box, automationId);
             AutomationProperties.SetName(box, name);
+            // 글 내용은 클립마다 다르다 — 여럿을 함께 고칠 때는 칸을 숨긴다(한 글로 모두 덮어쓰지 않게)
+            if (Multi)
+                box.Visibility = Visibility.Collapsed;
             box.LostFocus += (s, e) =>
             {
                 var text = box.Text;
                 var current = _session.Project.FindClip(id);
                 if (current != null && text != (current.Text ?? ""))
-                    Edit(id, c => c.Text = text, null);
+                    _commands.EditClip(id, (p, c) => c.Text = text, null);
             };
             _refreshers.Add(() =>
             {
@@ -687,6 +705,8 @@ namespace VideoEditor.Ui
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             panel.Children.Add(ContentBox(id, "PropSubtitleText", "자막 내용"));
+            if (Multi)
+                panel.Children.Add(MultiNote("자막 내용은 하나씩 골라 고칩니다. 골라 둔 자막은 함께 지우거나 옮길 수 있습니다."));
             var hint = UiKit.Label("자막 트랙의 큐는 트랙 공통 모양(흰 글자·검은 윤곽선, 화면 아래 가운데)으로 입힙니다. 긴 줄은 화면 폭에 맞춰 저절로 나뉩니다.", true);
             hint.TextWrapping = TextWrapping.Wrap;
             panel.Children.Add(hint);
@@ -697,6 +717,8 @@ namespace VideoEditor.Ui
         {
             var panel = new StackPanel { Margin = new Thickness(6) };
             panel.Children.Add(ContentBox(id, "PropText", "글자 내용"));
+            if (Multi)
+                panel.Children.Add(MultiNote("글자 내용은 하나씩 골라 고칩니다. 크기·색·상자·꾸미기는 고른 글자 모두에 넣습니다."));
             panel.Children.Add(LongTextNotice(id, "PropTextLongNotice"));
             panel.Children.Add(NumberRow("글자 크기", "PropFontSize", 8, 400, "px", id, c => c.FontSize, (c, v) => c.FontSize = Math.Max(4, v)));
             var colors = new ComboBox { Margin = new Thickness(0, 4, 0, 4) };
@@ -1749,7 +1771,46 @@ namespace VideoEditor.Ui
 
         private void Edit(string id, Action<Clip> change, string mergeKey)
         {
-            _commands.EditClip(id, (p, c) => change(c), mergeKey);
+            EditClip(id, (p, c) => change(c), mergeKey);
+        }
+
+        /// <summary>
+        /// 클립을 고친다 — 같은 종류를 여럿 골랐으면(보이는 클립 id) 고른 클립 모두를 실행 취소 한 단계로. 잠긴 트랙의 클립이 있으면 거부한다.
+        /// 클립마다 다른 것(글 내용·키프레임 넣기/빼기·이징)은 이것 말고 _commands.EditClip으로 하나만 고친다.
+        /// </summary>
+        private void EditClip(string id, Action<Project, Clip> change, string mergeKey)
+        {
+            if (!Multi || !_group.Contains(id))
+            {
+                _commands.EditClip(id, change, mergeKey);
+                return;
+            }
+            _commands.EditClips(_group, (p, clips) =>
+            {
+                foreach (var c in clips)
+                {
+                    TimelineEdits.EnsureEditable(p.TrackOf(c));
+                    change(p, c);
+                }
+            }, mergeKey);
+        }
+
+        /// <summary>속도: 같은 종류를 여럿 골랐으면 모두(실행 취소 한 단계).</summary>
+        private void SetSpeed(string id, double speed)
+        {
+            if (Multi && _group.Contains(id))
+                _commands.SetSpeed(_group, speed);
+            else
+                _commands.SetSpeed(id, speed);
+        }
+
+        /// <summary>여럿을 함께 고칠 때의 안내 한 줄.</summary>
+        private static UIElement MultiNote(string text)
+        {
+            var note = UiKit.Label(text, true);
+            note.TextWrapping = TextWrapping.Wrap;
+            note.Margin = new Thickness(0, 4, 0, 6);
+            return note;
         }
 
         // 숫자 줄의 슬라이더가 이보다 좁아지면 아랫줄로 내린다
@@ -1803,9 +1864,9 @@ namespace VideoEditor.Ui
             void Apply(double value, string merge)
             {
                 if (edit != null)
-                    _commands.EditClip(id, (p, c) => edit(p, c, value), merge);
+                    EditClip(id, (p, c) => edit(p, c, value), merge);
                 else
-                    _commands.EditClip(id, (p, c) => set(c, value), merge);
+                    EditClip(id, (p, c) => set(c, value), merge);
             }
             slider.ValueChanged += (s, e) =>
             {
