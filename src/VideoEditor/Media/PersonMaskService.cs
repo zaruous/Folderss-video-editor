@@ -12,13 +12,13 @@ namespace VideoEditor.Media
 {
     /// <summary>
     /// 인물 마스크(사람만 따낸 흑백 마스크, 흰색 = 사람)를 이 PC에서 만들어 두고 찾는다 — 동영상·사진을 인터넷으로 보내지 않는다.
-    /// 만들기: 원본 → FFmpeg(모델 크기 RGB 프레임) → MODNet(ONNX Runtime, CPU) → 시간 평활 → FFmpeg(FFV1 흑백 .mkv, 사진은 흑백 PNG).
+    /// 만들기: 원본 → FFmpeg(모델 크기 RGB 프레임) → MODNet(ONNX Runtime, GPU(DirectML) — 안 되면 CPU) → 시간 평활 → FFmpeg(FFV1 흑백 .mkv, 사진은 흑백 PNG).
     /// 찾기(<see cref="Find"/>)는 디스크만 본다 — 마스크는 데이터 폴더\person-mask\masks에 원본 경로·크기·고친 시각·모델로 지은 이름(<see cref="PersonMaskText.CacheName"/>)으로 있다.
     /// 모델은 데이터 폴더\person-mask\models(시험은 FOLDERSS_VE_PERSONMASK 폴더가 먼저).
     /// </summary>
     public sealed class PersonMaskService : IPersonMaskProvider
     {
-        // 만들기는 CPU를 다 쓰므로 한 번에 하나(편집 창이 여럿이어도)
+        // 만들기는 CPU(또는 GPU)를 다 쓰므로 한 번에 하나(편집 창이 여럿이어도)
         private static readonly SemaphoreSlim BuildGate = new SemaphoreSlim(1);
         private static readonly SemaphoreSlim DownloadGate = new SemaphoreSlim(1);
 
@@ -160,8 +160,9 @@ namespace VideoEditor.Media
         /// <summary>
         /// media(동영상·사진)의 마스크를 만들어 경로를 돌려준다(이미 있으면 그대로). 진행률은 프레임 수(Done/Total).
         /// 만드는 동안은 옆의 .part에 쓰고 다 되면 바꿔 넣는다 — 취소·실패하면 .part를 지운다. 같은 원본의 옛 마스크(원본을 바꿔 넣기 전 것)는 지운다.
+        /// useGpu면 GPU(DirectML)를 먼저 쓰고 안 되면 CPU로(진행률의 Detail과 <see cref="LastDevice"/>에 처리 장치), false면 CPU로만.
         /// </summary>
-        public async Task<string> Build(FfmpegTool tool, MediaInfo media, IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation)
+        public async Task<string> Build(FfmpegTool tool, MediaInfo media, IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation, bool useGpu = true)
         {
             if (media == null || (media.Kind != MediaKind.Video && media.Kind != MediaKind.Image))
                 throw new InvalidOperationException("인물 마스크는 동영상·사진에만 만들 수 있습니다.");
@@ -170,6 +171,7 @@ namespace VideoEditor.Media
             await BuildGate.WaitAsync(cancellation).ConfigureAwait(false);
             try
             {
+                LastDevice = null;
                 var name = CacheName(media.Path) ?? throw new FileNotFoundException("원본 파일이 없습니다: " + media.Name);
                 var final = Path.Combine(MaskFolder, name + PersonMaskText.Extension(image));
                 if (File.Exists(final))
@@ -178,7 +180,7 @@ namespace VideoEditor.Media
                 var part = final + ".part";
                 try
                 {
-                    await Task.Run(() => Segment(tool, model, media, image, part, progress, cancellation), cancellation).ConfigureAwait(false);
+                    LastDevice = await Task.Run(() => Segment(tool, model, media, image, part, progress, cancellation, useGpu), cancellation).ConfigureAwait(false);
                     // 만드는 동안 원본을 바꿔 넣었으면 이 마스크는 옛 원본의 것
                     if (CacheName(media.Path) != name)
                         throw new InvalidOperationException("만드는 동안 원본 파일이 바뀌었습니다. 다시 만드세요: " + media.Name);
@@ -198,18 +200,27 @@ namespace VideoEditor.Media
             }
         }
 
+        /// <summary>마지막으로 다 만든 마스크의 처리 장치(<see cref="PersonSegmenter.Device"/>, CPU로 돌아갔으면 그 까닭까지). 만들어 둔 것을 썼으면 null.</summary>
+        public string LastDevice { get; private set; }
+
+        /// <summary>처리 장치 한 줄: 장치, CPU로 돌아갔으면 " — " 뒤에 까닭.</summary>
+        private static string DeviceLine(PersonSegmenter segmenter)
+        {
+            return segmenter.Fallback == null ? segmenter.Device : segmenter.Device + " — " + segmenter.Fallback;
+        }
+
         /// <summary>
         /// 원본 → 마스크 파일(output). 디코더·인코더 FFmpeg를 함께 띄워 한 프레임씩 흘린다(디코딩·인코딩은 다른 프로세스라 추론과 겹친다).
-        /// 취소하면 두 프로세스를 끝낸다.
+        /// 취소하면 두 프로세스를 끝낸다. 처리 장치 한 줄을 돌려준다.
         /// </summary>
-        private static void Segment(FfmpegTool tool, string model, MediaInfo media, bool image, string output,
-                                    IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation)
+        private static string Segment(FfmpegTool tool, string model, MediaInfo media, bool image, string output,
+                                      IProgress<FfmpegDownloader.Status> progress, CancellationToken cancellation, bool useGpu)
         {
             var (width, height) = PersonMaskText.InputSize(media.Width, media.Height, PersonMaskText.Model.ShortSide);
             var rate = image ? FrameRate.Default : PersonMaskText.MaskRate(media.FrameRate);
             var total = image ? 1 : PersonMaskText.FrameCount(media.DurationSeconds, rate);
             progress?.Report(new FfmpegDownloader.Status { Stage = "인물 분리 모델 여는 중" });
-            using (var segmenter = PersonSegmenter.Open(model))
+            using (var segmenter = PersonSegmenter.Open(model, useGpu))
             using (var decoder = FfmpegRunner.Start(tool.FfmpegPath, PersonMaskText.DecodeArguments(media.Path, width, height, rate, image), true))
             using (var encoder = FfmpegRunner.Start(tool.FfmpegPath, PersonMaskText.EncodeArguments(width, height, rate, output, image), false, true))
             using (cancellation.Register(() =>
@@ -229,7 +240,7 @@ namespace VideoEditor.Media
                 var sink = encoder.StandardInput.BaseStream;
                 var shown = Stopwatch.StartNew();
                 var broken = false;
-                progress?.Report(new FfmpegDownloader.Status { Stage = "인물 분리 중", Done = 0, Total = total });
+                progress?.Report(new FfmpegDownloader.Status { Stage = "인물 분리 중", Done = 0, Total = total, Detail = DeviceLine(segmenter) });
                 try
                 {
                     while (ReadFrame(input, rgb))
@@ -252,7 +263,7 @@ namespace VideoEditor.Media
                         if (shown.ElapsedMilliseconds >= 200)
                         {
                             shown.Restart();
-                            progress?.Report(new FfmpegDownloader.Status { Stage = "인물 분리 중", Done = done, Total = Math.Max(total, done) });
+                            progress?.Report(new FfmpegDownloader.Status { Stage = "인물 분리 중", Done = done, Total = Math.Max(total, done), Detail = DeviceLine(segmenter) });
                         }
                     }
                     // 다 썼다고 알린다(인코더가 파일을 마무리하고 끝난다)
@@ -283,7 +294,8 @@ namespace VideoEditor.Media
                     throw new InvalidDataException("원본에서 화면을 읽지 못했습니다: " + media.Name);
                 if (encoder.ExitCode != 0)
                     throw new FfmpegException("인물 마스크를 쓰지 못했습니다.", encodeErrors.GetAwaiter().GetResult());
-                progress?.Report(new FfmpegDownloader.Status { Stage = "인물 분리 중", Done = done, Total = done });
+                progress?.Report(new FfmpegDownloader.Status { Stage = "인물 분리 중", Done = done, Total = done, Detail = DeviceLine(segmenter) });
+                return DeviceLine(segmenter);
             }
         }
 

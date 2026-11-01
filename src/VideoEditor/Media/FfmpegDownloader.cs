@@ -24,6 +24,8 @@ namespace VideoEditor.Media
             public string Stage { get; set; }
             public long Done { get; set; }
             public long Total { get; set; }
+            /// <summary>단계와 따로 보일 한 줄(인물 마스크: 처리 장치 GPU·CPU). 없으면 null.</summary>
+            public string Detail { get; set; }
         }
 
         /// <summary>target 폴더(예: 데이터 폴더\ffmpeg)에 받아 bin 폴더 경로를 돌려준다.</summary>

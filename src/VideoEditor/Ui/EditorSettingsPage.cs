@@ -17,6 +17,7 @@ namespace VideoEditor.Ui
         private TextBox _imageSeconds;
         private ComboBox _photoFit;
         private static readonly ClipFit[] Fits = { ClipFit.Fill, ClipFit.Blur, ClipFit.Fit, ClipFit.Stretch };
+        private CheckBox _personMaskGpu;
         private TextBox _ytDlp;
         private TextBox _downloadFolder;
         private YouTubeSettingsSection _youTube;
@@ -74,6 +75,18 @@ namespace VideoEditor.Ui
                 _photoFit.Items.Add(EditorServices.FitName(fit) + " — " + EditorServices.FitHint(fit));
             _photoFit.SelectedIndex = Array.IndexOf(Fits, _services.PhotoFit);
             panel.Children.Add(_photoFit);
+            _personMaskGpu = new CheckBox
+            {
+                Content = new TextBlock
+                {
+                    Text = "인물 마스크를 GPU(DirectML)로 만들기 — GPU가 없거나 안 되면 CPU로 만듭니다. GPU에서 마스크가 이상하거나 멈추면 끄세요(CPU로만)",
+                    TextWrapping = TextWrapping.Wrap
+                },
+                IsChecked = _services.PersonMaskGpu,
+                Margin = new Thickness(0, 12, 0, 0)
+            };
+            AutomationProperties.SetAutomationId(_personMaskGpu, "SettingsPersonMaskGpu");
+            panel.Children.Add(_personMaskGpu);
             var ytDlpLabel = UiKit.Label("yt-dlp 경로 (URL·유튜브에서 가져오기) — 비우면 PATH·winget 설치 위치·플러그인이 받은 것을 찾습니다");
             ytDlpLabel.Margin = new Thickness(0, 12, 0, 0);
             ytDlpLabel.TextWrapping = TextWrapping.Wrap;
@@ -136,6 +149,8 @@ namespace VideoEditor.Ui
                 _services.Manager.SetSetting(EditorServices.ImageSecondsKey, UiKit.Number(seconds));
             if (_photoFit.SelectedIndex >= 0)
                 _services.Manager.SetSetting(EditorServices.PhotoFitKey, Fits[_photoFit.SelectedIndex].ToString());
+            // 켬이 기본이라 끌 때만 적는다
+            _services.Manager.SetSetting(EditorServices.PersonMaskGpuKey, _personMaskGpu.IsChecked == false ? "false" : null);
             var ytDlp = _ytDlp.Text.Trim();
             if (ytDlp != (_services.Setting(EditorServices.YtDlpPathKey) ?? ""))
             {

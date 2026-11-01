@@ -51,6 +51,7 @@ namespace VideoEditor.Ui
         public const string ProjectTreeHiddenKey = "projectTreeHidden";
         public const string TextStylesKey = "textStyles";
         public const string SeenVideoEffectsKey = "seenVideoEffects";
+        public const string PersonMaskGpuKey = "personMaskGpu";
 
         private readonly ConcurrentDictionary<string, Task<BitmapSource>> _thumbnails = new ConcurrentDictionary<string, Task<BitmapSource>>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<float[]>> _waveforms = new ConcurrentDictionary<string, Task<float[]>>(StringComparer.OrdinalIgnoreCase);
@@ -251,6 +252,12 @@ namespace VideoEditor.Ui
                 double seconds;
                 return double.TryParse(Setting(ImageSecondsKey), NumberStyles.Float, CultureInfo.InvariantCulture, out seconds) && seconds > 0 && seconds <= 3600 ? seconds : 5;
             }
+        }
+
+        /// <summary>인물 마스크를 GPU(DirectML)로 만들지(기본 켬, 안 되면 CPU로). 끄면 CPU로만 — GPU에서 마스크가 이상하거나 멈출 때.</summary>
+        public bool PersonMaskGpu
+        {
+            get { return Setting(PersonMaskGpuKey) != "false"; }
         }
 
         /// <summary>
