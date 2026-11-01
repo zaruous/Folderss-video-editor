@@ -6,7 +6,7 @@ using Xunit;
 
 namespace VideoEditor.Tests
 {
-    /// <summary>스타일 모음(이슈 #17·#22): 16개, 이름이 겹치지 않고 영문 글자가 없음, 정규화해도 그대로, 받은 사본끼리 독립, 뒤 8개는 광선·반사·휘기를 씀.</summary>
+    /// <summary>스타일 모음(이슈 #17·#22): 17개, 이름이 겹치지 않고 영문 글자가 없음, 정규화해도 그대로, 받은 사본끼리 독립, 뒤 9개는 광선·반사·휘기를 씀.</summary>
     public class TextStylePresetsTests
     {
         private static readonly JsonSerializerOptions Options = CreateOptions();
@@ -27,11 +27,11 @@ namespace VideoEditor.Tests
         }
 
         [Fact]
-        public void SixteenPresets_WithUniqueKoreanNames_FirstEightKeepTheirOrder()
+        public void SeventeenPresets_WithUniqueKoreanNames_FirstEightKeepTheirOrder()
         {
             var presets = TextStylePresets.All;
-            Assert.Equal(16, presets.Count);
-            Assert.Equal(16, presets.Select(p => p.Name).Distinct().Count());
+            Assert.Equal(17, presets.Count);
+            Assert.Equal(17, presets.Select(p => p.Name).Distinct().Count());
             foreach (var (name, style) in presets)
             {
                 Assert.False(string.IsNullOrWhiteSpace(name));
@@ -138,6 +138,13 @@ namespace VideoEditor.Tests
             Assert.Equal(TextStyle.MaxFillColors, rainbow.Fill.Colors.Count);
             Assert.True(rainbow.Glow.Enabled);
             Assert.Equal(WarpKind.Stairs, presets["계단 글자"].Warp.Kind);
+            // 사이버펑크 핑크 네온: 네온과 같은 짜임(채우기 없음 + 밝은 분홍 윤곽선 + 핫핑크 광선)에 시안 그림자
+            var pink = presets["사이버펑크 핑크 네온"];
+            Assert.Equal(FillKind.None, pink.Fill.Kind);
+            Assert.True(pink.Outline.Enabled && pink.Glow.Enabled && pink.Glow.Size > 0 && pink.Glow.Opacity > 0);
+            Assert.Equal("#FF2D95", pink.Glow.Color);
+            Assert.True(pink.Shadow.Enabled);
+            Assert.Equal("#22D3EE", pink.Shadow.Color);
             Assert.All(presets.Where(p => !FirstEight.Contains(p.Key)), p =>
                 Assert.True(p.Value.Glow.Enabled || p.Value.Reflection.Enabled || (p.Value.Warp.Kind != WarpKind.None && p.Value.Warp.Amount != 0), p.Key));
         }

@@ -4,7 +4,7 @@ using System.Linq;
 namespace VideoEditor.Core
 {
     /// <summary>
-    /// 스타일 모음: 꾸미기 탭 맨 위에 썸네일로 보이는 미리 만든 스타일 16개 — 앞 8개는 채우기·윤곽선·그림자만, 뒤 8개는 광선·반사·휘기도 쓴다.
+    /// 스타일 모음: 꾸미기 탭 맨 위에 썸네일로 보이는 미리 만든 스타일 17개 — 앞 8개는 채우기·윤곽선·그림자만, 뒤 9개는 광선·반사·휘기도 쓴다.
     /// 이름은 한국어 일반 명사(상표·제품 이름은 쓰지 않음). 값은 모두 <see cref="TextStyle.Normalize"/>를 거쳐도 그대로다(색은 대문자 #RRGGBB, 길이·각도는 범위 안).
     /// </summary>
     public static class TextStylePresets
@@ -33,7 +33,16 @@ namespace VideoEditor.Core
             // 짙은 윤곽선 바깥에 흰 광선을 좁게 — 어두운 바탕에서도 무지개 글자가 떠 보이게
             ("무지개 그라데이션", new TextStyle { Bold = true, Fill = Linear(0, "#EF4444", "#FACC15", "#22C55E", "#3B82F6"), Outline = Outline("#1E1B4B", 3), Glow = Glow("#FFFFFF", 5, 0.9) }),
             // 음수 = 오른쪽으로 갈수록 올라가는 계단
-            ("계단 글자", new TextStyle { Bold = true, Fill = Solid("#A3E635"), Outline = Outline("#1A2E05", 4), Warp = Warp(WarpKind.Stairs, -80) })
+            ("계단 글자", new TextStyle { Bold = true, Fill = Solid("#A3E635"), Outline = Outline("#1A2E05", 4), Warp = Warp(WarpKind.Stairs, -80) }),
+            // 네온과 같은 짜임(채우기 없음 + 가는 밝은 윤곽선 + 광선)에 핫핑크 광선, 왼쪽 아래로 비낀 시안 그림자 — 광선(불투명도 0.9) 바깥으로 시안 테가 비쳐 사이버펑크 색 번짐처럼 보임
+            ("사이버펑크 핑크 네온", new TextStyle
+            {
+                Bold = true,
+                Fill = new TextFill { Kind = FillKind.None, Colors = new List<string> { "#FFD1EC" } },
+                Outline = Outline("#FFD1EC", 2),
+                Glow = Glow("#FF2D95", 8, 0.9),
+                Shadow = new TextShadow { Enabled = true, Color = "#22D3EE", Distance = 8, Angle = 135, Blur = 2, Opacity = 0.8 }
+            })
         };
 
         /// <summary>이름과 스타일. 부를 때마다 새 깊은 복사를 준다 — 받은 쪽이 고쳐도 모음은 그대로.</summary>

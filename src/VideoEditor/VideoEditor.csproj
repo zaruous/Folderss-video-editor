@@ -31,6 +31,8 @@
   <ItemGroup>
     <!-- 기본 전환 효과 데이터(효과는 이 파일에 더하면 늘어난다) -->
     <EmbeddedResource Include="Core\transitions.json" LogicalName="VideoEditor.Core.transitions.json" />
+    <!-- 기본 수식 효과의 GPU(OpenCL) 커널 — 커널 이름 = 효과 id. GPU가 없으면 수식으로 그린다 -->
+    <EmbeddedResource Include="Core\transitions.cl" LogicalName="VideoEditor.Core.transitions.cl" />
     <!-- DirectML.dll을 onnxruntime.dll과 같은 자리(빌드 출력\runtimes\win-x64\native\)에 — OnnxRuntimeLibrary가 거기서 먼저 불러 둔다 -->
     <None Include="$(DirectMLDll)" Link="runtimes\win-x64\native\DirectML.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" Condition="Exists('$(DirectMLDll)')" />
   </ItemGroup>

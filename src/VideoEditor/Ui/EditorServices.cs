@@ -64,7 +64,7 @@ namespace VideoEditor.Ui
         private static readonly PriorityGate PictureGate = new PriorityGate(3);
         // 스타일 썸네일은 하나씩 그린다(TextStylePreview)
         private static readonly SemaphoreSlim StylePreviewGate = new SemaphoreSlim(1);
-        // 스타일 썸네일 캐시 상한: 스타일 모음 16개 + 내 스타일 50개에 여유
+        // 스타일 썸네일 캐시 상한: 스타일 모음 17개 + 내 스타일 50개에 여유
         private const int MaxStylePreviews = 96;
 
         private readonly Lazy<StyledTextRasterizer> _textRasterizer = new Lazy<StyledTextRasterizer>(() => new StyledTextRasterizer());
@@ -304,6 +304,8 @@ namespace VideoEditor.Ui
         public void SetTool(FfmpegTool tool, bool remember)
         {
             Tool = tool;
+            // GPU 전환을 쓸 수 있는지 배경에서 미리 알아 둔다(첫 재생부터 GPU로)
+            GpuTransitions.KernelFile(tool);
             if (tool != null && remember)
                 SaveSetting(FfmpegPathKey, tool.Folder);
             // FFmpeg가 바뀌면 도우미도 그 FFmpeg의 DLL로 다시 띄운다(거듭 실패해 꺼 둔 것도 다시)

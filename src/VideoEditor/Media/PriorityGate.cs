@@ -5,7 +5,7 @@ namespace VideoEditor.Media
 {
     /// <summary>
     /// 한 번에 정해진 수만 들이는 문(SemaphoreSlim처럼 비동기로 기다림). 기다리는 것 가운데 급한 것(<c>urgent</c>)을 먼저 들이고, 같은 급끼리는 온 차례다.
-    /// 썸네일 그리기 줄에서 쓴다 — [다시 읽기]로 더한 사용자 전환 효과가 이미 줄 선 기본 효과 64개 뒤에서 기다리지 않게.
+    /// 썸네일 그리기 줄에서 쓴다 — [다시 읽기]로 더한 사용자 전환 효과가 이미 줄 선 기본 효과 72개 뒤에서 기다리지 않게.
     /// </summary>
     public sealed class PriorityGate
     {

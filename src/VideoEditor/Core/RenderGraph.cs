@@ -40,6 +40,11 @@ namespace VideoEditor.Core
         public IStillImageCache Stills { get; set; }
         /// <summary>꾸민 글자(글자 상자를 정한 글자도)를 PNG로 그릴 그리개. null이면 스타일이 있어도 drawtext로 그린다(첫 채우기 색만 반영, 글자 상자는 무시).</summary>
         public ITextRasterizer TextRasterizer { get; set; }
+        /// <summary>
+        /// GPU 전환 커널 파일(<see cref="Transitions.KernelSource"/>를 써 둔 .cl 경로). 있으면 커널이 있는 수식 전환을 xfade_opencl로 그린다
+        /// (실시간이라 재생 축소·미리 그리기를 하지 않는다). null이면 모두 CPU 수식 — OpenCL을 쓸 수 없는 PC·FFmpeg.
+        /// </summary>
+        public string TransitionKernels { get; set; }
     }
 
     /// <summary>FFmpeg에 줄 입력(파일마다 인수 묶음)과 filter_complex. 출력 라벨은 [vout]·[aout].</summary>
@@ -55,6 +60,8 @@ namespace VideoEditor.Core
         public Dictionary<string, string> TextFiles { get; } = new Dictionary<string, string>();
         /// <summary>자막 트랙을 libass(ass 필터)로 입힌다 — FFmpeg에 libass가 있어야 한다.</summary>
         public bool UsesLibass { get; set; }
+        /// <summary>GPU 전환(xfade_opencl)을 쓴다 — 실행할 때 OpenCL 장치를 열어 필터에 준다(ffmpeg.exe: -init_hw_device·-filter_hw_device).</summary>
+        public bool UsesOpenCl { get; set; }
         /// <summary>
         /// 실행 전에 그려 둘 꾸민 글자 PNG — 경로·요청. Build는 그리지 않고 적기만 한다(캐시라서 렌더 뒤에도 지우지 않는다).
         /// </summary>
@@ -166,7 +173,7 @@ namespace VideoEditor.Core
                 {
                     for (var j = i; j < clips.Count; j++)
                     {
-                        if (XfadeIn(j) && Transitions.Resolve(clips[j], options.FfmpegMajor).IsExpression && !TransitionPrerender.Covers(options, clips[j]))
+                        if (XfadeIn(j) && IsHeavy(options, Transitions.Resolve(clips[j], options.FfmpegMajor)) && !TransitionPrerender.Covers(options, clips[j]))
                             return true;
                         if (!XfadeOut(j))
                             break;
@@ -308,7 +315,18 @@ namespace VideoEditor.Core
                     var piece = "k" + n;
                     if (xfadeIn)
                     {
-                        if (group == null)
+                        if (group == null && effect.Warp)
+                        {
+                            // 앞 화면을 휘는 효과는 앞 클립이 없으면(투명) 보이지 않는다 — 새 화면의 사본을 투명에서 서서히 나타나게 해 앞 화면으로(새 화면이 휘며 나타남).
+                            // 알파를 곱한 색이라 색과 알파를 같이 줄인다(fade 둘: 색 → 검정 = 0, 알파). xfade는 앞 흐름에 고른 프레임 레이트가 있어야 해 fps로 알린다
+                            filters.Add(string.Format(CultureInfo.InvariantCulture,
+                                "[{0}]split[kk{1}][w{1}];[w{1}]trim=end_frame={2},setpts=PTS-STARTPTS,fps={3},fade=t=in:s=0:n={2},fade=t=in:s=0:n={2}:alpha=1[t{1}]",
+                                piece, n, transition, fps));
+                            piece = "kk" + n;
+                            group = "t" + n;
+                            groupStart = clip.Start;
+                        }
+                        else if (group == null)
                         {
                             // 앞에 붙은 클립이 없으면 투명 화면에서 바뀐다(아래 트랙·바탕이 비친다)
                             filters.Add(string.Format(CultureInfo.InvariantCulture, "color=c=black@0.0:s={0}x{1}:r={2}:d={3},format=gbrap[t{4}]",
@@ -317,9 +335,18 @@ namespace VideoEditor.Core
                             groupStart = clip.Start;
                         }
                         // offset: 묶음 흐름에서 이 클립(=전환)이 시작하는 초. 미리 그려 둔 전환은 캐시 그림이 덮으므로 가벼운 효과로 잇는다
-                        filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}][{1}]xfade={2}:duration={3}:offset={4}[x{5}]",
-                            group, piece, TransitionPrerender.Covers(options, clip) ? TransitionPrerender.HiddenXfade : Transitions.XfadeOption(effect),
-                            N(rate.ToSeconds(transition)), N(rate.ToSeconds(clip.Start - groupStart)), n));
+                        var covered = TransitionPrerender.Covers(options, clip);
+                        if (!covered && OnGpu(options, effect))
+                        {
+                            filters.Add(GpuXfade(group, piece, clip.Start - groupStart, transition, segEnd - clip.Start, options.TransitionKernels, effect.Id, rate, n));
+                            plan.UsesOpenCl = true;
+                        }
+                        else
+                        {
+                            filters.Add(string.Format(CultureInfo.InvariantCulture, "[{0}][{1}]xfade={2}:duration={3}:offset={4}[x{5}]",
+                                group, piece, covered ? TransitionPrerender.HiddenXfade : Transitions.XfadeOption(effect),
+                                N(rate.ToSeconds(transition)), N(rate.ToSeconds(clip.Start - groupStart)), n));
+                        }
                         group = "x" + n;
                     }
                     else
@@ -345,6 +372,50 @@ namespace VideoEditor.Core
         internal static int PlaybackShrink(RenderOptions options)
         {
             return Math.Max(1, (int)Math.Ceiling(Math.Sqrt((double)options.Width * options.Height / 140000)));
+        }
+
+        /// <summary>
+        /// GPU 전환 — xfade(앞 흐름의 offset까지 → 전환 → 뒤 흐름의 나머지)와 같은 흐름을 [x{n}]에:
+        /// 전환 구간의 장만 잘라 OpenCL 장치에 올려 커널(이름 = 효과 id)로 섞어 내리고, 앞·뒤 부분은 CPU 그대로 두어 concat으로 잇는다.
+        /// (xfade_opencl은 전환 밖의 장을 입력 흐름의 GPU 틀 그대로 넘겨, 출력 틀을 따지는 hwdownload가 거절할 때가 있다 — 두 입력이 전환 길이에서 끝나면 그런 장이 없다.)
+        /// 값은 알파를 곱한 그대로(형식만 gbrap ↔ rgba). 장 번호로 자른다(초로 자르면 경계 장이 반올림에 흔들린다).
+        /// </summary>
+        private static string GpuXfade(string group, string piece, long offset, long length, long pieceLength, string kernels, string kernel, FrameRate rate, int n)
+        {
+            var parts = new List<string>();
+            var head = offset > 0;
+            var tail = pieceLength > length;
+            parts.Add(head
+                ? string.Format(CultureInfo.InvariantCulture, "[{0}]split[ga{1}][gb{1}];[ga{1}]trim=end_frame={2},setpts=PTS-STARTPTS[gh{1}];[gb{1}]", group, n, offset)
+                : "[" + group + "]");
+            parts[0] += string.Format(CultureInfo.InvariantCulture, "trim=start_frame={0}:end_frame={1},setpts=PTS-STARTPTS,settb={3}/{4},format=rgba,hwupload[gu{2}]", offset, offset + length, n, rate.Denominator, rate.Numerator);
+            parts.Add(tail
+                ? string.Format(CultureInfo.InvariantCulture, "[{0}]split[pa{1}][pb{1}];[pb{1}]trim=start_frame={2},setpts=PTS-STARTPTS[pt{1}];[pa{1}]", piece, n, length)
+                : "[" + piece + "]");
+            parts[1] += string.Format(CultureInfo.InvariantCulture, "trim=end_frame={0},setpts=PTS-STARTPTS,settb={2}/{3},format=rgba,hwupload[pu{1}]", length, n, rate.Denominator, rate.Numerator);
+            parts.Add(string.Format(CultureInfo.InvariantCulture,
+                "[gu{0}][pu{0}]xfade_opencl=transition=custom:source={1}:kernel={2}:duration={3}:offset=0,hwdownload,format=rgba,format=gbrap[gx{0}]",
+                n, FilterValue(kernels), kernel, N(rate.ToSeconds(length))));
+            var segments = (head ? "[gh" + n + "]" : "") + "[gx" + n + "]" + (tail ? "[pt" + n + "]" : "");
+            var count = 1 + (head ? 1 : 0) + (tail ? 1 : 0);
+            // concat은 시간 단위를 1/1000000으로 바꾼다 — 묶음 흐름은 1/프레임 레이트로 되돌린다(다음 전환의 xfade·xfade_opencl은 두 입력의 시간 단위가 같아야 한다)
+            var timebase = string.Format(CultureInfo.InvariantCulture, "settb={0}/{1}", rate.Denominator, rate.Numerator);
+            parts.Add(count == 1
+                ? "[gx" + n + "]" + timebase + "[x" + n + "]"
+                : string.Format(CultureInfo.InvariantCulture, "{0}concat=n={1}:v=1:a=0,{3}[x{2}]", segments, count, n, timebase));
+            return string.Join(";", parts);
+        }
+
+        /// <summary>이 전환을 GPU 커널로 그리는지(커널 파일이 있고 효과에 커널이 있을 때).</summary>
+        internal static bool OnGpu(RenderOptions options, TransitionDef def)
+        {
+            return options.TransitionKernels != null && Transitions.HasKernel(def);
+        }
+
+        /// <summary>CPU로 픽셀마다 수식을 풀어 실시간보다 느린 전환인지(GPU로 그리는 것은 빼고) — 재생 축소·미리 그리기 대상.</summary>
+        internal static bool IsHeavy(RenderOptions options, TransitionDef def)
+        {
+            return def.IsExpression && !OnGpu(options, def);
         }
 
         /// <summary>[start, start + length) 프레임이 그리는 구간에 걸치는지.</summary>

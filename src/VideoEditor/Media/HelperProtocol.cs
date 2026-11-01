@@ -146,5 +146,7 @@ namespace VideoEditor.Media
         public int SampleRate { get; set; } = 48000;
         /// <summary>낼 화면 장수(0 = 끝까지). 한 장 미리 보기는 1.</summary>
         public int MaxFrames { get; set; }
+        /// <summary>그래프에 GPU 전환(hwupload·xfade_opencl)이 있다 — 도우미가 OpenCL 장치를 열어 필터마다 준다(열지 못하면 실패 → ffmpeg.exe로).</summary>
+        public bool OpenCl { get; set; }
     }
 }
