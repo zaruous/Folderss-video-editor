@@ -222,6 +222,26 @@ namespace VideoEditor.Tests
             Assert.Matches("^(win|linux|osx)-[a-z0-9]+$", OnnxRuntimeLibrary.RuntimeId);
         }
 
+        /// <summary>
+        /// 플러그인 zip에는 win-x64 엔진만 든다. ARM64 프로세스(win-arm64)는 runtimes\win-arm64\native를 찾다 없으므로,
+        /// 모델을 받기 전에 그 PC 이름과 "Windows x64에서만"을 알린다(멈추지 않고).
+        /// </summary>
+        [Fact]
+        public void OnnxRuntime_OnlyWinX64InThePlugin_Arm64IsToldClearly()
+        {
+            var plugin = Path.Combine(_folder, "plugin");
+            var native = Path.Combine(plugin, "runtimes", "win-x64", "native");
+            Directory.CreateDirectory(native);
+            File.WriteAllText(Path.Combine(native, OnnxRuntimeLibrary.FileName), "x64");
+            Assert.Contains(OnnxRuntimeLibrary.Candidates(plugin, null, "win-x64"), File.Exists);
+            var arm64 = OnnxRuntimeLibrary.Candidates(plugin, null, "win-arm64");
+            Assert.Equal(Path.Combine(plugin, "runtimes", "win-arm64", "native", OnnxRuntimeLibrary.FileName), arm64[0]);
+            Assert.DoesNotContain(arm64, File.Exists);
+            var message = OnnxRuntimeLibrary.NotIncluded("win-arm64");
+            Assert.Contains("이 PC(win-arm64)", message);
+            Assert.Contains("Windows x64에서만", message);
+        }
+
         // ---------- 찾기·캐시 ----------
 
         private string Source(string name, string content = "원본")
@@ -557,6 +577,107 @@ namespace VideoEditor.Tests
             }
         }
 
+        private static float[] Segment(PersonSegmenter segmenter, byte[] rgb, int runs, List<double> times = null)
+        {
+            var alpha = new float[448 * 256];
+            for (var i = 0; i < runs; i++)
+            {
+                var watch = Stopwatch.StartNew();
+                segmenter.Run(rgb, 448, 256, alpha);
+                times?.Add(watch.Elapsed.TotalMilliseconds);
+            }
+            return alpha;
+        }
+
+        private static double Median(List<double> times)
+        {
+            var sorted = times.Skip(3).OrderBy(t => t).ToList(); // 처음 몇 장(준비)은 빼고
+            return sorted[sorted.Count / 2];
+        }
+
+        /// <summary>
+        /// 처리 장치: CPU로만(GPU 끔)은 예전 길 그대로. GPU(DirectML)를 쓸 수 있으면 GPU로 돌고 마스크가 CPU와 거의 같다(0~255에서 2 안).
+        /// GPU 열기가 실패하면 CPU로 열고, 추론 중에 실패하면 CPU로 바꿔 같은 프레임을 다시 돌린다 — 두 경우 모두 CPU와 똑같은 출력이다.
+        /// DirectML.dll은 플러그인 것(onnxruntime.dll 옆)을 불렀다 — System32의 다른 판이 아니라.
+        /// </summary>
+        [PersonMaskFact]
+        public void Segmenter_UsesGpuWhenItCan_FallsBackToCpu_SameMask()
+        {
+            var photo = Person(_folder, "사람.png", 640, 320);
+            var rgb = FfmpegRunner.RunBytes(FfmpegMedia.Tool.FfmpegPath,
+                new[] { "-hide_banner", "-loglevel", "error", "-i", photo, "-vf", "scale=448:256:flags=bilinear", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1" },
+                TimeSpan.FromMinutes(1), CancellationToken.None).GetAwaiter().GetResult();
+            Assert.Equal(448 * 256 * 3, rgb.Length);
+
+            float[] cpu;
+            var cpuTimes = new List<double>();
+            using (var segmenter = PersonSegmenter.Open(Model, false))
+            {
+                Assert.False(segmenter.OnGpu);
+                Assert.StartsWith("CPU(", segmenter.Device);
+                Assert.Null(segmenter.Fallback);
+                cpu = Segment(segmenter, rgb, 23, cpuTimes);
+            }
+            _out.WriteLine("CPU " + Median(cpuTimes).ToString("F1", CultureInfo.InvariantCulture) + "ms/장 · " + OnnxRuntimeLibrary.LoadedPath);
+
+            var gpuReason = OnnxRuntimeLibrary.GpuUnavailable;
+            _out.WriteLine("DirectML: " + (OnnxRuntimeLibrary.DirectMLPath ?? "없음") + " · GPU: " + (OnnxRuntimeLibrary.GpuName ?? "모름") + (gpuReason != null ? " · " + gpuReason : ""));
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.Equal(Path.Combine(Path.GetDirectoryName(OnnxRuntimeLibrary.LoadedPath), "DirectML.dll"), OnnxRuntimeLibrary.DirectMLPath, ignoreCase: true);
+                var loaded = Process.GetCurrentProcess().Modules.Cast<ProcessModule>().Where(m => string.Equals(m.ModuleName, "DirectML.dll", StringComparison.OrdinalIgnoreCase)).ToList();
+                Assert.Single(loaded);
+                Assert.Equal(OnnxRuntimeLibrary.DirectMLPath, loaded[0].FileName, ignoreCase: true);
+            }
+
+            using (var segmenter = PersonSegmenter.Open(Model))
+            {
+                _out.WriteLine("자동: " + segmenter.Device + (segmenter.Fallback != null ? " — " + segmenter.Fallback : ""));
+                if (gpuReason != null)
+                    Assert.Equal(gpuReason, segmenter.Fallback);
+                // GPU로 돌거나, 못 돌면 까닭을 남기고 CPU로
+                Assert.True(segmenter.OnGpu || (segmenter.Fallback != null && segmenter.Device.StartsWith("CPU(", StringComparison.Ordinal)), segmenter.Device);
+                var times = new List<double>();
+                var auto = Segment(segmenter, rgb, 53, times);
+                _out.WriteLine(segmenter.Device + " " + Median(times).ToString("F1", CultureInfo.InvariantCulture) + "ms/장");
+                var cpuMask = new byte[cpu.Length];
+                var autoMask = new byte[auto.Length];
+                PersonMaskText.ToMask(cpu, cpuMask, null);
+                PersonMaskText.ToMask(auto, autoMask, null);
+                var most = cpuMask.Zip(autoMask, (a, b) => Math.Abs(a - b)).Max();
+                _out.WriteLine("CPU와 마스크 차이(0~255) 최대 " + most);
+                Assert.InRange(most, 0, 2);
+            }
+
+            try
+            {
+                // GPU 열기 실패 → CPU로 열고 까닭을 남긴다
+                PersonSegmenter.SimulatedGpuFault = PersonSegmenter.GpuFault.Open;
+                using (var segmenter = PersonSegmenter.Open(Model))
+                {
+                    Assert.False(segmenter.OnGpu);
+                    Assert.StartsWith("CPU(", segmenter.Device);
+                    Assert.Equal(gpuReason ?? "GPU(DirectML)로 열지 못했습니다: 시험: GPU 열기 실패", segmenter.Fallback);
+                    Assert.Equal(cpu, Segment(segmenter, rgb, 1));
+                }
+                // GPU 추론 실패 → 그 프레임부터 CPU로(같은 출력)
+                PersonSegmenter.SimulatedGpuFault = PersonSegmenter.GpuFault.Run;
+                using (var segmenter = PersonSegmenter.Open(Model))
+                {
+                    var wasGpu = segmenter.OnGpu;
+                    Assert.Equal(cpu, Segment(segmenter, rgb, 1));
+                    Assert.False(segmenter.OnGpu);
+                    Assert.StartsWith("CPU(", segmenter.Device);
+                    if (wasGpu)
+                        Assert.Equal("GPU(DirectML) 추론이 실패해 CPU로 이어 만듭니다: 시험: GPU 추론 실패", segmenter.Fallback);
+                }
+            }
+            finally
+            {
+                PersonSegmenter.SimulatedGpuFault = PersonSegmenter.GpuFault.None;
+            }
+        }
+
         [PersonMaskFact]
         public async Task Image_MaskIsGrayPng_WhiteOverThePerson_RebuiltWhenSourceChanges()
         {
@@ -565,8 +686,10 @@ namespace VideoEditor.Tests
             var media = await MediaProbe.Probe(FfmpegMedia.Tool, photo, CancellationToken.None);
             Assert.Equal(MediaKind.Image, media.Kind);
             var watch = Stopwatch.StartNew();
-            var mask = await service.Build(FfmpegMedia.Tool, media, null, CancellationToken.None);
-            _out.WriteLine("사진 마스크 " + watch.ElapsedMilliseconds + "ms · " + OnnxRuntimeLibrary.LoadedPath);
+            // 처음은 CPU로만(GPU 끔 설정) — 예전과 같은 길
+            var mask = await service.Build(FfmpegMedia.Tool, media, null, CancellationToken.None, useGpu: false);
+            _out.WriteLine("사진 마스크 " + watch.ElapsedMilliseconds + "ms · " + service.LastDevice + " · " + OnnxRuntimeLibrary.LoadedPath);
+            Assert.StartsWith("CPU(", service.LastDevice);
             Assert.Equal(".png", Path.GetExtension(mask));
             Assert.Equal(mask, service.Find(photo));
             Assert.Equal("png,448,256,gray", Probe("-show_entries", "stream=codec_name,pix_fmt,width,height", "-of", "csv=p=0", mask));
@@ -581,7 +704,12 @@ namespace VideoEditor.Tests
             // 원본을 바꿔 넣으면 옛 마스크는 쓰지 않고, 새로 만들면 옛 것은 지운다
             File.SetLastWriteTimeUtc(photo, DateTime.UtcNow.AddMinutes(1));
             Assert.Null(service.Find(photo));
+            // 다시 만들 때는 기본(GPU가 되면 GPU) — 사람 자리는 그대로
             var rebuilt = await service.Build(FfmpegMedia.Tool, media, null, CancellationToken.None);
+            _out.WriteLine("다시 만든 장치: " + service.LastDevice);
+            Assert.NotNull(service.LastDevice);
+            var again = MaskFrame(rebuilt, 0, 448, 256);
+            Assert.InRange(pixels.Zip(again, (a, b) => Math.Abs(a - b)).Max(), 0, 2);
             Assert.NotEqual(mask, rebuilt);
             Assert.False(File.Exists(mask));
             // 마스크 하나와 그 원본 기록 하나(옛 마스크의 기록도 지움)
@@ -620,7 +748,7 @@ namespace VideoEditor.Tests
             Assert.Equal(".mkv", Path.GetExtension(mask));
             Assert.Equal(mask, service.Find(video));
             var last = reports.Last();
-            _out.WriteLine("동영상 마스크 " + elapsed + "ms(" + last.Done + "프레임, 한 장 약 " + elapsed / Math.Max(1, last.Done) + "ms) · " + new FileInfo(mask).Length + "바이트");
+            _out.WriteLine("동영상 마스크 " + elapsed + "ms(" + last.Done + "프레임, 한 장 약 " + elapsed / Math.Max(1, last.Done) + "ms) · " + new FileInfo(mask).Length + "바이트 · " + service.LastDevice);
             Assert.Equal(50, last.Total);
             Assert.Equal(50, last.Done);
 

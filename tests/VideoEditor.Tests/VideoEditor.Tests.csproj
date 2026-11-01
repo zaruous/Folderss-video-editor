@@ -21,6 +21,9 @@
     <None Include="Samples\**" CopyToOutputDirectory="PreserveNewest" />
     <!-- 기본 스티커(플러그인 zip의 stickers\와 같은 파일) — 모두 읽히고 출처·라이선스 목록에 있는지 본다 -->
     <None Include="..\..\assets\stickers\**" Link="stickers\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- DirectML.dll을 onnxruntime.dll과 같은 자리에(플러그인 zip과 같음). 버전은 Microsoft.ML.OnnxRuntime.DirectML 1.22.1이 기대는 것 -->
+    <None Include="$(NuGetPackageRoot)microsoft.ai.directml\1.15.4\bin\x64-win\DirectML.dll" Link="runtimes\win-x64\native\DirectML.dll" CopyToOutputDirectory="PreserveNewest" Visible="false"
+          Condition="'$(OS)' == 'Windows_NT' AND Exists('$(NuGetPackageRoot)microsoft.ai.directml\1.15.4\bin\x64-win\DirectML.dll')" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,7 +32,8 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <!-- 링크한 Media/PersonSegmenter.cs가 쓰는 ONNX Runtime(플러그인과 같은 버전). 실제로 모델을 돌리는 시험은 FOLDERSS_VE_PERSONMASK를 줄 때만 -->
     <!-- 인물 분리: Windows는 네이티브 DLL까지(모델을 실제로 돌리는 시험), 다른 OS(Linux CI)는 관리 코드만 — 전체 패키지는 모든 OS의 네이티브를 담아 약 120MB -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" Condition="'$(OS)' == 'Windows_NT'" />
+    <!-- Windows는 플러그인과 같은 DirectML 판(GPU·CPU)과 DirectML.dll(아래 None) — GPU가 있으면 GPU 길과 CPU로 돌아가기도 본다 -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.22.1" Condition="'$(OS)' == 'Windows_NT'" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.22.1" Condition="'$(OS)' != 'Windows_NT'" />
     <!-- 링크한 Media/YouTubeAccount.cs의 DPAPI(MIT). 플러그인(net8.0-windows)은 WPF 공유 프레임워크에 들어 있어 패키지가 필요 없다. Windows가 아니면 부르지 않는다 -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />

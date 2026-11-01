@@ -26,7 +26,7 @@
 | 애니메이션 | 꾸민 글자·아트 요소·사진·동영상 클립에 나타나기·강조·사라지기 효과 — 나타나기·사라지기 13종(서서히, 날아오기 8방향, 확대, 튀어 오르기, 닦아내기, 돌며 나타나기, 떠오르기·흐려지며 가라앉기, 커지며 돌기, 가운데서 갈라지기, 흐림에서 선명하게, 타자기·흩어지기는 글자 클립, 그려지기·지워지기는 선·화살표·동그라미 치기·밑줄 요소)과 사라지기 전용 떨어지기, 강조 9종(맥박, 흔들기, 회전, 크게·작게, 투명도 바꾸기, 색 바꾸기, 광선 깜빡임, 물결·굵게 깜빡이기는 글자 클립), 이동 경로 5종(직선, 호, 원, 물결, 사용자 경로 — 클립에 하나, 되돌아오기, 미리 보기 위 점선·점을 끌어 고치고 사용자 경로는 Shift+누르기·두 번 누르기로 점을 더하고 뺌), 방향·단위(한 번에·단어별·글자별 — 한글은 음절)·사이 지연·길이·지연·반복·이징(일정·서서히·튕김·탄성)·색. 속성 패널 [애니메이션] 탭의 썸네일(마우스를 올리면 움직임)로 넣고 [미리 보기]로 그 클립 구간만 재생, 타임라인 클립 아래 나타나기·사라지기 띠의 끝을 끌어 길이를 바꿈. 미리 보기·내보내기 같음(FFmpeg 시간식, 글자별·물결·그려지기는 그린 장을 캐시해 이어 붙임 — 되풀이하는 강조는 한 번만 그려 되풀이, [애니메이션 효과](docs/animation.md)) |
 | 내보내기 | MP4(H.264 + AAC), 해상도·프레임 레이트·품질·인코더(x264 · NVIDIA · Intel · AMD · Windows), 전체 또는 In~Out, 진행률·취소 |
 | 프로젝트 | `.fvproj` 저장/열기(미디어 경로는 프로젝트 기준 상대 경로), 첫 동영상에 맞춘 해상도·프레임 레이트, 맨 왼쪽 프로젝트 트리(📁 화면·소리·타임라인·파일 — 세로 9:16·정사각형, 샘플 레이트, 마그네틱, 다운로드 폴더 등), 저장 안 한 편집 복구(2분마다·Folderss 종료 때 써 두고 다음에 열 때 물음), `파일 > 최근 프로젝트 열기`(열거나 저장한 프로젝트 최근 10개 — 1~9 접근 키, 없는 파일은 흐리게 보이고 누르면 목록에서 뺄지 물음, 편집 창들이 함께 씀) |
-| 인물 마스크 | 동영상·사진에서 사람만 따낸 흑백 마스크를 이 PC에서 만듦(클립·미디어 오른쪽 메뉴 [인물 마스크 만들기] — "사람에게만" 효과가 씀). AI 인물 분리 모델 MODNet(Apache-2.0, 처음 한 번 약 25MB를 받아 SHA-256 확인)과 ONNX Runtime(CPU), 진행률·취소, 원본 파일마다 한 번 만들어 두고 다시 씀. 동영상·사진은 인터넷으로 보내지 않음([인물 마스크](docs/person-mask.md)) |
+| 인물 마스크 | 동영상·사진에서 사람만 따낸 흑백 마스크를 이 PC에서 만듦(클립·미디어 오른쪽 메뉴 [인물 마스크 만들기] — "사람에게만" 효과가 씀). AI 인물 분리 모델 MODNet(Apache-2.0, 처음 한 번 약 25MB를 받아 SHA-256 확인)과 ONNX Runtime(GPU(DirectML)가 있으면 GPU, 없거나 안 되면 CPU — 설정에서 CPU로만도 고름), 진행률·취소, 원본 파일마다 한 번 만들어 두고 다시 씀. 동영상·사진은 인터넷으로 보내지 않음([인물 마스크](docs/person-mask.md)) |
 
 없는 것(이후 과제): 인물 마스크 말고는 AI 기능, 스톡 미디어·템플릿, 색보정·LUT, 복합 클립·듀얼 타임라인.
 
@@ -146,4 +146,4 @@ scripts\run-host.bat                           # Folderss 없이 이 플러그�
 
 [MIT](LICENSE). FFmpeg는 플러그인에 들어 있지 않으며, 내려받는 빌드는 FFmpeg 프로젝트의 GPL 라이선스를 따릅니다. 미리 보기 소리 재생에 [NAudio](https://github.com/naudio/NAudio)(MIT)를 씁니다.
 [요소] 탭의 기본 스티커(`assets/stickers`, zip의 `stickers\`)는 이 저장소에서 직접 그린 것으로 같은 MIT입니다([출처·라이선스 목록](assets/stickers/LICENSES.md)).
-인물 마스크에 [ONNX Runtime](https://github.com/microsoft/onnxruntime)(MIT — zip의 `licenses\`에 라이선스·제3자 고지)을 넣어 쓰고, 모델 [MODNet](https://github.com/ZHKKKe/MODNet)(Zhanghan Ke 외, Apache-2.0)의 ONNX 변환 [Xenova/modnet](https://huggingface.co/Xenova/modnet)(Apache-2.0)은 처음 쓸 때 내려받습니다(플러그인에 들어 있지 않음).
+인물 마스크에 [ONNX Runtime](https://github.com/microsoft/onnxruntime) DirectML 판(MIT)과 DirectML 재배포 DLL(Microsoft 소프트웨어 사용 조건 — Windows용 앱에 넣어 배포 허용)을 넣어 쓰고(zip의 `licenses\`에 둘의 라이선스·제3자 고지), 모델 [MODNet](https://github.com/ZHKKKe/MODNet)(Zhanghan Ke 외, Apache-2.0)의 ONNX 변환 [Xenova/modnet](https://huggingface.co/Xenova/modnet)(Apache-2.0)은 처음 쓸 때 내려받습니다(플러그인에 들어 있지 않음).

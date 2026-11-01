@@ -979,6 +979,14 @@ namespace VideoEditor.Ui
                 Status("인물 마스크는 동영상·사진에만 만들 수 있습니다: " + name);
                 return;
             }
+            // 이 PC용 엔진이 플러그인에 없으면(ARM64 프로세스 등) 모델을 받기 전에 알린다
+            var unsupported = OnnxRuntimeLibrary.Unsupported();
+            if (unsupported != null)
+            {
+                Status(unsupported);
+                return;
+            }
+            var gpu = _services.PersonMaskGpu;
             PersonMaskDialog dialog;
             try
             {
@@ -987,7 +995,7 @@ namespace VideoEditor.Ui
                     Status("인물 마스크를 만들지 않았습니다 — 처음 한 번 인물 분리 모델을 내려받아야 합니다.");
                     return;
                 }
-                dialog = new PersonMaskDialog(media, (progress, cancellation) => masks.Build(tool, media, progress, cancellation));
+                dialog = new PersonMaskDialog(media, (progress, cancellation) => masks.Build(tool, media, progress, cancellation, gpu));
                 var owner = UiKit.OwnerOf(_owner);
                 if (owner != null && owner.IsLoaded)
                     dialog.Owner = owner;
@@ -1004,7 +1012,9 @@ namespace VideoEditor.Ui
             }
             RefreshPreview();
             var seconds = (int)Math.Round(dialog.Elapsed.TotalSeconds);
-            Status("인물 마스크를 만들었습니다 — 사람에게만 효과가 사람 위에만 그려집니다(" + name + ", " + (seconds >= 60 ? seconds / 60 + "분 " : "") + seconds % 60 + "초).");
+            // 처리 장치는 짧게(GPU·CPU만 — 까닭은 진행 창에 보였다)
+            var device = dialog.Device == null ? "" : dialog.Device.StartsWith("GPU", StringComparison.Ordinal) ? ", GPU" : ", CPU";
+            Status("인물 마스크를 만들었습니다 — 사람에게만 효과가 사람 위에만 그려집니다(" + name + ", " + (seconds >= 60 ? seconds / 60 + "분 " : "") + seconds % 60 + "초" + device + ").");
         }
 
         /// <summary>

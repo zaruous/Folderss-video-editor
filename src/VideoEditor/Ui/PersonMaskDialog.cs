@@ -21,6 +21,8 @@ namespace VideoEditor.Ui
 
         private readonly Builder _build;
         private readonly TextBlock _status = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) };
+        // 처리 장치(GPU·CPU, CPU로 돌아갔으면 그 까닭) — 모델을 연 뒤에 보인다
+        private readonly TextBlock _device = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0), Visibility = Visibility.Collapsed };
         private readonly ProgressBar _progress = new ProgressBar { Height = 14, Margin = new Thickness(0, 12, 0, 0), IsIndeterminate = true };
         private readonly Button _close;
         private readonly Stopwatch _watch = new Stopwatch();
@@ -54,6 +56,9 @@ namespace VideoEditor.Ui
             AutomationProperties.SetAutomationId(_status, "PersonMaskStatus");
             _status.Text = "준비하는 중…";
             panel.Children.Add(_status);
+            AutomationProperties.SetAutomationId(_device, "PersonMaskDevice");
+            _device.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
+            panel.Children.Add(_device);
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
             _close = UiKit.TextButton("취소", "PersonMaskCancelButton", CloseOrCancel);
             _close.IsCancel = true;
@@ -71,6 +76,9 @@ namespace VideoEditor.Ui
         public string Error { get; private set; }
 
         public TimeSpan Elapsed { get; private set; }
+
+        /// <summary>마지막으로 알린 처리 장치(예: "GPU(DirectML · 어댑터)", "CPU(6스레드) — 까닭"). 모델을 열기 전이면 null.</summary>
+        public string Device { get; private set; }
 
         private static string Describe(MediaInfo media)
         {
@@ -125,6 +133,12 @@ namespace VideoEditor.Ui
         {
             if (_cancel == null)
                 return;
+            if (status.Detail != null && status.Detail != Device)
+            {
+                Device = status.Detail;
+                _device.Text = "처리 장치: " + Device;
+                _device.Visibility = Visibility.Visible;
+            }
             if (status.Total <= 0)
             {
                 _progress.IsIndeterminate = true;

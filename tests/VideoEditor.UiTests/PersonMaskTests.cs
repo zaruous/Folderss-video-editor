@@ -182,6 +182,23 @@ namespace VideoEditor.UiTests
                 await ui.WaitUntil(() => Ui.Window("인물 마스크 만들기") == null, TimeSpan.FromMinutes(3), "다 만들어 진행 창 닫힘");
                 await ui.WaitUntil(() => Status(window).StartsWith("인물 마스크를 만들었습니다 — 사람에게만 효과가 사람 위에만 그려집니다(testsrc.mp4, ", StringComparison.Ordinal),
                     Wait, "만듦 알림");
+                // 처리 장치: GPU(DirectML)를 쓸 수 있으면 GPU, 아니면 CPU와 그 까닭 — 진행 창과 상태 줄에(#43)
+                var library = plugin.Assembly.GetType("VideoEditor.Media.OnnxRuntimeLibrary", true);
+                var gpuMissing = (string)library.GetProperty("GpuUnavailable").GetValue(null);
+                var device = ui.Run(() => Ui.ById<TextBlock>(dialog, "PersonMaskDevice").Text);
+                var status = ui.Run(() => Status(window));
+                if (gpuMissing == null)
+                {
+                    Assert.StartsWith("처리 장치: GPU(DirectML", device);
+                    Assert.EndsWith(", GPU).", status);
+                    Assert.Equal(Path.Combine(plugin.PluginDirectory, "runtimes", "win-x64", "native", "DirectML.dll"), (string)library.GetProperty("DirectMLPath").GetValue(null), ignoreCase: true);
+                }
+                else
+                {
+                    Assert.StartsWith("처리 장치: CPU(", device);
+                    Assert.Contains(gpuMissing, device);
+                    Assert.EndsWith(", CPU).", status);
+                }
                 // 마스크 하나와 그 원본 기록(.source) 하나 — 기록은 원본을 지웠거나 바꾼 마스크 정리에 쓴다(#30)
                 var masks = Directory.GetFiles(Path.Combine(MaskRoot(plugin), "masks"), "*.mkv");
                 Assert.Single(masks);
@@ -208,6 +225,71 @@ namespace VideoEditor.UiTests
             }
             finally
             {
+                await CloseEditor(ui, window);
+                if (Directory.Exists(MaskRoot(plugin)))
+                    Directory.Delete(MaskRoot(plugin), true);
+            }
+        }
+
+        /// <summary>
+        /// 설정 [인물 마스크를 GPU(DirectML)로 만들기](기본 켬)를 끄면 CPU로만 만든다: 진행 창의 처리 장치가 "CPU(…스레드)"이고 까닭은 붙지 않으며,
+        /// 상태 줄 끝이 ", CPU)."다. 다시 켜면 설정을 지운다(기본값). 모델이 있을 때만(FOLDERSS_VE_PERSONMASK).
+        /// </summary>
+        [EditorFact]
+        public async Task PersonMask_GpuSettingOff_BuildsOnCpu()
+        {
+            var env = Environment.GetEnvironmentVariable(EnvFolder);
+            if (string.IsNullOrEmpty(env) || (!File.Exists(Path.Combine(env, ModelFile)) && !File.Exists(Path.Combine(env, "models", ModelFile))))
+                return;
+            var ui = UiThread.Instance;
+            var plugin = PluginUnderTest.Load(ui);
+            Window window = null;
+            Window settings = null;
+            try
+            {
+                window = await Open(ui, plugin);
+                var page = plugin.Manager.SettingsPages.Single(p => p.Title == "동영상 편집");
+                settings = ui.Run(() =>
+                {
+                    var host = new Window { Title = "설정 시험", Width = 720, Height = 540, Content = page.CreateView(), ShowActivated = false, ShowInTaskbar = false };
+                    host.SetResourceReference(Window.BackgroundProperty, "WindowBackground");
+                    host.Show();
+                    return host;
+                });
+                ui.Run(() =>
+                {
+                    var box = Ui.ById<CheckBox>(settings, "SettingsPersonMaskGpu");
+                    Assert.True(box.IsChecked == true, "기본은 GPU 켬");
+                    box.IsChecked = false;
+                    page.Save();
+                });
+                Assert.Equal("false", plugin.Manager.GetSetting("personMaskGpu"));
+
+                await Import(ui, window, Path.Combine(MediaFolder, "testsrc.mp4"));
+                await AddToTimeline(ui, window, "testsrc.mp4");
+                ui.Post(() => InvokeMenu(ClipMenu(window, ClipNamed(window, "testsrc.mp4")), "인물 마스크 만들기"));
+                var dialog = await ui.WaitFor(() => Ui.Window("인물 마스크 만들기"), Wait, "인물 마스크 진행 창");
+                await ui.WaitUntil(() => Ui.Window("인물 마스크 만들기") == null, TimeSpan.FromMinutes(3), "다 만들어 진행 창 닫힘");
+                await ui.WaitUntil(() => Status(window).StartsWith("인물 마스크를 만들었습니다", StringComparison.Ordinal), Wait, "만듦 알림");
+                var device = ui.Run(() => Ui.ById<TextBlock>(dialog, "PersonMaskDevice").Text);
+                Assert.Matches("^처리 장치: CPU\\([0-9]+스레드\\)$", device);
+                Assert.EndsWith(", CPU).", ui.Run(() => Status(window)));
+                Assert.Single(Directory.GetFiles(Path.Combine(MaskRoot(plugin), "masks"), "*.mkv"));
+
+                // 다시 켜면 기본값(설정 없음)
+                ui.Run(() =>
+                {
+                    Ui.ById<CheckBox>(settings, "SettingsPersonMaskGpu").IsChecked = true;
+                    page.Save();
+                });
+                Assert.Null(plugin.Manager.GetSetting("personMaskGpu"));
+                Assert.Empty(ui.TakeErrors());
+            }
+            finally
+            {
+                plugin.Manager.SetSetting("personMaskGpu", null);
+                if (settings != null)
+                    ui.Run(() => settings.Close());
                 await CloseEditor(ui, window);
                 if (Directory.Exists(MaskRoot(plugin)))
                     Directory.Delete(MaskRoot(plugin), true);
