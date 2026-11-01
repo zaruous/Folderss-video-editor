@@ -27,6 +27,9 @@ namespace VideoEditor.Helper
         private readonly List<Input> _inputs = new List<Input>();
         private AVFilterGraph* _graph;
         private AVFilterContext* _sink;
+        // GPU 전환(xfade_opencl)이 쓰는 OpenCL 장치 — 도우미 프로세스에 하나만 열어 두고 그래프마다 참조를 준다(열기·커널 컴파일 비용을 줄임)
+        private static readonly object DeviceGate = new object();
+        private static AVBufferRef* _openCl;
 
         public PlanRun(InputPool pool, HelperPlan plan)
         {
@@ -56,7 +59,10 @@ namespace VideoEditor.Helper
             AVFilterInOut* outputs = null;
             try
             {
-                Native.Check(ffmpeg.avfilter_graph_parse2(_graph, _plan.Filter, &open, &outputs), "필터 그래프 읽기");
+                if (_plan.OpenCl)
+                    ParseWithDevice(&open, &outputs);
+                else
+                    Native.Check(ffmpeg.avfilter_graph_parse2(_graph, _plan.Filter, &open, &outputs), "필터 그래프 읽기");
                 for (var cursor = open; cursor != null; cursor = cursor->next)
                     Connect(cursor);
                 if (outputs == null || outputs->next != null)
@@ -406,6 +412,46 @@ namespace VideoEditor.Helper
             var pcm = new byte[size];
             new ReadOnlySpan<byte>(frame->data[0], size).CopyTo(pcm);
             return pcm;
+        }
+
+        /// <summary>
+        /// GPU 전환이 든 그래프 읽기: hwupload는 초기화할 때 장치가 있어야 하므로 parse2(읽으며 초기화) 대신 ffmpeg.exe처럼
+        /// 읽기 → 필터 만들기 → 필터마다 OpenCL 장치 주기(-filter_hw_device와 같음) → 옵션·초기화·잇기. 장치를 열지 못하면 실패 → 플러그인이 ffmpeg.exe로 돌아간다.
+        /// </summary>
+        private void ParseWithDevice(AVFilterInOut** open, AVFilterInOut** outputs)
+        {
+            AVFilterGraphSegment* segment = null;
+            try
+            {
+                Native.Check(ffmpeg.avfilter_graph_segment_parse(_graph, _plan.Filter, 0, &segment), "필터 그래프 읽기");
+                Native.Check(ffmpeg.avfilter_graph_segment_create_filters(segment, 0), "필터 만들기");
+                var device = OpenClDevice();
+                for (var i = 0; i < _graph->nb_filters; i++)
+                {
+                    var filter = _graph->filters[i];
+                    if (filter->hw_device_ctx == null)
+                        filter->hw_device_ctx = ffmpeg.av_buffer_ref(device);
+                }
+                Native.Check(ffmpeg.avfilter_graph_segment_apply(segment, 0, open, outputs), "필터 그래프 잇기");
+            }
+            finally
+            {
+                ffmpeg.avfilter_graph_segment_free(&segment);
+            }
+        }
+
+        private static AVBufferRef* OpenClDevice()
+        {
+            lock (DeviceGate)
+            {
+                if (_openCl == null)
+                {
+                    AVBufferRef* device = null;
+                    Native.Check(ffmpeg.av_hwdevice_ctx_create(&device, AVHWDeviceType.AV_HWDEVICE_TYPE_OPENCL, null, null, 0), "OpenCL 장치 열기");
+                    _openCl = device;
+                }
+                return _openCl;
+            }
         }
 
         public void Dispose()

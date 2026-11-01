@@ -165,7 +165,7 @@ namespace VideoEditor.Ui
             var rasterizer = _services.TextRasterizer;
             var texts = copy.AllClips.Any(RenderGraph.NeedsTextImage);
             // 재생 구간에 무거운 수식 전환이 있으면 미리 그린 캐시를 찾는다(없는 것은 배경에서 그리기 시작 — 이번 재생은 지금 방식)
-            var heavy = TransitionPrerender.Windows(copy, from, to, tool.MajorVersion).Count > 0;
+            var heavy = TransitionPrerender.Windows(copy, from, to, tool.MajorVersion, GpuTransitions.KernelFile(tool) != null).Count > 0;
             if (!texts && !heavy)
             {
                 Start(tool, copy, from, to, size.Width, size.Height, rasterizer, null);

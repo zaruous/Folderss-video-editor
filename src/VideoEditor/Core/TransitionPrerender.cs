@@ -43,7 +43,8 @@ namespace VideoEditor.Core
         /// [from, to)에 걸치는 무거운 전환(수식 xfade — <see cref="TransitionDef.IsExpression"/>) 구간. 렌더 그래프가 xfade로 그리는 것과 같은 조건이다
         /// (보이는 동영상 트랙의 화면 클립, 디졸브가 아닌 전환, 길이 = min(전환 길이, 클립 길이)). 재생 헤드에서 가까운 차례(시작 프레임 순).
         /// </summary>
-        public static List<PrerenderWindow> Windows(Project project, long from, long to, int ffmpegMajor)
+        /// <param name="gpu">GPU 전환을 쓸 수 있으면 true — 커널이 있는 효과는 실시간이라 뺀다(<see cref="Transitions.HasKernel"/>).</param>
+        public static List<PrerenderWindow> Windows(Project project, long from, long to, int ffmpegMajor, bool gpu = false)
         {
             var result = new List<PrerenderWindow>();
             if (project == null || to <= from)
@@ -58,7 +59,7 @@ namespace VideoEditor.Core
                     if (length <= 0 || from >= clip.Start + length || to <= clip.Start)
                         continue;
                     var def = Transitions.Resolve(clip, ffmpegMajor);
-                    if (def.IsDissolve || !def.IsExpression)
+                    if (def.IsDissolve || !def.IsExpression || (gpu && Transitions.HasKernel(def)))
                         continue;
                     result.Add(new PrerenderWindow { Track = track, Clip = clip, Transition = def, Start = clip.Start, End = clip.Start + length });
                 }

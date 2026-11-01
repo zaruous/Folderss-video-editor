@@ -304,6 +304,8 @@ namespace VideoEditor.Ui
         public void SetTool(FfmpegTool tool, bool remember)
         {
             Tool = tool;
+            // GPU 전환을 쓸 수 있는지 배경에서 미리 알아 둔다(첫 재생부터 GPU로)
+            GpuTransitions.KernelFile(tool);
             if (tool != null && remember)
                 SaveSetting(FfmpegPathKey, tool.Folder);
             // FFmpeg가 바뀌면 도우미도 그 FFmpeg의 DLL로 다시 띄운다(거듭 실패해 꺼 둔 것도 다시)

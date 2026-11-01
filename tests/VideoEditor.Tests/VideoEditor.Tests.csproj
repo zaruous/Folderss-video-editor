@@ -17,6 +17,7 @@
     <Compile Include="..\..\src\VideoEditor\Core\**\*.cs" Link="Core\%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="..\..\src\VideoEditor\Media\**\*.cs" Link="Media\%(RecursiveDir)%(Filename)%(Extension)" />
     <EmbeddedResource Include="..\..\src\VideoEditor\Core\transitions.json" LogicalName="VideoEditor.Core.transitions.json" Link="Core\transitions.json" />
+    <EmbeddedResource Include="..\..\src\VideoEditor\Core\transitions.cl" LogicalName="VideoEditor.Core.transitions.cl" Link="Core\transitions.cl" />
     <!-- yt-dlp 출력 표본(실제 출력을 저장해 둔 것) -->
     <None Include="Samples\**" CopyToOutputDirectory="PreserveNewest" />
     <!-- 기본 스티커(플러그인 zip의 stickers\와 같은 파일) — 모두 읽히고 출처·라이선스 목록에 있는지 본다 -->

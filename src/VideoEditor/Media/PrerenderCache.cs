@@ -133,7 +133,7 @@ namespace VideoEditor.Media
         {
             var spans = new List<PrerenderedSpan>();
             var jobs = new List<PrerenderJob>();
-            foreach (var window in TransitionPrerender.Windows(project, from, to, tool.MajorVersion))
+            foreach (var window in TransitionPrerender.Windows(project, from, to, tool.MajorVersion, GpuTransitions.KernelFile(tool) != null))
             {
                 var plan = RenderGraph.Build(project, StillOptions(tool, window.Start, window.End, width, height, textRasterizer));
                 var key = Key(plan, tool.VersionLine);
@@ -160,6 +160,7 @@ namespace VideoEditor.Media
                 FontFile = RenderEnvironment.DefaultFont(),
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
+                TransitionKernels = GpuTransitions.KernelFile(tool),
                 TextRasterizer = textRasterizer,
                 PersonMasks = RenderEnvironment.PersonMasks
             };

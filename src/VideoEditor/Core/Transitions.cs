@@ -33,6 +33,13 @@ namespace VideoEditor.Core
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string Ease { get; set; }
 
+        /// <summary>
+        /// 앞 화면을 휘어 바뀌는 효과(소용돌이·물결 등)인지. 앞 클립이 없으면 휠 앞 화면이 비어(투명) 효과가 보이지 않으므로,
+        /// 그때는 새 화면을 투명에서 서서히 나타나게 한 사본을 앞 화면으로 쓴다 — 새 화면이 휘며 나타난다.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Warp { get; set; }
+
         /// <summary>플러그인에 든 기본 효과인지(아니면 사용자 효과 — 클립에 정의를 함께 저장한다).</summary>
         [JsonIgnore]
         public bool BuiltIn { get; internal set; }
@@ -62,7 +69,7 @@ namespace VideoEditor.Core
         /// <summary>효과 파일 하나의 최대 크기와 사용자 효과 최대 개수.</summary>
         public const int MaxFileBytes = 1 << 20;
         public const int MaxUserTransitions = 500;
-        public const int MaxExprLength = 1500;
+        public const int MaxExprLength = 4000;
 
         // xfade 내장 효과와 처음 들어간 FFmpeg 주 버전(5보다 낮은 것은 최소 지원 버전 5로).
         // squeezev는 FFmpeg 빌드에 따라 접근 위반으로 죽어 받지 않는다(기본 효과의 같은 모양은 수식으로)
@@ -91,6 +98,34 @@ namespace VideoEditor.Core
         };
 
         private static readonly IReadOnlyList<TransitionDef> BuiltIns = LoadBuiltIns();
+
+        // GPU(OpenCL) 커널: transitions.cl(플러그인에 포함)의 __kernel 이름 = 기본 수식 효과 id. 사용자 효과는 받지 않는다(커널은 GPU에서 도는 임의 코드)
+        private static readonly Lazy<string> KernelText = new Lazy<string>(LoadKernels);
+        private static readonly Lazy<HashSet<string>> KernelNames = new Lazy<HashSet<string>>(() =>
+            new HashSet<string>(Regex.Matches(KernelText.Value, @"__kernel\s+void\s+([A-Za-z][A-Za-z0-9_]*)").Select(m => m.Groups[1].Value), StringComparer.Ordinal));
+
+        /// <summary>GPU 커널 프로그램(transitions.cl) 글. 없으면 빈 글.</summary>
+        public static string KernelSource { get { return KernelText.Value; } }
+
+        /// <summary>
+        /// GPU(xfade_opencl)로 그릴 수 있는 효과인지: 기본 수식 효과이고 이징이 없으며 같은 이름의 커널이 있을 때.
+        /// 커널은 같은 수식의 그림을 그린다(GPU가 없으면 수식으로 — 결과가 같다).
+        /// </summary>
+        public static bool HasKernel(TransitionDef def)
+        {
+            return def != null && def.BuiltIn && def.IsExpression && def.Ease == null && KernelNames.Value.Contains(def.Id);
+        }
+
+        private static string LoadKernels()
+        {
+            using (var stream = typeof(Transitions).Assembly.GetManifestResourceStream("VideoEditor.Core.transitions.cl"))
+            {
+                if (stream == null)
+                    return "";
+                using (var reader = new StreamReader(stream))
+                    return reader.ReadToEnd();
+            }
+        }
         private static IReadOnlyList<TransitionDef> _all = BuiltIns;
 
         /// <summary>[전환] 탭에 보일 순서(기본 효과 → 사용자 효과).</summary>
@@ -101,7 +136,7 @@ namespace VideoEditor.Core
 
         /// <summary>
         /// 썸네일을 그릴 차례: 사용자 효과 먼저, 그다음 기본 효과(각각 보이는 차례 그대로). 기본 효과는 한 번 그리면 데이터 폴더 캐시에 남지만
-        /// 새로 넣은 사용자 효과는 처음 그려야 하므로, 기본 효과 64개 뒤에서 기다리지 않게.
+        /// 새로 넣은 사용자 효과는 처음 그려야 하므로, 기본 효과 72개 뒤에서 기다리지 않게.
         /// </summary>
         public static IEnumerable<TransitionDef> PreviewOrder(IEnumerable<TransitionDef> shown)
         {
@@ -292,11 +327,12 @@ namespace VideoEditor.Core
                 Expr = def.Expr?.Trim(),
                 Ffmpeg = ffmpeg,
                 Ease = ease,
+                Warp = def.Warp,
                 BuiltIn = false
             };
         }
 
-        /// <summary>수식은 정해 둔 글자·변수·함수만, 괄호가 맞고 1500자 이내.</summary>
+        /// <summary>수식은 정해 둔 글자·변수·함수만, 괄호가 맞고 4000자 이내.</summary>
         private static bool CheckExpr(string expr, out string why)
         {
             why = null;

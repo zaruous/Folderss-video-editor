@@ -147,6 +147,9 @@ namespace VideoEditor.Media
             script = Path.Combine(RenderEnvironment.TempFolder(), "graph-" + Guid.NewGuid().ToString("N") + ".txt");
             File.WriteAllText(script, plan.Filter, new UTF8Encoding(false));
             var args = new List<string> { "-hide_banner", "-nostdin", "-loglevel", "error", "-y" };
+            // GPU 전환: OpenCL 장치를 열어 필터 그래프(hwupload·xfade_opencl)에 준다
+            if (plan.UsesOpenCl)
+                args.AddRange(new[] { "-init_hw_device", "opencl=gpu", "-filter_hw_device", "gpu" });
             foreach (var input in plan.Inputs)
             {
                 // 입력은 로컬 파일만 열게 한다(재생 목록처럼 생긴 파일이 네트워크·다른 경로를 열지 못하게)
@@ -198,7 +201,8 @@ namespace VideoEditor.Media
                 Width = width,
                 Height = height,
                 SampleRate = sampleRate,
-                MaxFrames = maxFrames
+                MaxFrames = maxFrames,
+                OpenCl = plan.UsesOpenCl
             };
             foreach (var input in plan.Inputs)
                 helperPlan.Inputs.Add(new List<string>(input));
@@ -303,6 +307,7 @@ namespace VideoEditor.Media
                 FontFile = RenderEnvironment.DefaultFont(),
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
+                TransitionKernels = GpuTransitions.KernelFile(tool),
                 TextRasterizer = textRasterizer,
                 PersonMasks = RenderEnvironment.PersonMasks
             });
@@ -432,6 +437,7 @@ namespace VideoEditor.Media
                 FontFile = RenderEnvironment.DefaultFont(),
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
+                TransitionKernels = GpuTransitions.KernelFile(tool),
                 TextRasterizer = textRasterizer,
                 PersonMasks = RenderEnvironment.PersonMasks,
                 Stills = RenderEnvironment.Stills
@@ -515,6 +521,7 @@ namespace VideoEditor.Media
                 FontFile = RenderEnvironment.DefaultFont(),
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
+                TransitionKernels = GpuTransitions.KernelFile(tool),
                 TextRasterizer = textRasterizer,
                 PersonMasks = RenderEnvironment.PersonMasks,
                 Prerendered = prerendered,
@@ -543,6 +550,7 @@ namespace VideoEditor.Media
                 FontFile = RenderEnvironment.DefaultFont(),
                 TempFolder = RenderEnvironment.TempFolder(),
                 FfmpegMajor = tool.MajorVersion,
+                TransitionKernels = GpuTransitions.KernelFile(tool),
                 TextRasterizer = textRasterizer,
                 PersonMasks = RenderEnvironment.PersonMasks
             });
